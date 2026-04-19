@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon, btn, badge %}
+{% block title %}{{ t('Dashboard') }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ t('Dashboard') }}</h1>
+    <p class="page-subtitle">{{ t('Welcome back') }}{% if request.user %}, <strong style="color:var(--fg)">{{ request.user.name or request.user.email }}</strong>{% endif %}</p>
+  </div>
+</div>
+
+{# Stats Cards (Airy & Clean) #}
+{% if stats %}
+<div class="stats-grid">
+  {% for s in stats %}
+    <div class="card stat-card">
+      <div class="stat-label">{{ s.label }}</div>
+      <div class="stat-value">
+        {{ s.count }}
+        {% if s.trend is not None %}
+          <span class="stat-trend {% if s.trend >= 0 %}up{% else %}down{% endif %}">
+            {{ icon('arrow-up' if s.trend >= 0 else 'arrow-down', 10) }}
+            {{ s.trend | abs }}%
+          </span>
+        {% endif %}
+      </div>
+      <a href="{{ admin_prefix }}/{{ s.slug }}" class="stat-link" data-spa>
+        {{ t('View all') }} {{ icon('arrow-right', 12) }}
+      </a>
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+
+<div class="dashboard-grid">
+
+  {# Recent activity (Timeline) #}
+  {% if can_view_logs %}
+  <div class="card" style="display:flex; flex-direction:column">
+    <div style="padding:20px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
+      <span style="font-weight:600; font-size:0.95rem; display:flex; align-items:center; gap:8px">
+        {{ icon('history', 16) }} {{ t('Recent Activity') }}
+      </span>
+      <a href="{{ admin_prefix }}/logs" class="btn btn-ghost btn-sm" data-spa>
+        {{ t('See all activity') }}
+      </a>
+    </div>
+    
+    <div class="timeline">
+      {% if recent_logs %}
+        {% for log in recent_logs %}
+          <div class="timeline-item">
+            <div class="timeline-dot"></div>
+            <div class="timeline-content">
+              <div class="timeline-text">
+                <span style="font-weight:600">{{ log.user_label }}</span> 
+                <span class="muted">{{ log.action }}</span> 
+                <span style="font-weight:600">{{ log.entity }}</span>
+                {% if log.entity_id %}<span class="muted">#{{ log.entity_id }}</span>{% endif %}
+              </div>
+              <div class="timeline-date">{{ log.date_label }}</div>
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty-state">
+          {{ icon('log', 36, 'empty-icon') }}
+          <p class="empty-title">{{ t('No activity yet') }}</p>
+          <p class="empty-text">{{ t('System logs will appear here.') }}</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# Models Quick Access #}
+  <div class="card" style="display:flex; flex-direction:column">
+    <div style="padding:20px 24px; border-bottom:1px solid var(--border)">
+      <span style="font-weight:600; font-size:0.95rem; display:flex; align-items:center; gap:8px">
+        {{ icon('table', 16) }} {{ t('Quick Access') }}
+      </span>
+    </div>
+    
+    <div style="display:flex; flex-direction:column">
+      {% if admin_models %}
+        {% for m in admin_models %}
+          <a href="{{ admin_prefix }}/{{ m.slug }}"
+             data-spa
+             style="display:flex;align-items:center;padding:16px 24px;border-bottom:1px solid var(--border);color:var(--fg);transition:background var(--trans)">
+            <div style="width:36px;height:36px;border-radius:var(--r);background:var(--brand-pale);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-right:16px">
+              {{ icon('table', 16, 'text-brand') }}
+            </div>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:0.95rem">{{ m.label }}</div>
+              <div class="muted" style="font-size:0.8rem">/{{ m.slug }}</div>
+            </div>
+            <div class="muted">{{ icon('arrow-right', 16) }}</div>
+          </a>
+        {% endfor %}
+      {% else %}
+        <div class="empty-state">
+          <p class="empty-text">{{ t('No models registered') }}</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+{% if widgets %}
+  <div style="margin-top:32px">{{ widgets }}</div>
+{% endif %}
+{% endblock %}

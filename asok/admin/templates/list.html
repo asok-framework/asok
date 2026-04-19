@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon, btn, badge %}
+{% block title %}{{ model_label }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ model_label }}</h1>
+    <p class="page-subtitle" id="list-meta">
+      {% if total == 0 %}{{ t('No records') }}
+      {% elif total == 1 %}1 {{ t('record') }}
+      {% else %}{{ total }} {{ t('records') }}{% endif %}
+    </p>
+  </div>
+  <div class="page-actions">
+    {% if has_soft_delete and not trash %}
+      <a href="{{ admin_prefix }}/{{ slug }}/trash" class="btn btn-ghost btn-sm" data-spa>
+        {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Trash') }}</span>
+      </a>
+    {% endif %}
+    <a href="{{ export_url }}" class="btn btn-default btn-sm" title="{{ t('Export CSV') }}">
+      {{ icon('download', 14) }}
+    </a>
+    <a href="{{ admin_prefix }}/{{ slug }}/import" class="btn btn-default btn-sm" title="{{ t('Import CSV') }}" data-spa>
+      {{ icon('upload', 14) }}
+    </a>
+    {% if can_add and not trash %}
+      <a href="{{ admin_prefix }}/{{ slug }}/new" class="btn btn-primary btn-sm" data-spa>
+        {{ icon('plus', 14) }} <span style="margin-left:4px">{{ t('New') }}</span>
+      </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="table-wrap">
+
+  {# Toolbar (Airy) #}
+  <div class="list-toolbar">
+    <div class="search-wrap">
+      {{ icon('search', 16) }}
+      <input type="search"
+             name="q"
+             id="list-search"
+             value="{{ q }}"
+             placeholder="{{ t('Search') }} {{ model_label }}…"
+             autocomplete="off"
+             data-block="#model_table"
+             data-swap="outerHTML"
+             data-url="{{ admin_prefix }}/{{ slug }}"
+             data-trigger="input delay:300ms"
+             data-include="#list-sort, #list-filters-form">
+    </div>
+
+    <div class="toolbar-actions">
+
+      {% if filters %}
+        <div class="filter-dropdown">
+          <button type="button" class="btn btn-default btn-sm" id="filter-btn" data-toggle="filter-menu" aria-expanded="false">
+            {{ icon('filter', 14) }}
+            <span>{{ t('Filters') }}</span>
+            {% set active_count = 0 %}
+            {% for fi in filters %}{% if not fi.options[0].selected %}{% set active_count = active_count + 1 %}{% endif %}{% endfor %}
+            {% if active_count > 0 %}<span class="badge badge-brand" style="margin-left:4px">{{ active_count }}</span>{% endif %}
+            {{ icon('chevron', 12, 'dd-chevron muted') }}
+          </button>
+          
+          <div class="filter-dropdown-menu" id="filter-menu" data-dropdown hidden>
+            <form id="list-filters-form">
+              <div style="display:flex; flex-direction:column; gap:16px; min-width: 220px;">
+                {% for fi in filters %}
+                  <div class="filter-item">
+                    <label class="filter-label">{{ fi.label }}</label>
+                    {% set active_opt = (fi.options | selectattr('selected', True) | first) or fi.options[0] %}
+                    <input type="hidden" name="filter_{{ fi.name }}" value="{{ active_opt.value }}">
+                    
+                    <div class="custom-select-wrap">
+                      <button type="button" class="btn btn-default btn-sm custom-select-btn" data-toggle="fi-{{ fi.name }}-opts" aria-expanded="false">
+                        <span class="custom-select-label">{{ active_opt.label }}</span>
+                        {{ icon('chevron', 12, 'dd-chevron muted') }}
+                      </button>
+                      <div class="custom-select-options card" id="fi-{{ fi.name }}-opts" data-dropdown hidden style="position:absolute; top:100%; left:0; width:100%; margin-top:4px;">
+                        {% for opt in fi.options %}
+                          <div class="custom-opt {% if opt.selected %}is-active{% endif %}"
+                               data-set-name="filter_{{ fi.name }}"
+                               data-set-value="{{ opt.value }}"
+                               data-trigger="click"
+                               data-block="#model_table"
+                               data-swap="outerHTML"
+                               data-url="{{ admin_prefix }}/{{ slug }}"
+                               data-include="#list-search, #list-sort, #list-filters-form">
+                            {{ opt.label }}
+                            {% if opt.selected %}{{ icon('check', 14) }}{% endif %}
+                          </div>
+                        {% endfor %}
+                      </div>
+                    </div>
+                  </div>
+                {% endfor %}
+                <div style="height:1px; background:var(--border); margin:4px 0"></div>
+                <a href="{{ admin_prefix }}/{{ slug }}" class="btn btn-ghost btn-sm" style="width:100%; justify-content:center" data-spa>
+                  {{ t('Clear filters') }}
+                </a>
+              </div>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Bulk Action Bar #}
+  <div class="bulk-bar" id="bulk-bar">
+    <span id="bulk-count" data-label-selected="{{ t('selected') }}">0 {{ t('selected') }}</span>
+    <div style="flex:1"></div>
+    {% for act in bulk_actions %}
+      <form method="post" action="{{ admin_prefix }}/{{ slug }}/bulk"
+            data-block="#model_table"
+            {% if act.name == 'delete' or act.name == 'force_delete' %}data-confirm="{{ t('Delete' if not trash else 'Permanently delete') }} {{ t('selected items?') }}"{% endif %}>
+        {{ request.csrf_input() }}
+        <input type="hidden" name="action" value="{{ act.name }}">
+        <input type="hidden" name="ids" class="bulk-ids-field">
+        <button type="submit" class="btn btn-sm btn-icon {% if 'delete' in act.name %}btn-danger{% else %}btn-default{% endif %}" title="{{ act.label }}">
+          {% if 'delete' in act.name %}{{ icon('trash', 14) }}{% elif act.name == 'restore' %}{{ icon('restore', 14) }}{% endif %}
+        </button>
+      </form>
+    {% endfor %}
+  </div>
+
+  {# Table Partial Wrapper #}
+  {% block model_table %}
+  <div id="model_table">
+    <input type="hidden" name="sort" id="list-sort" value="{{ sort }}">
+    {% if items %}
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th class="col-check" style="padding-right:0"><input type="checkbox" id="check-all"></th>
+            {% set has_actions = can_edit or can_delete %}
+            {% for s in sort_links %}
+              <th{% if loop.last and not has_actions %} style="text-align:right; padding-right:24px"{% endif %}>
+                <a href="{{ admin_prefix }}/{{ slug }}{{ s.url }}"
+                   class="sort-link{% if loop.last and not has_actions %} justify-end{% endif %}" data-block="#model_table" data-swap="outerHTML" data-url="{{ admin_prefix }}/{{ slug }}?sort={{ s.sort }}" data-include="#list-search, #list-filters-form" data-push-url{% if loop.last and not has_actions %} style="justify-content:flex-end"{% endif %}>
+                  {{ s.col }}{% if s.arrow %} <span style="color:var(--fg)">{{ s.arrow }}</span>{% endif %}
+                </a>
+              </th>
+            {% endfor %}
+            {% if has_actions %}
+              <th style="width:120px; text-align:right; padding-right:24px">{{ t('ACTIONS') }}</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in items %}
+            <tr id="row-{{ row.id }}">
+              <td class="col-check" style="padding-right:0">
+                <input type="checkbox" class="row-check" value="{{ row.id }}">
+              </td>
+              {% for col in columns %}
+                <td{% if loop.last and not has_actions %} style="text-align:right; padding-right:24px"{% endif %}>
+                  {% if loop.first %}
+                    <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}"
+                       class="row-link" data-spa>{{ row[col] | date }}</a>
+                  {% else %}
+                    {{ row[col] | date }}
+                  {% endif %}
+                </td>
+              {% endfor %}
+              {% if has_actions %}
+              <td style="text-align:right;">
+                <div class="row-actions">
+                  {% if is_auth_model and row.id != request.user.id and not trash %}
+                  <form action="{{ admin_prefix }}/impersonate/{{ row.id }}" method="POST" style="display:inline" data-spa-silent>
+                    {{ request.csrf_input() }}
+                    <button type="submit" class="btn btn-ghost btn-icon text-brand" title="{{ t('Impersonate') }}">
+                      {{ icon('user', 16) }}
+                    </button>
+                  </form>
+                  {% endif %}
+                  {% if can_edit %}
+                  <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}"
+                     class="btn btn-ghost btn-icon" data-spa title="{{ t('Edit') }}">
+                    {{ icon('edit', 16) }}
+                  </a>
+                  {% endif %}
+                  {% if trash %}
+                    <form method="post" action="{{ admin_prefix }}/{{ slug }}/{{ row.id }}/restore"
+                          data-block="#row-{{ row.id }}" data-swap="delete" style="display:inline">
+                      {{ request.csrf_input() }}
+                      <button type="submit" class="btn btn-ghost btn-icon text-success" title="{{ t('Restore') }}">
+                        {{ icon('restore', 16) }}
+                      </button>
+                    </form>
+                  {% elif can_delete %}
+                    <form method="post" action="{{ admin_prefix }}/{{ slug }}/{{ row.id }}/delete"
+                          data-block="#row-{{ row.id }}" data-swap="delete"
+                          data-confirm="{{ t('Delete this record?') }}" style="display:inline">
+                      {{ request.csrf_input() }}
+                      <button type="submit" class="btn btn-ghost btn-icon text-danger" title="{{ t('Delete') }}">
+                        {{ icon('trash', 16) }}
+                      </button>
+                    </form>
+                  {% endif %}
+                </div>
+              </td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pagination">
+      <div style="font-weight:500">
+        {{ t('Page') }} <span style="color:var(--fg)">{{ page }}</span> / {{ pages }}
+      </div>
+      <div class="pagination-btns">
+        {% if page > 1 %}
+          <a href="{{ admin_prefix }}/{{ slug }}{{ prev_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ icon('chevron', 14, 'rot-180') }} {{ t('Previous') }}</a>
+        {% endif %}
+        {% if page < pages %}
+          <a href="{{ admin_prefix }}/{{ slug }}{{ next_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ t('Next') }} {{ icon('chevron', 14) }}</a>
+        {% endif %}
+      </div>
+    </div>
+
+    {% else %}
+    <div class="empty-state">
+      <div style="width:64px;height:64px;border-radius:var(--r-full);background:var(--surface-2);display:flex;align-items:center;justify-content:center;margin-bottom:20px">
+        {{ icon('table', 28, 'empty-icon') }}
+      </div>
+      <p class="empty-title">{{ t('No records found') }}</p>
+      <p class="empty-text" style="margin-bottom:24px">
+        {% if q %}{{ t('Try a different search term or filter.') }}
+        {% else %}{{ t('Get started by adding your first record.') }}{% endif %}
+      </p>
+      {% if can_add and not trash %}
+        <a href="{{ admin_prefix }}/{{ slug }}/new" class="btn btn-primary" data-spa>
+          {{ icon('plus', 16) }} <span style="margin-left:4px">{{ t('Add first record') }}</span>
+        </a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endblock %}
+
+</div>
+{% endblock %}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon, btn, badge %}
+{% block title %}{{ t('My Profile') }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ t('My Profile') }}</h1>
+    <p class="page-subtitle">{{ request.user.email }}</p>
+  </div>
+</div>
+
+<div class="dashboard-grid">
+
+  {# Account form #}
+  <form method="post" id="profile-form" action="{{ admin_prefix }}/me"
+        data-block="#page-body" data-push-url data-disable data-indicator="#top-loader">
+    {{ request.csrf_input() }}
+
+    <div class="card" style="overflow:hidden">
+      {% if errors_global %}
+        <div style="padding:16px; margin: 24px 24px 0; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--r); color:#b91c1c; font-weight:500;">
+          {{ icon('alert-triangle', 18) }} {{ errors_global }}
+        </div>
+      {% endif %}
+      <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
+        {{ icon('user', 12) }} {{ t('Account Details') }}
+      </div>
+      <div style="padding:24px;display:flex;flex-direction:column;gap:20px">
+        {% if form._fields.email %}
+          <div class="form-group">
+            <label class="form-label">{{ t(form._fields.email._label) }}</label>
+            {{ form._fields.email.input }}
+            {% if form._fields.email._error %}
+              <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+                {{ icon('x', 14) }} {{ form._fields.email._error }}
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+        {% if form._fields.name %}
+          <div class="form-group">
+            <label class="form-label">{{ t(form._fields.name._label) }}</label>
+            {{ form._fields.name.input }}
+            {% if form._fields.name._error %}
+              <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+                {{ icon('x', 14) }} {{ form._fields.name._error }}
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+      <div style="padding:14px 20px;background:var(--surface-2);border-top:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
+        {{ icon('shield', 12) }} {{ t('Security') }}
+        <span class="muted" style="font-weight:400;text-transform:none;margin-left:auto">{{ t('Leave blank to keep current password') }}</span>
+      </div>
+      <div style="padding:24px;display:flex;flex-direction:column;gap:20px">
+        <div class="form-group">
+          <label class="form-label">{{ t(form._fields.current_password._label) }}</label>
+          {{ form._fields.current_password.input(autocomplete='current-password') }}
+          {% if form._fields.current_password._error %}
+            <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+              {{ icon('x', 14) }} {{ form._fields.current_password._error }}
+            </div>
+          {% endif %}
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px">
+          <div class="form-group">
+            <label class="form-label">{{ t(form._fields.new_password._label) }}</label>
+            {{ form._fields.new_password.input(autocomplete='new-password') }}
+            {% if form._fields.new_password._error %}
+              <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+                {{ icon('x', 14) }} {{ form._fields.new_password._error }}
+              </div>
+            {% endif %}
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t(form._fields.confirm_password._label) }}</label>
+            {{ form._fields.confirm_password.input(autocomplete='new-password') }}
+            {% if form._fields.confirm_password._error %}
+              <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+                {{ icon('x', 14) }} {{ form._fields.confirm_password._error }}
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="form-footer">
+        <div class="form-footer-left">
+          {{ btn(t('Update Profile'), 'primary', icon='check', type='submit') }}
+          <a href="{{ admin_prefix }}" class="btn btn-default" data-spa>
+            {{ t('Cancel') }}
+          </a>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  {# 2FA card #}
+  <div class="card" style="overflow:hidden">
+    <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
+      {{ icon('shield', 12) }} {{ t('Two-Factor Authentication') }}
+      <div style="margin-left:auto">
+        {% if twofa_enabled %}
+          {{ badge(t('Active'), 'success') }}
+        {% else %}
+          {{ badge(t('Inactive'), 'error') }}
+        {% endif %}
+      </div>
+    </div>
+    <div style="padding:32px; text-align:center">
+      <div style="width:64px; height:64px; border-radius:50%; background:var(--bg); display:flex; align-items:center; justify-content:center; margin:0 auto 20px">
+        {{ icon('shield', 32, 'empty-icon') }}
+      </div>
+      
+      {% if twofa_enabled %}
+        <h3 style="font-weight:700; margin-bottom:8px">{{ t('2FA is Enabled') }}</h3>
+        <p style="color:var(--fg-2);font-size:0.875rem;margin-bottom:28px; line-height:1.6">
+          {{ t('Your account is secured with an extra layer of protection using a TOTP authenticator app.') }}
+        </p>
+        <div class="divider"></div>
+        <form method="post" action="{{ admin_prefix }}/2fa-disable" 
+              data-confirm="{{ t('Are you sure you want to disable two-factor authentication? This will make your account less secure.') }}"
+              data-block="#page-body">
+          {{ request.csrf_input() }}
+          <div class="form-group" style="text-align:left; margin-bottom:20px">
+            <label class="form-label">{{ t('Current Password') }}</label>
+            <input type="password" name="current_password" autocomplete="current-password" required placeholder="{{ t('Enter password to confirm…') }}">
+          </div>
+          {{ btn(t('Disable 2FA'), 'danger', icon='trash', type='submit') }}
+        </form>
+      {% else %}
+        <h3 style="font-weight:700; margin-bottom:8px">{{ t('Secure Your Account') }}</h3>
+        <p style="color:var(--fg-2);font-size:0.875rem;margin-bottom:28px; line-height:1.6">
+          {{ t('Two-factor authentication adds an additional layer of security to your account by requiring more than just a password to log in.') }}
+        </p>
+        <a href="{{ admin_prefix }}/2fa-setup" class="btn btn-primary btn-lg" data-spa>
+          {{ icon('shield', 14) }} {{ t('Setup Two-Factor') }}
+        </a>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

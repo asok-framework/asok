@@ -1,0 +1,25 @@
+# Build / Distribution
+dist/
+build/
+*.egg-info/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environnement virtuel (si vous en utilisez un localement)
+venv/
+env/
+.venv/
+
+# macOS
+.DS_Store
+
+.asok.egg-info/
+
+.claude/
+.gemini/
+.ruff_cache/
+

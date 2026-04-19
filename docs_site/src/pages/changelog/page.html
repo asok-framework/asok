@@ -1,0 +1,24 @@
+{% extends "html/base.html" %}
+
+{% block title %}
+Changelog | Asok Framework
+{% endblock %}
+
+{% block main %}
+<div class="pt-32 pb-40 px-6">
+    <div class="max-w-4xl mx-auto">
+        <header class="mb-16">
+            <h1 class="text-6xl font-black tracking-tighter mb-4" style="color: var(--text-primary)">
+                Changelog
+            </h1>
+            <p class="text-xl" style="color: var(--text-secondary)">
+                The evolution of Asok Framework, version by version.
+            </p>
+        </header>
+
+        <article class="max-w-none">
+            {{ content | safe }}
+        </article>
+    </div>
+</div>
+{% endblock %}

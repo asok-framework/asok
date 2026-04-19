@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 72" width="260" height="72">
+  <defs>
+    <linearGradient id="gi1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#F97316"/>
+    </linearGradient>
+    <linearGradient id="gi2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#FB923C"/>
+    </linearGradient>
+    <linearGradient id="gt" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e0e7ff"/>
+      <stop offset="100%" stop-color="#fde68a"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(8,8) scale(0.56)">
+    <polygon points="10,88 50,12 72,88 58,88 50,36 24,88" fill="url(#gi1)"/>
+    <polygon points="36,88 76,12 90,12 90,20 52,88" fill="url(#gi2)" opacity="0.88"/>
+  </g>
+  <text x="78" y="50" font-family="'Inter','SF Pro Display',system-ui,sans-serif"
+        font-size="38" font-weight="700" letter-spacing="-1" fill="url(#gt)">asok</text>
+  <text x="79" y="64" font-family="system-ui,sans-serif"
+        font-size="10" letter-spacing="2.5" fill="#6B7280">PYTHON FRAMEWORK</text>
+</svg>

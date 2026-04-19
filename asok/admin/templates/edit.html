@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon, btn, badge, field_row %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ title }}</h1>
+  </div>
+  <div class="page-actions">
+    {% if item and item.id %}
+      <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/history"
+         class="btn btn-ghost btn-sm" data-spa title="{{ t('History') }}">
+        {{ icon('history', 14) }} <span style="margin-left:4px">{{ t('History') }}</span>
+      </a>
+    {% endif %}
+    <a href="{{ admin_prefix }}/{{ slug }}"
+       class="btn btn-default btn-sm" data-spa>
+      {{ icon('x', 14) }} <span style="margin-left:4px">{{ t('Cancel') }}</span>
+    </a>
+  </div>
+</div>
+
+<div class="form-wrap">
+  <form method="post"
+        action="{{ admin_prefix }}/{{ slug }}/{{ item.id if item and item.id else 'new' }}"
+        enctype="multipart/form-data"
+        id="edit-form"
+        data-block="#page-body"
+        data-push-url
+        data-indicator="#top-loader"
+        data-disable>
+    {{ request.csrf_input() }}
+
+    <div style="display:flex;flex-direction:column;gap:32px">
+    
+      {% if errors_global %}
+        <div style="padding:16px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--r); color:#b91c1c; font-weight:500;">
+          {{ icon('alert-triangle', 18) }} {{ errors_global }}
+        </div>
+      {% endif %}
+
+      {# Field groups (Airy) #}
+      {% for group in field_groups %}
+        <div class="form-section">
+          {% if group.label %}
+            <h3 style="font-size:1.1rem; font-weight:600; color:var(--fg); margin-bottom:16px; letter-spacing:-0.01em;">
+              {{ group.label }}
+            </h3>
+          {% endif %}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+            {% for pair in group.fields %}
+              {{ field_row(pair.f, pair.m, item) }}
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+
+      {# Permission matrix #}
+      {% if permission_matrix %}
+        <div class="form-section" style="padding-top:24px; border-top:1px solid var(--border)">
+          <h3 style="font-size:1.1rem; font-weight:600; color:var(--fg); margin-bottom:16px; display:flex; align-items:center; gap:8px">
+            {{ icon('shield', 18) }} {{ t('Permissions') }}
+          </h3>
+          <input type="hidden" name="permissions" id="perm-input" value="{{ permission_matrix.current }}">
+          
+          <label style="display:flex; align-items:center; gap:12px; padding:16px; background:var(--surface-2); border-radius:var(--r); margin-bottom:24px; cursor:pointer">
+            <input type="checkbox" id="perm-wildcard" {% if permission_matrix.wildcard %}checked{% endif %} style="width:20px;height:20px">
+            <div>
+              <div style="font-size:0.95rem; font-weight:600; color:var(--fg)">{{ t('Superuser') }}</div>
+              <div class="muted" style="margin-top:2px">{{ t('Full access to all resources. Bypasses matrix below.') }}</div>
+            </div>
+          </label>
+          
+          <div class="table-wrap" style="box-shadow:none">
+            <table class="perm-matrix">
+              <thead>
+                <tr>
+                  <th style="padding-left:16px">{{ t('Model') }}</th>
+                  {% for v in permission_matrix.verbs %}<th>{{ t(v) }}</th>{% endfor %}
+                  <th style="padding-right:16px">{{ t('All') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in permission_matrix.rows %}
+                  <tr>
+                    <td style="font-weight:600; padding-left:16px">{{ row.label }}</td>
+                    {% for cell in row.cells %}
+                      <td><input type="checkbox" class="perm-cb" data-perm="{{ cell.perm }}" {% if cell.checked %}checked{% endif %}></td>
+                    {% endfor %}
+                    <td style="padding-right:16px"><input type="checkbox" class="perm-row-all" data-slug="{{ row.slug }}"></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+
+      {# M2M #}
+      {% if m2m_fields %}
+        {% for m in m2m_fields %}
+          <div class="form-section" style="padding-top:24px; border-top:1px solid var(--border)">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
+              <h3 style="font-size:1.1rem; font-weight:600; color:var(--fg); margin:0">
+                {{ m.label }}
+              </h3>
+              {% if m.name == 'roles' %}
+                <a href="{{ admin_prefix }}/roles" class="btn btn-ghost btn-xs" data-spa>
+                  {{ icon('edit', 12) }} {{ t('Manage Roles') }}
+                </a>
+              {% endif %}
+            </div>
+            
+            <input type="hidden" class="m2m-hidden" name="m2m_{{ m.name }}" data-name="{{ m.name }}">
+            
+            {% if m.options %}
+              <div class="m2m-grid" data-m2m="{{ m.name }}">
+                {% for opt in m.options %}
+                  <label class="m2m-tile">
+                    <input type="checkbox" value="{{ opt.id }}" {% if opt.selected %}checked{% endif %}>
+                    <span>{{ opt.label }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div style="padding:16px; border:1px dashed var(--border); border-radius:var(--r); text-align:center; color:var(--fg-3)">
+                {{ t('No available options to assign') }}
+              </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      {% endif %}
+
+    </div>
+
+    {# Form footer #}
+    <div style="margin-top:40px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
+      <div style="display:flex; gap:12px">
+        <button type="submit" name="_save" value="1" class="btn btn-primary" style="padding:12px 24px">
+          {{ t('Save changes') }}
+        </button>
+        <button type="submit" name="_save_continue" value="1" class="btn btn-default">
+          {{ t('Save & continue editing') }}
+        </button>
+        {% if can_add %}
+          <button type="submit" name="_save_add" value="1" class="btn btn-default">
+            {{ t('Save & add another') }}
+          </button>
+        {% endif %}
+      </div>
+      <div>
+        {% if item and item.id and can_delete %}
+          <button type="submit"
+                  formaction="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/delete"
+                  class="btn btn-ghost text-danger"
+                  data-confirm="{{ t('Permanently delete this record?') }}">
+            {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Delete') }}</span>
+          </button>
+        {% endif %}
+      </div>
+    </div>
+
+  </form>
+</div>
+
+{# Inlines (Airy) #}
+{% if inlines %}
+  <div style="margin-top:40px">
+    {% for inline in inlines %}
+      <div class="card" style="margin-bottom:24px">
+        <div style="padding:20px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
+          <span style="font-weight:600; font-size:1.05rem">{{ inline.label }}</span>
+          {% if inline.target_slug %}
+            <a href="{{ admin_prefix }}/{{ inline.target_slug }}/new"
+               class="btn btn-default btn-sm" data-spa>
+              {{ icon('plus', 14) }} <span style="margin-left:4px">{{ t('Add') }}</span>
+            </a>
+          {% endif %}
+        </div>
+        {% if inline.rows %}
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  {% for col in inline.columns %}<th>{{ col }}</th>{% endfor %}
+                  <th style="width:60px"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in inline.rows %}
+                  <tr>
+                    {% for col in inline.columns %}<td>{{ row[col] }}</td>{% endfor %}
+                    <td style="text-align:right">
+                      {% if inline.target_slug %}
+                        <a href="{{ admin_prefix }}/{{ inline.target_slug }}/{{ row.id }}"
+                           class="btn btn-ghost btn-icon" data-spa>
+                          {{ icon('edit', 16) }}
+                        </a>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="empty-state" style="padding:40px 20px">
+            <p class="empty-text">{{ t('No related records') }}</p>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% endblock %}

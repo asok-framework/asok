@@ -1,0 +1,54 @@
+{% extends "html/base.html" %}
+
+{% block title %}Page Not Found | Asok Framework{% endblock %}
+
+{% block main %}
+<div class="relative min-h-[80vh] flex flex-col items-center justify-center text-center px-6 overflow-hidden">
+    <!-- Background Decoration -->
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] blur-[120px] rounded-full -z-10"
+        style="background: color-mix(in srgb, var(--accent-primary) 10%, transparent)">
+    </div>
+
+    <div class="relative z-10 space-y-8 max-w-2xl">
+        <!-- Floating Icon -->
+        <div class="float-animation mb-12">
+            <div class="relative inline-block">
+                <div class="absolute inset-0 blur-2xl rounded-full"
+                    style="background: color-mix(in srgb, var(--accent-primary) 20%, transparent)"></div>
+                <div class="relative p-8 rounded-[2.5rem] backdrop-blur-xl"
+                    style="background: var(--accent-bg); border: 1px solid var(--accent-border)">
+                    <svg class="w-20 h-20" style="color: var(--accent-primary)" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                            d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <h1 class="text-8xl md:text-9xl font-black tracking-tighter text-shimmer error-glow">
+            404
+        </h1>
+
+        <div class="space-y-4">
+            <h2 class="text-4xl font-bold tracking-tight" style="color: var(--text-primary)">
+                Oops! Page Lost in the Void.
+            </h2>
+            <p class="text-lg md:text-xl font-medium max-w-md mx-auto" style="color: var(--text-secondary)">
+                The page you're looking for seems to have vanished or never existed in the first place.
+            </p>
+        </div>
+
+        <div class="pt-8">
+            <a href="/" class="btn-primary-custom">
+                Back to Reality
+            </a>
+        </div>
+    </div>
+
+    <!-- Background Elements -->
+    <div class="absolute bottom-0 left-0 w-full h-px bg-gradient-to-r from-transparent to-transparent"
+        style="--tw-gradient-via: color-mix(in srgb, var(--accent-primary) 20%, transparent)">
+    </div>
+</div>
+{% endblock %}

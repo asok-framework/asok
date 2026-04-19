@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ t('Media Manager') }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ t('Media Manager') }}</h1>
+    <p class="page-subtitle">{{ files | length }} {{ t('files uploaded') }}</p>
+  </div>
+  <div class="page-actions">
+    <form action="{{ admin_prefix }}/media/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
+      {{ request.csrf_input() }}
+      <label class="btn btn-primary btn-sm" style="cursor:pointer">
+        {{ icon('file-plus', 14) }} {{ t('Upload Files') }}
+        <input type="file" name="files" multiple style="display:none" onchange="document.getElementById('upload-form').submit()">
+      </label>
+    </form>
+  </div>
+</div>
+
+<div class="media-grid">
+  {% for f in files %}
+    <div class="media-card">
+      <div class="media-preview">
+        {% if f.is_image %}
+          <img src="{{ f.url }}" alt="{{ f.name }}" loading="lazy">
+        {% else %}
+          <div style="display:flex; flex-direction:column; align-items:center; gap:8px">
+             {{ icon('file-text', 48, 'muted') }}
+             <span class="muted" style="font-size:0.7rem; font-weight:700">{{ f.name.split('.')[-1] | upper }}</span>
+          </div>
+        {% endif %}
+      </div>
+      <div class="media-actions">
+        <button class="media-action-btn" title="{{ t('Copy URL') }}" onclick="copyToClipboard('{{ f.url }}')">
+          {{ icon('link', 14) }}
+        </button>
+        <form action="{{ admin_prefix }}/media/delete/{{ f.rel_path }}" 
+              method="POST" 
+              data-confirm="{{ t('Are you sure?') }}"
+              data-block="#page-body"
+              data-indicator="#top-loader">
+          {{ request.csrf_input() }}
+          <button type="submit" class="media-action-btn delete" title="{{ t('Delete') }}">
+            {{ icon('trash', 14) }}
+          </button>
+        </form>
+      </div>
+      <div class="media-info">
+        <div class="media-name" title="{{ f.name }}">{{ f.name }}</div>
+        <div class="media-meta">
+          <span>{{ f.size }} KB</span>
+          <span>{{ f.mtime | date }}</span>
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div class="empty-state" style="grid-column: 1 / -1">
+      {{ icon('image', 48, 'empty-icon') }}
+      <p class="empty-title">{{ t('No files found') }}</p>
+      <p class="empty-text">{{ t('Uploaded files will appear here.') }}</p>
+    </div>
+  {% endfor %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function copyToClipboard(text) {
+    const fullUrl = window.location.origin + text;
+    
+    const handleSuccess = () => {
+      if (window.flash) window.flash("success", "{{ t('URL copied to clipboard!') }}");
+    };
+
+    const handleError = (err) => {
+      console.warn('[Asok] Clipboard API failed, trying fallback...', err);
+      const textArea = document.createElement("textarea");
+      textArea.value = fullUrl;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        handleSuccess();
+      } catch (e) {
+        if (window.flash) window.flash("error", "{{ t('Failed to copy URL') }}");
+      }
+      document.body.removeChild(textArea);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullUrl).then(handleSuccess).catch(handleError);
+    } else {
+      handleError('Clipboard API unavailable');
+    }
+  }
+</script>
+{% endblock %}

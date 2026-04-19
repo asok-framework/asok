@@ -1,0 +1,5 @@
+recursive-include asok/admin/templates *.html
+recursive-include asok/admin/static *
+recursive-include asok/assets *
+recursive-include asok/api/templates *.html
+recursive-include asok/api/static *

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="{{ admin_locale | default('en') }}">
+<head>
+  <script>
+    (function() {
+      var theme = localStorage.getItem('asok-theme') || 'light';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+  <script>
+    window.ASOK_I18N = {
+      confirmation: "{{ t('Confirmation') }}",
+      confirm: "{{ t('Confirm') }}",
+      cancel: "{{ t('Cancel') }}"
+    };
+  </script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}{% endblock %} — {{ admin_site_name }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ admin_prefix }}/static/admin.css">
+  <link rel="stylesheet" href="{{ admin_prefix }}/static/quill.snow.css">
+  {% if admin_favicon %}
+  <link rel="icon" type="image/x-icon" href="{{ static(admin_favicon) }}">
+  {% endif %}
+  {% block styles %}{% endblock %}
+</head>
+<body data-indicator="#top-loader">
+{% from "macros.html" import icon, btn, badge, flash %}
+
+<div class="admin-shell">
+
+  {# ── Sidebar (Minimalist) ────────────────────────────── #}
+  <aside class="admin-sidebar glass">
+    <a href="{{ admin_prefix }}" class="admin-brand" data-spa>
+      <img src="{{ static(admin_favicon or 'logo.svg') }}" alt="{{ admin_site_name }}" width="24" height="24">
+      <span>{{ admin_site_name }}</span>
+    </a>
+
+    <nav class="admin-nav">
+      <a href="{{ admin_prefix }}"
+         class="nav-item {% if active == 'dashboard' %}is-active{% endif %}"
+         data-spa>
+        {{ icon('dashboard', 16) }}
+        <span>{{ t('Dashboard') }}</span>
+      </a>
+
+      <div class="sidebar-search">
+        {{ icon('search', 16) }}
+        <input type="text" id="nav-search" placeholder="{{ t('Find a model...') }}" autocomplete="off">
+      </div>
+
+      {% if admin_model_groups %}
+        {% for group in admin_model_groups %}
+          {% set has_active = False %}
+          {% for m in group.models %}{% if active == m.slug %}{% set has_active = True %}{% endif %}{% endfor %}
+          
+          <details class="nav-section" {% if has_active %}open{% endif %}>
+            <summary class="nav-group">
+              <span>{{ group.name }}</span>
+              {{ icon('chevron', 12) }}
+            </summary>
+            <div class="nav-items" data-group-models>
+              {% for m in group.models %}
+                <a href="{{ admin_prefix }}/{{ m.slug }}"
+                   class="nav-item {% if active == m.slug %}is-active{% endif %}"
+                   data-nav-slug="{{ m.slug }}"
+                   data-spa>
+                  {{ icon('table', 14) }}
+                  <span>{{ m.label }}</span>
+                </a>
+              {% endfor %}
+            </div>
+          </details>
+        {% endfor %}
+      {% endif %}
+
+      <div class="nav-group">{{ t('Admin') }}</div>
+      <a href="{{ admin_prefix }}/me"
+         class="nav-item {% if active == 'me' %}is-active{% endif %}"
+         data-spa>
+        {{ icon('user', 14) }}
+        <span>{{ t('My Profile') }}</span>
+      </a>
+
+      <a href="{{ admin_prefix }}/media"
+         class="nav-item {% if active == 'media' %}is-active{% endif %}"
+         data-spa>
+        {{ icon('folder', 14) }}
+        <span>{{ t('Media Manager') }}</span>
+      </a>
+
+    </nav>
+
+    <div class="sidebar-foot" style="margin-top:auto">
+      <a href="{{ admin_prefix }}/logout" class="nav-item nav-item--logout">
+        {{ icon('logout', 14) }}
+        <span>{{ t('Logout') }}</span>
+      </a>
+    </div>
+  </aside>
+
+  {# ── Main area (Airy) ────────────────────────────────── #}
+  <div class="admin-body">
+    {% if is_impersonating %}
+    <div class="impersonation-banner">
+      <div class="container impersonation-container">
+        <div class="impersonation-content">
+          {{ icon('shield', 18) }}
+          <span>{{ t('Impersonating') }} <strong>{{ (request.user.name or request.user.email) }}</strong></span>
+        </div>
+        <form action="{{ admin_prefix }}/stop-impersonate" method="POST" data-spa-silent>
+          {{ request.csrf_input() }}
+          <button type="submit" class="stop-impersonate-btn">{{ t('Stop') }}</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    {# Topbar #}
+    <header class="admin-topbar glass">
+      <button class="tb-btn" id="sidebar-toggle" type="button" style="margin-right:16px; display:none" title="{{ t('Toggle menu') }}">
+        {{ icon('menu', 18) }}
+      </button>
+      <div class="tb-search">
+        {{ icon('search', 14) }}
+        <input type="search"
+               id="global-search"
+               name="q"
+               placeholder="{{ t('Search everything…') }}"
+               autocomplete="off"
+               data-block="#page-body"
+               data-push-url
+               data-spa-search="{{ admin_prefix }}/search"
+               data-trigger="input delay:350ms">
+      </div>
+      <div class="tb-actions">
+        <a href="/" target="_blank" class="tb-btn" title="{{ t('Visit Public Site') }}" style="text-decoration:none">
+          {{ icon('globe', 16) }}
+        </a>
+        <button class="tb-btn" id="theme-toggle" type="button" title="{{ t('Toggle theme') }}">
+          <span class="theme-icon-sun">{{ icon('sun', 16) }}</span>
+          <span class="theme-icon-moon">{{ icon('moon', 16) }}</span>
+        </button>
+
+        {% if admin_locales | length > 1 %}
+          <div class="locale-dd" style="position:relative">
+            <button class="btn btn-ghost btn-sm" type="button" id="locale-btn" data-toggle="locale-menu" aria-expanded="false" style="gap:6px">
+              {{ icon('globe', 14) }}
+              <span>{{ admin_locale_label }}</span>
+              {{ icon('chevron', 10, 'dd-chevron muted') }}
+            </button>
+            <div class="locale-dd-menu" id="locale-menu" data-dropdown hidden>
+              {% for loc in admin_locales %}
+                <a href="{{ admin_prefix }}/lang?code={{ loc.code }}"
+                   class="custom-opt {% if loc.active %}is-active{% endif %}" style="text-decoration:none">
+                  {{ loc.label }}
+                  {% if loc.active %}{{ icon('check', 12) }}{% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+
+        {% if request.user %}
+          <a href="{{ admin_prefix }}/me" class="tb-user" data-spa style="text-decoration:none">
+            <div class="tb-avatar">{{ (request.user.email or 'A')[:1] | upper }}</div>
+          </a>
+        {% endif %}
+      </div>
+    </header>
+
+    {# Scrollable content #}
+    <main class="admin-content" id="page-body">
+      <div class="container">
+
+        <div id="flash-zone">
+          {% for f in get_flashed_messages() %}
+            {{ flash(f.message, f.category | default('info')) }}
+          {% endfor %}
+        </div>
+
+        {% if breadcrumbs_html %}
+          <nav class="breadcrumb" style="font-size:0.85rem;color:var(--fg-3);margin-bottom:24px;">
+            {{ breadcrumbs_html }}
+          </nav>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+
+      </div>
+    </main>
+
+  </div>
+</div>
+
+
+<div id="top-loader"></div>
+
+{# ── Shared Modal Container ─────────────────────────── #}
+<div id="asok-modal" class="modal-overlay">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-title"></h3>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-default" id="modal-cancel">{{ t('Cancel') }}</button>
+      <button type="button" class="btn btn-primary" id="modal-confirm">{{ t('Confirm') }}</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ admin_prefix }}/static/quill.js"></script>
+<script src="{{ admin_prefix }}/static/admin.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

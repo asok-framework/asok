@@ -1,0 +1,3 @@
+asok @ file:///Users/puludisu/Projects/asok/docs_site/asok-0.1.0-py3-none-any.whl#sha256=996288a193c5301b757eb84725007bf526e26b8501b57900917f5817c4eed4b8
+Markdown==3.10.2
+Pygments==2.20.0

@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon, btn, badge %}
+{% block title %}{{ t('Import') }} {{ model_label }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ t('Import') }} {{ model_label }}</h1>
+    <p class="page-subtitle">{{ t('Bulk create records by uploading a CSV file') }}</p>
+  </div>
+  <div class="page-actions">
+    <a href="{{ admin_prefix }}/{{ slug }}" class="btn btn-default btn-sm" data-spa>
+      {{ icon('arrow-left', 14) }} {{ t('Back to list') }}
+    </a>
+  </div>
+</div>
+
+<div class="dashboard-grid">
+
+  <form method="post" enctype="multipart/form-data" id="import-form"
+        data-block="#page-body" data-push-url data-disable data-indicator="#top-loader">
+    {{ request.csrf_input() }}
+    <div class="card" style="overflow:hidden">
+      <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
+        {{ icon('upload', 12) }} {{ t('CSV Upload') }}
+      </div>
+      <div style="padding:32px">
+        <div id="drop-zone" class="import-zone" onclick="document.getElementById('csv-file').click()" 
+             style="padding:48px; border: 2px dashed var(--border); border-radius: 16px; display:flex; flex-direction:column; align-items:center; gap:16px; cursor:pointer; transition:all var(--trans-spring); background: var(--bg-1);">
+          <div id="drop-icon-box" style="width:56px; height:56px; border-radius:12px; background:var(--bg-2); display:flex; align-items:center; justify-content:center; transition: all var(--trans-spring);">
+            {{ icon('upload', 24, 'empty-icon') }}
+          </div>
+          <div style="text-align:center">
+            <p id="drop-text-primary" style="font-weight:700; font-size:1rem; color:var(--fg); margin-bottom:4px">{{ t('Click or drag CSV here') }}</p>
+            <p id="drop-text-secondary" class="muted">{{ t('File must follow the column structure') }}</p>
+          </div>
+          <input id="csv-file" type="file" name="file" accept=".csv,text/csv" required 
+                 style="position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; opacity:0">
+        </div>
+        
+        <div style="margin-top: 24px; display:flex; align-items:flex-start; gap:12px; background:var(--bg-2); padding:16px; border-radius:12px; border:1px solid var(--border)">
+          <div style="margin-top:2px">
+            <input type="checkbox" name="update_existing" id="update_existing" value="1" style="width:16px; height:16px; accent-color:var(--brand); cursor:pointer">
+          </div>
+          <label for="update_existing" style="cursor:pointer">
+            <div style="font-weight:700; font-size:0.875rem">{{ t('Update existing records') }}</div>
+            <div class="muted" style="font-size:0.8rem; margin-top:4px">{{ t('If a record with the same unique value exists, update it instead of failing.') }}</div>
+          </label>
+        </div>
+
+        <div style="margin-top: 32px;">
+          {{ btn(t("Start Import"), 'primary', icon_name='upload', type='submit', extra_class='btn-lg') }}
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <div style="display:flex; flex-direction:column; gap:20px">
+    <div class="card" style="padding:24px">
+      <h3 style="font-size:0.9rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--fg-3); margin-bottom:16px">{{ t('Columns Mapping') }}</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:8px; margin-bottom:24px">
+        {% for col in importable %}
+          <code style="font-size:0.8125rem; background:var(--bg); color:var(--brand); padding:4px 10px; border-radius:6px; border:1px solid var(--border); font-weight:600">{{ col }}</code>
+        {% endfor %}
+      </div>
+      <div class="divider"></div>
+      <ul style="font-size:0.875rem; color:var(--fg-2); line-height:1.8; list-style:none; display:flex; flex-direction:column; gap:8px">
+        <li style="display:flex; align-items:center; gap:8px">{{ icon('check', 14, 'text-success') }} {{ t('The first row must be the header') }}</li>
+        <li style="display:flex; align-items:center; gap:8px">{{ icon('check', 14, 'text-success') }} {{ t('Unrecognized columns will be skipped') }}</li>
+        <li style="display:flex; align-items:center; gap:8px">{{ icon('check', 14, 'text-success') }} {{ t('Foreign keys should use numerical IDs') }}</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+{% if report %}
+  <div class="card" style="overflow:hidden;margin-top:24px">
+    <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
+      {{ icon('history', 12) }} {{ t('Import Summary') }}
+    </div>
+    <div style="padding:24px">
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:16px; margin-bottom:24px">
+        <div class="stat-card card" style="padding:20px; text-align:center">
+          <div class="stat-label">{{ t('Successfully Created') }}</div>
+          <div class="stat-value" style="color:var(--green)">{{ report.created }}</div>
+        </div>
+        <div class="stat-card card" style="padding:20px; text-align:center">
+          <div class="stat-label">{{ t('Records Updated') }}</div>
+          <div class="stat-value" style="color:var(--brand)">{{ report.updated }}</div>
+        </div>
+        <div class="stat-card card" style="padding:20px; text-align:center">
+          <div class="stat-label">{{ t('Failed Records') }}</div>
+          <div class="stat-value" style="color:{% if report.failed %}var(--red){% else %}var(--fg-3){% endif %}">{{ report.failed }}</div>
+        </div>
+      </div>
+      {% if report.errors %}
+        <div style="display:flex; flex-direction:column; gap:8px">
+          <h4 style="font-size:0.8125rem; font-weight:700; text-transform:uppercase; color:var(--red); margin-bottom:4px">{{ t('Detailed Errors') }}</h4>
+          {% for err in report.errors %}
+            <div class="flash-msg error" style="margin:0">{{ icon('x', 14) }} {{ err }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+<script>
+(function() {
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('csv-file');
+  const iconBox = document.getElementById('drop-icon-box');
+  const textPrimary = document.getElementById('drop-text-primary');
+  const textSecondary = document.getElementById('drop-text-secondary');
+
+  function updateStatus(file) {
+    if (file) {
+      iconBox.style.background = 'var(--brand)';
+      iconBox.style.color = 'white';
+      iconBox.innerHTML = `{% if icon %}{{ icon('check', 24) }}{% else %}<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>{% endif %}`;
+      textPrimary.textContent = file.name;
+      textPrimary.style.color = 'var(--brand)';
+      textSecondary.textContent = (file.size / 1024).toFixed(2) + ' KB';
+      dropZone.style.borderColor = 'var(--brand)';
+      dropZone.style.background = 'var(--brand-pale)';
+    }
+  }
+
+  fileInput.addEventListener('change', () => updateStatus(fileInput.files[0]));
+
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+    dropZone.addEventListener(evt, e => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, false);
+  });
+
+  ['dragenter', 'dragover'].forEach(evt => {
+    dropZone.addEventListener(evt, () => {
+      dropZone.style.borderColor = 'var(--brand)';
+      dropZone.style.borderStyle = 'solid';
+      dropZone.style.background = 'var(--brand-pale)';
+      iconBox.style.transform = 'scale(1.1)';
+    }, false);
+  });
+
+  ['dragleave', 'drop'].forEach(evt => {
+    dropZone.addEventListener(evt, () => {
+      iconBox.style.transform = '';
+      if (!fileInput.files[0]) {
+        dropZone.style.borderColor = 'var(--border)';
+        dropZone.style.borderStyle = 'dashed';
+        dropZone.style.background = 'var(--bg-1)';
+      }
+    }, false);
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    const files = e.dataTransfer.files;
+    if (files.length) {
+      // Create a DataTransfer object to robustly set files on the input
+      const dt = new DataTransfer();
+      for (const f of files) dt.items.add(f);
+      fileInput.files = dt.files;
+      
+      // Manually trigger change event
+      fileInput.dispatchEvent(new Event('change'));
+      updateStatus(dt.files[0]);
+    }
+  }, false);
+})();
+</script>
+{% endblock %}

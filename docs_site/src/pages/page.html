@@ -1,0 +1,811 @@
+{% extends "html/base.html" %}
+
+{% block main %}
+<!-- Force template recompilation -->
+<div class="relative w-full overflow-visible">
+    <!-- Hero Section -->
+    <section class="pt-32 pb-40 flex flex-col items-center text-center px-6">
+        <!-- Floating Decoration -->
+        <div
+            class="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-500/10 via-transparent to-transparent blur-3xl -z-10">
+        </div>
+
+        <!-- Notification Badge -->
+        <div class="group cursor-pointer inline-flex items-center gap-3 px-5 py-2 rounded-2xl hover:border-indigo-500/50 transition-all mb-12 backdrop-blur-md"
+            style="background: var(--hero-badge-bg); border: 1px solid var(--hero-badge-border)">
+            <span class="flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-indigo-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+            </span>
+            <span class="text-sm font-bold tracking-tight" style="color: var(--text-secondary)">Asok v0.1.0 is now
+                live</span>
+            <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" style="color: var(--text-muted)"
+                fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M9 5l7 7-7 7" />
+            </svg>
+        </div>
+
+        <!-- Main Heading -->
+        <h1 class="text-7xl md:text-9xl font-black tracking-tighter mb-10 leading-[0.9]"
+            style="color: var(--text-primary)">
+            The Elegance of <br />
+            <span class="text-shimmer">Minimalism.</span>
+        </h1>
+
+        <!-- Subheading -->
+        <p class="text-xl md:text-2xl max-w-3xl mb-14 font-medium leading-relaxed" style="color: var(--text-secondary)">
+            <strong style="color: var(--accent-primary)">Zero dependencies.</strong> Just Python's standard library.
+            Build production-ready apps with ORM, Auth, Forms, WebSockets, and reactive components—all in <strong>~3000
+                lines of code</strong>.
+        </p>
+
+        <!-- CTAs -->
+        <div class="flex flex-wrap justify-center items-center gap-6 mb-24">
+            <a href="/docs/01-getting-started" class="btn-primary">
+                Get Started
+            </a>
+            <div class="group flex items-center gap-4 px-6 py-4 rounded-2xl font-mono text-sm shadow-xl shadow-indigo-500/5"
+                style="background: var(--pip-bg); border: 1px solid var(--hero-badge-border); color: var(--pip-cmd)">
+                <span style="color: var(--pip-dollar)">$</span> pip install asok
+                <button id="copy-pip-btn" class="ml-4 p-2 rounded-lg transition-all relative"
+                    style="background: var(--pip-copy-bg); color: var(--text-muted)" title="Copy to clipboard">
+                    <svg class="w-5 h-5 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <svg class="w-5 h-5 check-icon hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        style="color: #22c55e">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Code Experience -->
+        <div class="w-full max-w-5xl mx-auto mt-20 relative group">
+            <div
+                class="absolute -inset-1 bg-gradient-to-r from-indigo-600 to-orange-600 rounded-3xl blur opacity-25 group-hover:opacity-40 transition duration-1000">
+            </div>
+            <div class="relative home-glass-card rounded-3xl overflow-hidden shadow-2xl">
+                <!-- Macos Bar -->
+                <div class="px-6 py-4 flex items-center justify-between"
+                    style="background: var(--editor-bar-bg); border-bottom: 1px solid var(--glass-card-border)">
+                    <div class="flex gap-2.5">
+                        <div class="w-3.5 h-3.5 rounded-full bg-red-500/30"></div>
+                        <div class="w-3.5 h-3.5 rounded-full bg-yellow-500/30"></div>
+                        <div class="w-3.5 h-3.5 rounded-full bg-green-500/30"></div>
+                    </div>
+                    <div class="text-[10px] font-black uppercase tracking-[0.3em]"
+                        style="color: var(--editor-tab-label)">Asok Playground</div>
+                    <div class="w-10"></div>
+                </div>
+                <!-- Editor Body -->
+                <div class="grid grid-cols-1 md:grid-cols-[200px_1fr]">
+                    <!-- Sidebar Tabs -->
+                    <div class="p-6 flex flex-col gap-4"
+                        style="background: var(--editor-sidebar-bg); border-right: 1px solid var(--glass-card-border)">
+                        <div class="text-[10px] font-bold uppercase tracking-widest mb-2"
+                            style="color: var(--editor-tab-label)">Examples</div>
+                        <button
+                            class="playground-tab active p-3 rounded-xl text-xs font-bold cursor-pointer transition-all text-left"
+                            data-tab="basic"
+                            style="background: var(--editor-tab-active-bg); color: var(--accent-primary); border: 1px solid var(--editor-tab-active-border)">
+                            Basic App</button>
+                        <button
+                            class="playground-tab p-3 rounded-xl text-xs font-medium cursor-pointer transition-all text-left hover:bg-white/5"
+                            data-tab="component"
+                            style="color: var(--editor-tab-inactive); border: 1px solid transparent">Live
+                            Component</button>
+                        <button
+                            class="playground-tab p-3 rounded-xl text-xs font-medium cursor-pointer transition-all text-left hover:bg-white/5"
+                            data-tab="api" style="color: var(--editor-tab-inactive); border: 1px solid transparent">REST
+                            API</button>
+                    </div>
+                    <!-- Code (stays dark for readability) -->
+                    <div class="p-10 font-mono text-base leading-relaxed text-left relative min-h-[280px]"
+                        style="background: var(--editor-body-bg); color: var(--editor-body-color)">
+
+                        <!-- Basic App -->
+                        <div class="playground-content" data-content="basic">
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">1</span><span><span
+                                        class="text-purple-400">from</span> asok <span
+                                        class="text-purple-400">import</span>
+                                    Request</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">2</span><span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">3</span><span><span
+                                        class="text-purple-400">def</span> <span
+                                        class="text-yellow-400">render</span>(request: Request):</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">4</span><span>&nbsp;&nbsp;&nbsp;&nbsp;request.meta.title
+                                    = <span class="text-orange-400">"Asok Framework"</span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">5</span><span>&nbsp;&nbsp;&nbsp;&nbsp;ctx =
+                                    {</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">6</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-orange-400">"framework"</span>: <span
+                                        class="text-orange-400">"Asok"</span>,</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">7</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-orange-400">"version"</span>: <span
+                                        class="text-orange-400">"0.1.0"</span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">8</span><span>&nbsp;&nbsp;&nbsp;&nbsp;}</span>
+                            </div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">9</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-purple-400">return</span> request.html(<span
+                                        class="text-orange-400">"index.html"</span>, **ctx)</span></div>
+                        </div>
+
+                        <!-- Live Component -->
+                        <div class="playground-content hidden" data-content="component">
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">1</span><span><span
+                                        class="text-purple-400">from</span> asok <span
+                                        class="text-purple-400">import</span> Component</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">2</span><span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">3</span><span><span
+                                        class="text-purple-400">class</span> <span
+                                        class="text-yellow-400">Counter</span>(Component):</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">4</span><span>&nbsp;&nbsp;&nbsp;&nbsp;count =
+                                    <span class="text-orange-400">0</span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">5</span><span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">6</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-purple-400">def</span> <span
+                                        class="text-yellow-400">increment</span>(<span
+                                        class="text-purple-400">self</span>):</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">7</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-purple-400">self</span>.count += <span
+                                        class="text-orange-400">1</span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">8</span><span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">9</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-purple-400">def</span> <span
+                                        class="text-yellow-400">render</span>(<span
+                                        class="text-purple-400">self</span>):</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">10</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-purple-400">return</span> <span
+                                        class="text-purple-400">self</span>.html(<span
+                                        class="text-orange-400">"counter.html"</span>)</span></div>
+                        </div>
+
+                        <!-- REST API -->
+                        <div class="playground-content hidden" data-content="api">
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">1</span><span><span
+                                        class="text-purple-400">from</span> asok.api <span
+                                        class="text-purple-400">import</span> api</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">2</span><span></span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">3</span><span><span
+                                        class="text-indigo-400">@api</span>(</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">4</span><span>&nbsp;&nbsp;&nbsp;&nbsp;summary=<span
+                                        class="text-orange-400">"List tasks"</span>,</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">5</span><span>&nbsp;&nbsp;&nbsp;&nbsp;output=TaskSchema</span>
+                            </div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">6</span><span>)</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">7</span><span><span
+                                        class="text-purple-400">def</span> <span
+                                        class="text-yellow-400">render</span>(request):</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">8</span><span>&nbsp;&nbsp;&nbsp;&nbsp;tasks =
+                                    Task.all()</span></div>
+                            <div class="flex gap-6 mb-2"><span class="w-4"
+                                    style="color: var(--editor-line-num)">9</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                        class="text-purple-400">return</span> request.api(tasks)</span></div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Grid -->
+    <section class="mt-60 max-w-6xl mx-auto w-full px-6 text-center">
+        <div class="mb-20">
+            <h2 class="text-5xl font-black mb-6 tracking-tight" style="color: var(--text-primary)">Built for
+                Performance.</h2>
+            <p class="text-xl max-w-2xl mx-auto" style="color: var(--text-secondary)">Experience the power of a
+                framework designed with zero external dependencies.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-500 mb-6 group-hover:scale-110 transition-transform">
+                    <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Ultra-Fast</h3>
+                <p class="leading-relaxed text-sm" style="color: var(--text-secondary)">Zero dependencies, optimized
+                    routing, and a compiled template engine for maximum performance.</p>
+            </div>
+
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="w-14 h-14 rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-500 mb-6 group-hover:scale-110 transition-transform">
+                    <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Secure by Default
+                </h3>
+                <p class="leading-relaxed text-sm" style="color: var(--text-secondary)">CSRF protection, Jinja Sandbox,
+                    automatic sanitization, and security headers configured out of the box.</p>
+            </div>
+
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="w-14 h-14 rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-500 mb-6 group-hover:scale-110 transition-transform">
+                    <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 6h16M4 12h16m-7 6h7" />
+                    </svg>
+                </div>
+                <h3 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Live Components
+                </h3>
+                <p class="leading-relaxed text-sm" style="color: var(--text-secondary)">Build reactive and real-time
+                    synchronized interfaces via native WebSockets without writing any JS.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Core Modules Section -->
+    <section class="mt-60 max-w-6xl mx-auto w-full px-6">
+        <div class="text-center mb-20">
+            <h2 class="text-5xl font-black mb-6 tracking-tight" style="color: var(--text-primary)">Built-in Superpowers
+            </h2>
+            <p class="text-xl max-w-2xl mx-auto" style="color: var(--text-secondary)">Everything you need to build
+                professional applications, included in the standard library.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <!-- ORM -->
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="text-indigo-400 mb-6 opacity-50 group-hover:opacity-100 transition-all group-hover:scale-110">
+                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                    </svg>
+                </div>
+                <h4 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Fluent ORM</h4>
+                <p class="text-sm leading-relaxed" style="color: var(--text-muted)">Zero-config SQLite ORM with
+                    auto-migrations, eager loading, and soft deletes built-in.</p>
+            </div>
+
+            <!-- API -->
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="text-indigo-400 mb-6 opacity-50 group-hover:opacity-100 transition-all group-hover:scale-110">
+                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                </div>
+                <h4 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Auto-Doc API</h4>
+                <p class="text-sm leading-relaxed" style="color: var(--text-muted)">Interactive OpenAPI 3.0 docs
+                    auto-generated at /docs. Standardized JSON responses with <code class="text-xs px-1 rounded"
+                        style="background: var(--code-inline-bg); color: var(--code-inline-color)">@api</code>
+                    decorator.</p>
+            </div>
+
+            <!-- Auth -->
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="text-purple-400 mb-6 opacity-50 group-hover:opacity-100 transition-all group-hover:scale-110">
+                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                    </svg>
+                </div>
+                <h4 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Secure Auth</h4>
+                <p class="text-sm leading-relaxed" style="color: var(--text-muted)">Native sessions, PBKDF2 hashing, and
+                    granular RBAC with request.user.can().</p>
+            </div>
+
+            <!-- Admin -->
+            <div class="p-8 rounded-[2rem] home-glass-card home-glass-card-hover group">
+                <div
+                    class="text-orange-400 mb-6 opacity-50 group-hover:opacity-100 transition-all group-hover:scale-110">
+                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                </div>
+                <h4 class="text-xl font-bold mb-3 tracking-tight" style="color: var(--text-primary)">Optional Admin</h4>
+                <p class="text-sm leading-relaxed" style="color: var(--text-muted)">Django-style admin
+                    interface—auto-generated from models. Add with <code class="text-xs px-1 rounded"
+                        style="background: var(--code-inline-bg); color: var(--code-inline-color)">--admin</code> flag.
+                    Roles, Inlines, CSV Export.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison Section: The "Zen" Difference -->
+    <section class="mt-60 max-w-6xl mx-auto w-full px-6">
+        <div class="text-center mb-20">
+            <h2 class="text-5xl font-black mb-6 tracking-tighter" style="color: var(--text-primary)">Compare. Conquer.
+            </h2>
+            <p class="text-xl max-w-2xl mx-auto" style="color: var(--text-secondary)">See how Asok eliminates
+                boilerplate and lets you focus on what matters.</p>
+        </div>
+
+        <!-- Comparison 1: Routing -->
+        <div class="mb-20 text-left">
+            <h3 class="text-xs font-black uppercase tracking-[0.3em] mb-10 opacity-40 text-center"
+                style="color: var(--text-primary)">01. Routing Paradigm</h3>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+                <!-- Traditional Routing -->
+                <div class="space-y-6 opacity-60 hover:opacity-100 transition-opacity">
+                    <div class="flex items-center justify-between px-6 py-3 rounded-t-2xl"
+                        style="background: var(--comparison-header-bg); border: 1px solid var(--border-secondary); border-bottom: none">
+                        <span class="text-xs font-bold uppercase tracking-widest"
+                            style="color: var(--comparison-label)">Traditional (Flask/Django)</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2)">Declarative</span>
+                    </div>
+                    <div class="p-8 rounded-b-2xl font-mono text-sm leading-relaxed overflow-hidden grayscale text-left"
+                        style="background: var(--comparison-body-bg); border: 1px solid var(--border-secondary); color: var(--comparison-body-color)">
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">@app.route</span>(<span
+                                class="text-orange-400">'/blog/&lt;slug&gt;'</span>)</div>
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">def</span> <span
+                                class="text-yellow-400">post</span>(slug):</div>
+                        <div class="diff-line-removed mb-2">&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                class="text-purple-400">return</span> render_template(<span
+                                class="text-orange-400">'post.html'</span>)</div>
+                        <div class="italic mt-4 opacity-50 text-xs">Requires centralized URL config or manual decorators
+                            for every route.</div>
+                    </div>
+                </div>
+
+                <!-- Asok Routing -->
+                <div class="space-y-6 relative group">
+                    <div
+                        class="absolute -inset-4 bg-indigo-500/10 blur-3xl rounded-[3rem] -z-10 group-hover:bg-indigo-500/20 transition-all">
+                    </div>
+                    <div
+                        class="flex items-center justify-between px-6 py-3 bg-indigo-600/10 rounded-t-2xl border-x border-t border-indigo-500/20 backdrop-blur-md">
+                        <span class="text-xs font-bold text-indigo-400 uppercase tracking-widest">Asok Framework</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: var(--accent-bg); color: var(--accent-secondary); border-color: rgba(249, 115, 22, 0.2)">File-Based</span>
+                    </div>
+                    <div class="p-8 border border-indigo-500/20 rounded-b-2xl font-mono text-sm leading-relaxed backdrop-blur-md text-left"
+                        style="background: var(--glass-card-bg)">
+                        <div class="text-[10px] font-bold uppercase tracking-widest mb-4 opacity-40">
+                            src/pages/blog/[slug]/page.py</div>
+                        <div class="diff-line-added mb-2"><span class="text-purple-400">def</span> <span
+                                class="text-yellow-400">render</span>(request):</div>
+                        <div class="diff-line-added mb-2">&nbsp;&nbsp;&nbsp;&nbsp;slug = request.params[<span
+                                class="text-orange-400">'slug'</span>]</div>
+                        <div class="diff-line-added mb-2">&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                class="text-purple-400">return</span> request.html(<span
+                                class="text-orange-400">'page.html'</span>)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Comparison 2: Reactivity -->
+        <div class="text-left">
+            <h3 class="text-xs font-black uppercase tracking-[0.3em] mb-10 opacity-40 text-center"
+                style="color: var(--text-primary)">02. Fragment Reactivity</h3>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+                <!-- Traditional Reactivity -->
+                <div class="space-y-6 opacity-60 hover:opacity-100 transition-opacity">
+                    <div class="flex items-center justify-between px-6 py-3 rounded-t-2xl"
+                        style="background: var(--comparison-header-bg); border: 1px solid var(--border-secondary); border-bottom: none">
+                        <span class="text-xs font-bold uppercase tracking-widest"
+                            style="color: var(--comparison-label)">Manual AJAX</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2)">Client-Side
+                            JS</span>
+                    </div>
+                    <div class="p-8 rounded-b-2xl font-mono text-sm leading-relaxed overflow-hidden grayscale text-left"
+                        style="background: var(--comparison-body-bg); border: 1px solid var(--border-secondary); color: var(--comparison-body-color)">
+                        <div class="diff-line-removed mb-2">fetch(<span class="text-orange-400">'/update'</span>).then(r
+                            => r.text())</div>
+                        <div class="diff-line-removed mb-2">.then(html => {</div>
+                        <div class="diff-line-removed mb-2">&nbsp;&nbsp;document.querySelector(<span
+                                class="text-orange-400">'#target'</span>)</div>
+                        <div class="diff-line-removed mb-2">&nbsp;&nbsp;.innerHTML = html;</div>
+                        <div class="diff-line-removed mb-2">});</div>
+                    </div>
+                </div>
+
+                <!-- Asok Reactivity -->
+                <div class="space-y-6 relative group">
+                    <div
+                        class="absolute -inset-4 bg-orange-500/10 blur-3xl rounded-[3rem] -z-10 group-hover:bg-orange-500/20 transition-all">
+                    </div>
+                    <div
+                        class="flex items-center justify-between px-6 py-3 bg-orange-600/10 rounded-t-2xl border-x border-t border-orange-500/20 backdrop-blur-md">
+                        <span class="text-xs font-bold text-orange-400 uppercase tracking-widest">Asok Fragment
+                            Swap</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(34, 197, 94, 0.1); color: #22c55e; border-color: rgba(34, 197, 94, 0.2)">Zero
+                            JS</span>
+                    </div>
+                    <div class="p-8 border border-orange-500/20 rounded-b-2xl font-mono text-sm leading-relaxed backdrop-blur-md text-left"
+                        style="background: var(--glass-card-bg)">
+                        <div class="diff-line-added mb-2">&lt;button <span class="text-yellow-400">data-url</span>=<span
+                                class="text-orange-400">"/update"</span></div>
+                        <div class="diff-line-added mb-2">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                class="text-yellow-400">data-block</span>=<span
+                                class="text-orange-400">"#target"</span>&gt;</div>
+                        <div class="diff-line-added mb-2">&nbsp;&nbsp;Update Content</div>
+                        <div class="diff-line-added mb-2">&lt;/button&gt;</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Comparison 3: ORM & Database -->
+        <div class="text-left mt-20">
+            <h3 class="text-xs font-black uppercase tracking-[0.3em] mb-10 opacity-40 text-center"
+                style="color: var(--text-primary)">03. Zero-Config ORM</h3>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+                <!-- Traditional ORM -->
+                <div class="space-y-6 opacity-60 hover:opacity-100 transition-opacity">
+                    <div class="flex items-center justify-between px-6 py-3 rounded-t-2xl"
+                        style="background: var(--comparison-header-bg); border: 1px solid var(--border-secondary); border-bottom: none">
+                        <span class="text-xs font-bold uppercase tracking-widest"
+                            style="color: var(--comparison-label)">Flask + SQLAlchemy</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2)">Config
+                            Hell</span>
+                    </div>
+                    <div class="p-8 rounded-b-2xl font-mono text-sm leading-relaxed overflow-hidden grayscale text-left"
+                        style="background: var(--comparison-body-bg); border: 1px solid var(--border-secondary); color: var(--comparison-body-color)">
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">from</span> flask_sqlalchemy
+                            <span class="text-purple-400">import</span> SQLAlchemy
+                        </div>
+                        <div class="diff-line-removed mb-2">db = SQLAlchemy(app)</div>
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">class</span> <span
+                                class="text-yellow-400">Post</span>(db.Model):</div>
+                        <div class="diff-line-removed mb-2">&nbsp;&nbsp;id = db.Column(db.Integer, ...)</div>
+                        <div class="diff-line-removed mb-2">&nbsp;&nbsp;title = db.Column(db.String(100))</div>
+                        <div class="diff-line-removed mb-2">db.create_all() <span class="opacity-50"># Manual
+                                migrations</span></div>
+                        <div class="italic mt-4 opacity-50 text-xs">Requires SQLAlchemy, migration tools, and extensive
+                            boilerplate.</div>
+                    </div>
+                </div>
+
+                <!-- Asok ORM -->
+                <div class="space-y-6 relative group">
+                    <div
+                        class="absolute -inset-4 bg-green-500/10 blur-3xl rounded-[3rem] -z-10 group-hover:bg-green-500/20 transition-all">
+                    </div>
+                    <div
+                        class="flex items-center justify-between px-6 py-3 bg-green-600/10 rounded-t-2xl border-x border-t border-green-500/20 backdrop-blur-md">
+                        <span class="text-xs font-bold text-green-400 uppercase tracking-widest">Asok Built-in
+                            ORM</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(34, 197, 94, 0.1); color: #22c55e; border-color: rgba(34, 197, 94, 0.2)">Auto-Migration</span>
+                    </div>
+                    <div class="p-8 border border-green-500/20 rounded-b-2xl font-mono text-xs leading-relaxed backdrop-blur-md text-left"
+                        style="background: var(--glass-card-bg)">
+                        <div class="diff-line-added mb-1"><span class="text-purple-400">from</span> asok <span
+                                class="text-purple-400">import</span> Model, Field</div>
+                        <div class="diff-line-added mb-1"></div>
+                        <div class="diff-line-added mb-1"><span class="text-purple-400">class</span> <span
+                                class="text-yellow-400">Post</span>(Model):</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;title = Field.String()</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;content = Field.Text()</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;image = Field.File()</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;created_at = Field.CreatedAt()</div>
+                        <div class="mt-3 text-xs font-normal" style="color: var(--text-muted)">→ Auto-migrates on first
+                            run. No <code class="px-1 rounded"
+                                style="background: var(--code-inline-bg); color: var(--code-inline-color)">makemigrations</code>
+                            needed.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Comparison 4: API Development -->
+        <div class="text-left mt-20">
+            <h3 class="text-xs font-black uppercase tracking-[0.3em] mb-10 opacity-40 text-center"
+                style="color: var(--text-primary)">04. Auto-Documented APIs</h3>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+                <!-- Traditional API -->
+                <div class="space-y-6 opacity-60 hover:opacity-100 transition-opacity">
+                    <div class="flex items-center justify-between px-6 py-3 rounded-t-2xl"
+                        style="background: var(--comparison-header-bg); border: 1px solid var(--border-secondary); border-bottom: none">
+                        <span class="text-xs font-bold uppercase tracking-widest"
+                            style="color: var(--comparison-label)">Flask REST Setup</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2)">Manual
+                            Docs</span>
+                    </div>
+                    <div class="p-8 rounded-b-2xl font-mono text-sm leading-relaxed overflow-hidden grayscale text-left"
+                        style="background: var(--comparison-body-bg); border: 1px solid var(--border-secondary); color: var(--comparison-body-color)">
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">from</span> flask_restx <span
+                                class="text-purple-400">import</span> Api, Resource</div>
+                        <div class="diff-line-removed mb-2">api = Api(app, doc=<span
+                                class="text-orange-400">'/docs'</span>)</div>
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">@api.route</span>(<span
+                                class="text-orange-400">'/users'</span>)</div>
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">class</span> <span
+                                class="text-yellow-400">UserAPI</span>(Resource):</div>
+                        <div class="diff-line-removed mb-2">&nbsp;&nbsp;<span class="text-purple-400">def</span> <span
+                                class="text-yellow-400">get</span>(self): ...</div>
+                        <div class="italic mt-4 opacity-50 text-xs">Requires Flask-RESTX, manual schema definitions, and
+                            boilerplate.</div>
+                    </div>
+                </div>
+
+                <!-- Asok API -->
+                <div class="space-y-6 relative group">
+                    <div
+                        class="absolute -inset-4 bg-blue-500/10 blur-3xl rounded-[3rem] -z-10 group-hover:bg-blue-500/20 transition-all">
+                    </div>
+                    <div
+                        class="flex items-center justify-between px-6 py-3 bg-blue-600/10 rounded-t-2xl border-x border-t border-blue-500/20 backdrop-blur-md">
+                        <span class="text-xs font-bold text-blue-400 uppercase tracking-widest">Asok Auto-API</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(34, 197, 94, 0.1); color: #22c55e; border-color: rgba(34, 197, 94, 0.2)">OpenAPI
+                            3.0</span>
+                    </div>
+                    <div class="p-8 border border-blue-500/20 rounded-b-2xl font-mono text-xs leading-relaxed backdrop-blur-md text-left"
+                        style="background: var(--glass-card-bg)">
+                        <div class="diff-line-added mb-1"><span class="text-indigo-400">@api</span>(</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;summary=<span class="text-orange-400">"List
+                                tasks"</span>,</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;input=TaskSchema,</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;output=TaskSchema</div>
+                        <div class="diff-line-added mb-1">)</div>
+                        <div class="diff-line-added mb-1"><span class="text-purple-400">def</span> <span
+                                class="text-yellow-400">render</span>(request):</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;tasks = Task.all()</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;data = TaskSchema(many=<span
+                                class="text-orange-400">True</span>)</div>
+                        <div class="diff-line-added mb-1">&nbsp;&nbsp;<span class="text-purple-400">return</span>
+                            request.api(data.dump(tasks))</div>
+                        <div class="mt-3 text-xs font-normal" style="color: var(--text-muted)">→ Auto-generates OpenAPI
+                            3.0 docs at <span class="font-semibold" style="color: var(--accent-primary)">/docs</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Comparison 5: Security & Rate Limiting -->
+        <div class="text-left mt-20">
+            <h3 class="text-xs font-black uppercase tracking-[0.3em] mb-10 opacity-40 text-center"
+                style="color: var(--text-primary)">04. Secure-by-Design API</h3>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+                <!-- Traditional API -->
+                <div class="space-y-6 opacity-60 hover:opacity-100 transition-opacity">
+                    <div class="flex items-center justify-between px-6 py-3 rounded-t-2xl"
+                        style="background: var(--comparison-header-bg); border: 1px solid var(--border-secondary); border-bottom: none">
+                        <span class="text-xs font-bold uppercase tracking-widest"
+                            style="color: var(--comparison-label)">Manual Hardening</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2)">Extensions
+                            Needed</span>
+                    </div>
+                    <div class="p-8 rounded-b-2xl font-mono text-sm leading-relaxed overflow-hidden grayscale text-left"
+                        style="background: var(--comparison-body-bg); border: 1px solid var(--border-secondary); color: var(--comparison-body-color)">
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">from</span> flask_limiter
+                            <span class="text-purple-400">import</span> Limiter
+                        </div>
+                        <div class="diff-line-removed mb-2">limiter = Limiter(app)</div>
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">@limiter.limit</span>(<span
+                                class="text-orange-400">"10/minute"</span>)</div>
+                        <div class="diff-line-removed mb-2"><span class="text-purple-400">def</span> <span
+                                class="text-yellow-400">my_api</span>(): ...</div>
+                    </div>
+                </div>
+
+                <!-- Asok API -->
+                <div class="space-y-6 relative group">
+                    <div
+                        class="absolute -inset-4 bg-purple-500/10 blur-3xl rounded-[3rem] -z-10 group-hover:bg-purple-500/20 transition-all">
+                    </div>
+                    <div
+                        class="flex items-center justify-between px-6 py-3 bg-purple-600/10 rounded-t-2xl border-x border-t border-purple-500/20 backdrop-blur-md">
+                        <span class="text-xs font-bold text-purple-400 uppercase tracking-widest">Asok Core
+                            Security</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold"
+                            style="background: rgba(34, 197, 94, 0.1); color: #22c55e; border-color: rgba(34, 197, 94, 0.2)">Batteries
+                            Included</span>
+                    </div>
+                    <div class="p-8 border border-purple-500/20 rounded-b-2xl font-mono text-sm leading-relaxed backdrop-blur-md text-left"
+                        style="background: var(--glass-card-bg)">
+                        <div class="diff-line-added mb-2"><span class="text-indigo-400">@RateLimit</span>(limit=<span
+                                class="text-orange-400">10</span>)</div>
+                        <div class="diff-line-added mb-2"><span class="text-indigo-400">@internal_only</span></div>
+                        <div class="diff-line-added mb-2"><span class="text-purple-400">def</span> <span
+                                class="text-yellow-400">get</span>(request):</div>
+                        <div class="diff-line-added mb-2">&nbsp;&nbsp;&nbsp;&nbsp;<span
+                                class="text-purple-400">return</span> request.api({...})</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison Table -->
+    <section class="mt-60 max-w-6xl mx-auto px-6">
+        <div class="text-center mb-20">
+            <h2 class="text-5xl font-black mb-6 tracking-tight" style="color: var(--text-primary)">The Framework
+                Showdown</h2>
+            <p class="text-xl max-w-2xl mx-auto" style="color: var(--text-secondary)">See how Asok compares to Flask and
+                Django across key features.</p>
+        </div>
+
+        <div class="overflow-x-auto rounded-2xl" style="border: 1px solid var(--border-primary)">
+            <table class="w-full text-left border-collapse">
+                <thead style="background: var(--bg-secondary)">
+                    <tr style="border-bottom: 2px solid var(--border-primary)">
+                        <th class="py-5 px-6 text-xs font-black uppercase tracking-widest"
+                            style="color: var(--text-muted)">Feature</th>
+                        <th class="py-5 px-6 text-xs font-black uppercase tracking-widest text-center"
+                            style="color: var(--text-muted)">Flask</th>
+                        <th class="py-5 px-6 text-xs font-black uppercase tracking-widest text-center"
+                            style="color: var(--text-muted)">Django</th>
+                        <th class="py-5 px-6 text-xs font-black uppercase tracking-widest text-center"
+                            style="color: var(--accent-primary)">Asok</th>
+                    </tr>
+                </thead>
+                <tbody class="text-sm">
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Routing</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Decorators (@route)</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">urls.py config</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">File-based
+                            (automatic)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Database ORM</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">SQLAlchemy (external)
+                        </td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Built-in (complex)</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Built-in
+                            (simple)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Migrations</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Alembic (manual)</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">manage.py migrate</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Automatic</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Forms</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">WTForms (external)</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Built-in (verbose)</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Built-in
+                            (declarative)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Authentication</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Flask-Login (external)
+                        </td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Built-in (complex)</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Built-in
+                            (simple)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Admin Interface</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Flask-Admin (external)
+                        </td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Built-in (required)</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Built-in
+                            (optional flag)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">API Documentation</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Flask-RESTX (manual)</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">DRF (complex setup)</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">OpenAPI
+                            (auto-generated)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Reactive Components</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">❌ Manual JS</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">❌ Manual JS</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">✅ Zero JS
+                            (WebSocket)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Dependencies</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">5+ packages</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Many packages</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Zero (stdlib
+                            only)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border-primary)">
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Learning Curve</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Medium</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">Steep</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">Gentle</td>
+                    </tr>
+                    <tr>
+                        <td class="py-4 px-6 font-medium" style="color: var(--text-primary)">Lines of Code</td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">~50-100 (boilerplate)
+                        </td>
+                        <td class="py-4 px-6 text-center" style="color: var(--text-secondary)">~100-200 (config)</td>
+                        <td class="py-4 px-6 text-center font-bold" style="color: var(--accent-primary)">~10-20
+                            (minimal)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Interactive Component Preview -->
+    <section class="mt-60 max-w-7xl mx-auto px-6">
+        <div
+            class="home-glass-card rounded-[3rem] p-8 md:p-16 relative overflow-hidden flex flex-col lg:flex-row items-center gap-20">
+            <div
+                class="absolute top-0 right-0 w-1/2 h-full bg-gradient-to-l from-indigo-600/10 to-transparent pointer-events-none">
+            </div>
+
+            <div class="flex-1 space-y-8 relative z-10 text-center lg:text-left">
+                <h2 class="text-5xl md:text-6xl font-black leading-tight tracking-tight"
+                    style="color: var(--text-primary)">Reactive by <br /> <span class="text-shimmer">Nature.</span></h2>
+                <p class="text-xl leading-relaxed max-w-xl mx-auto lg:mx-0" style="color: var(--text-secondary)">
+                    Build live interfaces without a single line of JavaScript.
+                    Asok components synchronize state automatically via binary WebSockets.
+                </p>
+                <div class="flex flex-wrap justify-center lg:justify-start gap-4">
+                    <div class="px-4 py-2 rounded-xl text-xs font-bold transition-colors"
+                        style="background: var(--accent-bg); border: 1px solid var(--accent-border); color: var(--accent-primary)">
+                        Zero JS Runtime</div>
+                    <div class="px-4 py-2 rounded-xl text-xs font-bold transition-colors"
+                        style="background: rgba(249, 115, 22, 0.08); border: 1px solid rgba(249, 115, 22, 0.15); color: var(--accent-secondary)">
+                        Fast Binary Sync</div>
+                </div>
+            </div>
+
+            <!-- Phone Mockup / Counter Demo -->
+            <div class="w-full max-w-xs h-[580px] rounded-[3rem] border-[8px] shadow-2xl relative overflow-hidden shrink-0 group hover:scale-105 transition-transform duration-500"
+                style="background: var(--phone-bg); border-color: var(--phone-border)">
+                <div class="absolute top-0 inset-x-0 h-6 flex justify-center" style="background: var(--phone-notch-bg)">
+                    <div class="w-20 h-4 rounded-b-xl" style="background: var(--phone-notch-inner)"></div>
+                </div>
+                <!-- Live Counter Component -->
+                {{ component('Counter', count=10) }}
+            </div>
+        </div>
+    </section>
+
+    <!-- Final CTA Section -->
+    <section class="mt-60 mb-40 text-center relative py-32 overflow-hidden rounded-[3rem] home-glass-card mx-6">
+        <div class="absolute inset-0 bg-gradient-to-b from-indigo-600/5 to-orange-600/5 -z-10"></div>
+        <div class="relative z-10 max-w-3xl mx-auto px-6">
+            <h2 class="text-5xl md:text-6xl font-black mb-8 tracking-tighter" style="color: var(--text-primary)">Ready
+                to build the <br /> <span class="text-shimmer">impossible?</span></h2>
+            <p class="text-xl mb-12" style="color: var(--text-secondary)">Join thousands of developers building fast,
+                secure, and reactive apps with Asok.</p>
+            <div class="flex flex-wrap justify-center gap-6">
+                <a href="/docs/01-getting-started" class="btn-primary">Get Started Now</a>
+                <a href="https://github.com/asok-framework/asok" class="btn-secondary">Documentation</a>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

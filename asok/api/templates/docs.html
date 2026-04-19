@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ api_title }} &mdash; API Docs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/asok-api/docs.css">
+    <link rel="icon" href="{{ api_logo or '/asok-api/logo.svg' }}" type="image/svg+xml">
+</head>
+<body>
+    <div id="flash-zone"></div>
+    
+    <div class="docs-shell">
+        <aside class="docs-sidebar">
+            <div class="docs-brand">
+                <img src="{{ api_logo or '/asok-api/logo.svg' }}" alt="{{ api_title }}" width="32" height="32">
+                <span>{{ api_title }}</span>
+            </div>
+            
+            <nav id="sidebar-nav">
+                <div class="nav-group">Menu</div>
+                <a href="#introduction" class="nav-item" onclick="openSection('introduction')">Introduction</a>
+                <a href="/openapi.json" target="_blank" class="nav-item">OpenAPI Spec</a>
+                
+                {% set tags = {} %}
+                {% for path, methods in spec.paths.items() %}
+                    {% for method, op in methods.items() %}
+                        {% for tag in op.tags %}
+                            {% if tag not in tags %}
+                                {% set _ = tags.update({tag: []}) %}
+                            {% endif %}
+                            {% set _ = tags[tag].append({'path': path, 'method': method, 'op': op}) %}
+                        {% endfor %}
+                    {% endfor %}
+                {% endfor %}
+                
+                {% for tag, items in tags|dictsort %}
+                    <div class="nav-group">{{ tag }}</div>
+                    {% for item in items %}
+                        {% set op_id = item.method + '-' + item.path|replace('/', '-')|replace('{', '')|replace('}', '') %}
+                        <a href="#{{ op_id }}" class="nav-item" onclick="openSection('{{ op_id }}')">
+                            {{ item.op.summary or item.path }}
+                        </a>
+                    {% endfor %}
+                {% endfor %}
+            </nav>
+        </aside>
+
+        <main class="docs-content">
+            <header class="docs-topbar">
+                <div class="topbar-title">{{ api_title }} <small style="opacity: 0.5; font-weight: 400; font-size: 0.8rem; margin-left: 8px;">v{{ spec.info.version }}</small></div>
+                <div class="topbar-actions">
+                    <div class="theme-toggle" onclick="toggleTheme()" title="Toggle Theme">
+                        <svg class="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                        <svg class="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    </div>
+                    <a href="/" class="btn btn-primary">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                        Back to App
+                    </a>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <section id="introduction" class="tag-section">
+                    <h1 class="tag-title">Introduction</h1>
+                    <div style="margin-bottom: 24px;">
+                        <span class="badge badge-brand" style="padding: 6px 14px; font-size: 0.85rem;">No dependencies — just Python’s standard library</span>
+                    </div>
+                    <p class="op-description" style="font-size: 1.1rem; line-height: 1.7; opacity: 0.9;">{{ spec.info.description }}</p>
+                </section>
+
+                {% for tag, items in tags|dictsort %}
+                    <section class="tag-section" id="tag-{{ tag }}">
+                        <h2 class="tag-title">{{ tag }}</h2>
+                        
+                        {% for item in items %}
+                            {% set op_id = item.method + '-' + item.path|replace('/', '-')|replace('{', '')|replace('}', '') %}
+                            <div class="operation-card {{ item.method }}" id="{{ op_id }}">
+                                <div class="op-header" onclick="toggleOp(this)">
+                                    <span class="method-badge">{{ item.method }}</span>
+                                    <span class="op-path">{{ item.path }}</span>
+                                    <span class="op-summary">{{ item.op.summary }}</span>
+                                    <svg class="op-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                </div>
+                                <div class="op-details">
+                                    {% if item.op.description %}
+                                        <p class="op-description">{{ item.op.description }}</p>
+                                    {% endif %}
+
+                                    <div class="detail-section">
+                                        {% if item.op.parameters %}
+                                            <h4>Parameters</h4>
+                                            <div class="table-wrap">
+                                                <table>
+                                                    <thead>
+                                                        <tr><th>Name</th><th>In</th><th>Type</th><th>Required</th></tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {% for p in item.op.parameters %}
+                                                            <tr>
+                                                                <td><code>{{ p.name }}</code></td>
+                                                                <td><span style="opacity: 0.6">{{ p.in }}</span></td>
+                                                                <td><code>{{ p.schema.type }}</code></td>
+                                                                <td>{{ "Yes" if p.required else "No" }}</td>
+                                                            </tr>
+                                                        {% endfor %}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        {% endif %}
+
+                                        {% if item.op._input_schema %}
+                                            <h4 style="margin-top: 0;">Request Body</h4>
+                                            <pre>{{ spec.components.schemas[item.op._input_schema]|dump(indent=2) }}</pre>
+                                        {% endif %}
+
+                                        <h4>Responses</h4>
+                                        <div class="table-wrap">
+                                            <table>
+                                                <thead>
+                                                    <tr><th>Code</th><th>Description</th><th>Schema</th></tr>
+                                                </thead>
+                                                <tbody>
+                                                    {% for code, res in item.op.responses.items() %}
+                                                        <tr>
+                                                            <td><span class="status-badge {{ 'success' if code in ['200', '201', '204'] else '' }}">{{ code }}</span></td>
+                                                            <td>{{ res.description }}</td>
+                                                            <td>
+                                                                {% if item.op._output_schema %}
+                                                                    <code>{{ item.op._output_schema }}</code>
+                                                                {% else %}
+                                                                    <span style="opacity: 0.4">&mdash;</span>
+                                                                {% endif %}
+                                                            </td>
+                                                        </tr>
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+
+                                        <div style="margin-top: 32px; display: flex; gap: 12px;">
+                                            <button class="btn btn-primary" onclick="copyCurl('{{ item.method|upper }}', '{{ item.path }}')">Copy cURL</button>
+                                            <button class="btn btn-default" onclick="toggleTry(this, '{{ item.method }}', '{{ item.path }}')">Try it out</button>
+                                        </div>
+
+                                        <div class="try-panel">
+                                            <div class="try-title">
+                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                                                <span>Execute Request</span>
+                                            </div>
+                                            {% set has_path_params = '{' in item.path %}
+                                            {% set has_query_params = item.op.parameters %}
+                                            {% set m_lower = item.method|lower %}
+                                            {% set has_body = m_lower in ['post', 'put', 'patch'] %}
+                                            {% set needs_input = has_path_params or has_query_params or has_body or item.op._input_schema %}
+                                            
+                                            {% if needs_input %}
+                                            <div class="try-form">
+                                                <div class="form-field">
+                                                    <label>Input Parameters / Body (JSON)</label>
+                                                    <textarea class="try-payload" 
+                                                              data-schema="{{ item.op._input_schema or '' }}"
+                                                              placeholder='{ "id": 123 }'></textarea>
+                                                    <span style="font-size: 0.75rem; opacity: 0.5; margin-top: 4px;">Enter path parameters, query parameters, or request body as a JSON object.</span>
+                                                </div>
+                                            </div>
+                                            {% else %}
+                                            <div style="margin: 16px 0; padding: 12px; background: var(--surface-2); border-radius: 6px; font-size: 0.9rem; opacity: 0.8;">
+                                                This endpoint doesn't require any input parameters. Click <strong>Execute</strong> to test it.
+                                            </div>
+                                            {% endif %}
+
+                                            <div class="try-actions">
+                                                <button class="btn btn-primary" onclick="executeTry(this, '{{ item.method|upper }}', '{{ item.path }}')">Execute</button>
+                                                <button class="btn btn-ghost" onclick="toggleTry(this)">Cancel</button>
+                                            </div>
+
+                                            <div class="response-area">
+                                                <div class="res-header">
+                                                    <div class="res-status">
+                                                        <span>Status:</span>
+                                                        <span class="status-code">---</span>
+                                                    </div>
+                                                    <div class="res-time">0ms</div>
+                                                </div>
+                                                <div class="res-body-wrap" style="position: relative;">
+                                                    <button class="btn btn-ghost" style="position: absolute; top: 8px; right: 8px; padding: 4px; opacity: 0.6;" onclick="copyResponse(this)" title="Copy Response">
+                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                                    </button>
+                                                    <pre><code class="res-content">Click execute to see result...</code></pre>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </section>
+                {% endfor %}
+            </div>
+
+            <footer style="padding: 60px 48px; border-top: 1px solid var(--border); opacity: 0.5; font-size: 0.85rem;">
+                <p>Generated by <strong>Asok Framework</strong> &mdash; The minimalist Python web framework.</p>
+            </footer>
+        </main>
+    </div>
+
+    <script id="doc-spec" type="application/json">{{ spec|tojson }}</script>
+    <script>
+        const spec = JSON.parse(document.getElementById('doc-spec').textContent);
+        const csrfToken = "{{ csrf_token }}";
+
+        // Theme Management
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('asok-api-theme', theme);
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            setTheme(current === 'dark' ? 'light' : 'dark');
+        }
+
+        const savedTheme = localStorage.getItem('asok-api-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        setTheme(savedTheme);
+
+        // Notifications (Toasts)
+        function showToast(message, type = 'success') {
+            const zone = document.getElementById('flash-zone');
+            const toast = document.createElement('div');
+            toast.className = `flash-msg ${type}`;
+            toast.innerHTML = `<span>${message}</span>`;
+            zone.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(10px)';
+                setTimeout(() => toast.remove(), 400);
+            }, 3000);
+        }
+
+        // Accordion UX
+        function toggleOp(header) {
+            const card = header.parentElement;
+            const isOpen = card.classList.contains('is-open');
+            document.querySelectorAll('.operation-card').forEach(c => c.classList.remove('is-open'));
+            if (!isOpen) card.classList.add('is-open');
+        }
+
+        function toggleTry(btn, method, path) {
+            const card = btn.closest('.operation-card');
+            card.classList.toggle('is-trying');
+            
+            // Auto-fill with schema example
+            if (card.classList.contains('is-trying')) {
+                const textarea = card.querySelector('.try-payload');
+                if (textarea && !textarea.value) {
+                    const schemaName = textarea.dataset.schema;
+                    let example = {};
+                    
+                    if (schemaName && spec.components.schemas[schemaName]) {
+                        const schema = spec.components.schemas[schemaName];
+                        for (const [key, prop] of Object.entries(schema.properties)) {
+                            // Skip system-generated fields in the example for request bodies
+                            if (['id', 'created_at', 'updated_at', 'slug'].includes(key.toLowerCase())) continue;
+                            example[key] = prop.type === 'integer' ? 0 : (prop.type === 'boolean' ? false : "");
+                        }
+                    }
+                    
+                    // Add path and query parameters
+                    const op = spec.paths[path] && spec.paths[path][method.toLowerCase()];
+                    if (op && op.parameters) {
+                        op.parameters.forEach(p => {
+                            if (!(p.name in example)) {
+                                example[p.name] = p.schema && p.schema.type === 'integer' ? 0 : "";
+                            }
+                        });
+                    } else {
+                        // Fallback: Look for path parameters directly in the path pattern
+                        const matches = path.match(/\{.*?\}/g);
+                        if (matches) {
+                            matches.forEach(m => {
+                                const name = m.replace('{', '').replace('}', '').split(':')[0];
+                                if (!(name in example)) example[name] = "";
+                            });
+                        }
+                    }
+                    
+                    if (Object.keys(example).length > 0) {
+                        textarea.value = JSON.stringify(example, null, 2);
+                    } else {
+                        textarea.value = "";
+                    }
+                }
+            }
+        }
+
+        async function executeTry(btn, method, pathPattern) {
+            const card = btn.closest('.operation-card');
+            const resArea = card.querySelector('.response-area');
+            const resCode = card.querySelector('.status-code');
+            const resTime = card.querySelector('.res-time');
+            const resContent = card.querySelector('.res-content');
+            const payloadArea = card.querySelector('.try-payload');
+            
+            resArea.classList.add('has-content');
+            resContent.textContent = 'Loading...';
+            
+            const start = performance.now();
+            let finalUrl = pathPattern;
+            const queryParams = new URLSearchParams();
+            const headers = { 
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            };
+            const options = { method, headers };
+
+            let payload = {};
+            if (payloadArea && payloadArea.value.trim()) {
+                try {
+                    payload = JSON.parse(payloadArea.value);
+                } catch (e) {
+                    showToast('Invalid JSON in input field', 'error');
+                    return;
+                }
+            }
+
+            // Distribute payload keys: Path -> Query/Body
+            for (let [key, value] of Object.entries(payload)) {
+                // Try to match the key directly or as 'id' matching any '{*_id}' or '{id}'
+                const patterns = [`\\{${key}(?::.*?)?\\}`];
+                if (key.toLowerCase() === 'id') patterns.push('\\{.*?_id(?::.*?)?\\}');
+
+                let replaced = false;
+                for (const p of patterns) {
+                    const regex = new RegExp(p, 'g');
+                    if (finalUrl.match(regex)) {
+                        finalUrl = finalUrl.replace(regex, encodeURIComponent(value));
+                        replaced = true;
+                        break;
+                    }
+                }
+
+                if (!replaced && ['GET', 'DELETE'].includes(method)) {
+                    queryParams.append(key, value);
+                }
+            }
+
+            // Append remaining payload as body for POST/PUT/PATCH
+            if (['POST', 'PUT', 'PATCH'].includes(method)) {
+                // Filter out keys already used in path substitution
+                const body = {};
+                for (const [key, value] of Object.entries(payload)) {
+                    if (!pathPattern.includes(`{${key}}`)) {
+                        body[key] = value;
+                    }
+                }
+                if (Object.keys(body).length > 0) {
+                    options.body = JSON.stringify(body);
+                }
+            }
+
+            const queryStr = queryParams.toString();
+            const url = finalUrl + (queryStr ? '?' + queryStr : '');
+
+            try {
+                const response = await fetch(url, options);
+                const end = performance.now();
+                
+                resCode.textContent = response.status;
+                resCode.className = 'status-code status-badge ' + (response.status < 400 ? 'success' : 'error');
+                resTime.textContent = `${Math.round(end - start)}ms`;
+                
+                const data = await response.json().catch(() => null);
+                if (data) {
+                    resContent.innerHTML = syntaxHighlight(JSON.stringify(data, null, 2));
+                } else {
+                    resContent.textContent = '(Empty Response)';
+                }
+                
+                if (response.ok) {
+                    showToast('Request completed successfully');
+                } else {
+                    showToast(`Request failed with status ${response.status}`, 'error');
+                }
+            } catch (err) {
+                resCode.textContent = 'Error';
+                resCode.className = 'status-code status-badge error';
+                resContent.textContent = err.message;
+                showToast('Request failed', 'error');
+            }
+        }
+
+        function syntaxHighlight(json) {
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) cls = 'json-key';
+                    else cls = 'json-string';
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        function copyResponse(btn) {
+            const wrap = btn.closest('.res-body-wrap');
+            const code = wrap.querySelector('.res-content').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                showToast('Response copied to clipboard!');
+            });
+        }
+
+        function openSection(id) {
+            const el = document.getElementById(id);
+            if (el && el.classList.contains('operation-card')) {
+                document.querySelectorAll('.operation-card').forEach(c => c.classList.remove('is-open'));
+                el.classList.add('is-open');
+            }
+        }
+
+        function copyCurl(method, path) {
+            const url = window.location.origin + path;
+            const curl = `curl -X ${method} "${url}"`;
+            navigator.clipboard.writeText(curl).then(() => {
+                showToast('cURL command copied to clipboard!');
+            });
+        }
+
+        // Initialize state
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.location.hash) {
+                const id = window.location.hash.substring(1);
+                openSection(id);
+            } else {
+                const firstCard = document.querySelector('.operation-card');
+                if (firstCard) firstCard.classList.add('is-open');
+            }
+        });
+    </script>
+</body>
+</html>
