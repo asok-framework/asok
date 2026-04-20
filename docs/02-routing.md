@@ -81,7 +81,7 @@ Access the captured value with `request.params`:
 from asok import Request
 
 def render(request: Request):
-    slug = request.params['slug']  # "my-article"
+    slug = request.params.get('slug')  # "my-article"
     return request.html('page.html', slug=slug)
 ```
 
@@ -116,8 +116,8 @@ src/pages/user/[id]/posts/[post_id]/page.py → /user/42/posts/7
 
 ```python
 def render(request: Request):
-    user_id = request.params['id']      # "42"
-    post_id = request.params['post_id'] # "7"
+    user_id = request.params.get('id')      # "42"
+    post_id = request.params.get('post_id') # "7"
 ```
 
 ## Priority

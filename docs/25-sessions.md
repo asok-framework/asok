@@ -5,7 +5,9 @@ Server-side sessions with signed cookie IDs.
 ## Usage
 
 ```python
-def render(request):
+from asok import Request
+
+def render(request: Request):
     # Read
     username = request.session.get("username")
 
@@ -13,7 +15,7 @@ def render(request):
     request.session["username"] = "alice"
     request.session["cart"] = [1, 2, 3]
 
-    return request.html("src/pages/page.html")
+    return request.html("page.html")
 ```
 
 Sessions are lazy-loaded on first access. Modified sessions are automatically saved when the response is sent.

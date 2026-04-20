@@ -7,6 +7,8 @@ Asok's ORM is designed to be powerful yet lightweight. This guide covers advance
 ### JSON Field
 Store complex data structures (dicts, lists) transparently.
 ```python
+from asok import Model, Field
+
 class Settings(Model):
     config = Field.JSON(default={})
 
@@ -19,6 +21,7 @@ print(s.config["theme"]) # "dark" (automatically a dict)
 Integrate with Python's standard `enum.Enum` for type-safe choices.
 ```python
 import enum
+from asok import Model, Field
 
 class Status(enum.Enum):
     PENDING = "pending"
@@ -32,6 +35,7 @@ class User(Model):
 Precise math for financial data (money).
 ```python
 from decimal import Decimal
+from asok import Model, Field
 
 class Product(Model):
     price = Field.Decimal(precision=2)
@@ -42,6 +46,8 @@ p = Product.create(price=Decimal("19.99"))
 ### UUID Field
 Automatically generate unique identifiers.
 ```python
+from asok import Model, Field
+
 class Job(Model):
     uid = Field.UUID() # Auto-generates uuid4 on save
 ```
@@ -49,6 +55,8 @@ class Job(Model):
 ### Tel / Phone Field
 Store validated phone numbers.
 ```python
+from asok import Model, Field
+
 class User(Model):
     phone = Field.Tel(unique=True)
 ```
@@ -56,6 +64,8 @@ class User(Model):
 ### Rich Text (WYSIWYG)
 Upgrade standard textareas to a full-featured editor in the admin panel.
 ```python
+from asok import Model, Field
+
 class Post(Model):
     body = Field.Text(wysiwyg=True) # Enables Quill editor in Admin
 ```
@@ -92,6 +102,8 @@ Asok supports storing and searching high-dimensional vectors (embeddings) direct
 ### Defining a Vector Field
 Specify the dimensions of your embedding (e.g., 1536 for OpenAI, 384 for standard local models).
 ```python
+from asok import Model, Field
+
 class Document(Model):
     content = Field.String()
     embedding = Field.Vector(dimensions=1536)
@@ -111,6 +123,8 @@ You can enable semantic search in the Admin search bar!
 2. Define an `embed_query` method on your model to convert search text into a vector.
 
 ```python
+from asok import Model, Field
+
 class Product(Model):
     name = Field.String()
     vec = Field.Vector(1536)
@@ -144,7 +158,9 @@ post.refresh() # Reloads attributes from the database
 ### API Error Handling
 Perfect for REST controllers:
 ```python
-def get(request):
+from asok import Request, ModelError
+
+def get(request: Request):
     try:
         user = User.find_or_fail(request.params["id"])
         return request.api(user.to_dict())

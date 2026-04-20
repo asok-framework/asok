@@ -5,7 +5,9 @@
 Multipart file uploads are parsed into `UploadedFile` objects available on `request.files`.
 
 ```python
-def render(request):
+from asok import Request
+
+def render(request: Request):
     photo = request.files.get("photo")
     if photo:
         print(photo.filename)  # "avatar.jpg"
@@ -59,7 +61,9 @@ print(request.files["photo"]["filename"])
 Use `request.send_file()` to return a file to the browser. Relative paths are automatically resolved relative to **`src/partials/uploads/`**.
 
 ```python
-def render(request):
+from asok import Request
+
+def render(request: Request):
     # Resolves to src/partials/uploads/report.pdf
     return request.send_file("report.pdf")
 

@@ -9,7 +9,9 @@ Asok provides tools for building robust JSON APIs with consistent response forma
 Returns a standardized success response.
 
 ```python
-def render(request):
+from asok import Request
+
+def render(request: Request):
     users = User.all()
     return request.api([u.to_dict() for u in users])
 ```
@@ -24,6 +26,8 @@ def render(request):
 Returns a standardized error response.
 
 ```python
+from asok import Request
+
 def render(request):
     if not request.form.get("email"):
         return request.api_error("Validation failed", errors={"email": "required"})
@@ -46,7 +50,10 @@ To authorize external domains, configure the `CORS_ORIGINS` setting in your app:
 
 ```python
 # Allow specific domains (Recommended for production)
-app.config["CORS_ORIGINS"] = ["https://myfrontend.com", "https://admin.myfrontend.com"]
+app.config["CORS_ORIGINS"] = [
+    "https://myfrontend.com",
+    "https://admin.myfrontend.com"
+]
 
 # Allow all domains (Useful for public APIs)
 app.config["CORS_ORIGINS"] = "*"
@@ -73,11 +80,11 @@ If you are building an interactive UI (like an auto-completing search bar) that 
 You can restrict access using the `@internal_only` decorator:
 
 ```python
-from asok import api, internal_only
+from asok import Request, api, internal_only
 
 @api(summary="Realtime Search (Internal)")
 @internal_only
-def get(request):
+def get(request: Request):
     query = request.query.get("q", "")
     # Your search logic here
     return request.api({"results": []})
@@ -142,8 +149,7 @@ The documentation includes a cohesive testing suite for every endpoint. It featu
 Use the `@api` decorator to add metadata to your endpoint handlers. This metadata is used to populate the reference.
 
 ```python
-from asok.api import api
-from asok.request import Request
+from asok import Request, api
 
 @api(
     summary="Create Task",

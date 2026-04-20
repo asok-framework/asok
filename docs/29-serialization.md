@@ -48,13 +48,13 @@ While `Model.to_dict()` is convenient, `Schema` offers more control:
 ## Integration with API Responses
 
 ```python
-from asok import Schema, Field
+from asok import Request, Schema, Field
 
 class PostSchema(Schema):
     title = Field.String()
     slug  = Field.String()
 
-def render(request):
+def render(request: Request):
     posts = Post.all(published=True)
     return request.json(PostSchema(many=True).dump(posts))
 ```

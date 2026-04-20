@@ -12,7 +12,9 @@ Access the Magic Link helper via `request.auth.magic`.
 #### Sending a Link
 In your login page action:
 ```python
-def post(request):
+from asok import Request
+
+def post(request: Request):
     email = request.form.get("email")
     if email:
         request.auth.magic.send(request, email)
@@ -22,7 +24,9 @@ def post(request):
 #### Callback Handling
 Create a page at `/auth/magic/callback.py`:
 ```python
-def get(request):
+from asok import Request
+
+def get(request: Request):
     token = request.query.get("token")
     email = request.auth.magic.verify_token(request, token)
     
@@ -49,7 +53,9 @@ You will need to pass your Client ID and Client Secret from the provider dashboa
 
 #### Step 1: Redirect to Provider
 ```python
-def get(request):
+from asok import Request
+
+def get(request: Request):
     auth_url = request.auth.oauth.get_auth_url(
         provider_name="google",
         client_id="YOUR_CLIENT_ID",
@@ -61,7 +67,9 @@ def get(request):
 
 #### Step 2: Handle Callback
 ```python
-def get(request):
+from asok import Request
+
+def get(request: Request):
     code = request.query.get("code")
     user_info = request.auth.oauth.callback(
         provider_name="google",
@@ -89,7 +97,9 @@ Tokens are signed via the framework's `SECRET_KEY`, making them stateless and na
 
 #### Generating a Token
 ```python
-def get(request):
+from asok import Request
+
+def get(request: Request):
     # Generate a permanent token for the current user
     token = request.auth.token.create(request, request.user.id)
     
@@ -107,6 +117,8 @@ Asok's `request.user` will **automatically detect** the token and authenticate t
 
 ```python
 # page/api/profile.py
+from asok import Request
+
 def get(request):
     if not request.user:
         return request.api_error("Unauthorized", status=401)

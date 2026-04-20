@@ -58,7 +58,7 @@ def render(request: Request):
     }, request)
 
     if form.validate():
-        user = request.authenticate(email=request.form['email'], password=request.form['password'])
+        user = request.authenticate(email=request.form.get('email'), password=request.form.get('password'))
         if user:
             request.flash('success', 'Welcome back!')
             request.redirect('/dashboard')
@@ -82,6 +82,8 @@ def render(request: Request):
 ## Protecting pages
 
 ```python
+from asok import Request
+
 def render(request: Request):
     request.require_auth()  # Redirects to /login if not logged in
     # or

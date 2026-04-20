@@ -5,7 +5,7 @@ Run any function in a background thread so the page responds instantly.
 ## Usage
 
 ```python
-from asok import background
+from asok import Request, background
 
 def heavy_task(user_id, data):
     # This could take 5 seconds — doesn't matter
@@ -60,7 +60,7 @@ def render(request: Request):
 ### Image processing after upload
 
 ```python
-from asok import background
+from asok import Request, background
 
 def resize_image(filepath):
     # Use PIL or any library
@@ -86,7 +86,7 @@ def render(request: Request):
 ### Cache warming
 
 ```python
-from asok import background, Cache
+from asok import Request, background, Cache
 from models.post import Post
 
 cache = Cache()

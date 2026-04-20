@@ -56,7 +56,9 @@ Transitions work automatically with **Alive Components**. If your component root
 
 ```python
 # In a component or page
-def render(request):
+from asok import Request
+
+def render(request: Request):
     return f"""
     <div id="live-clock" asok-transition="fade">
         {datetime.now()}

@@ -7,6 +7,8 @@ Asok is one of the few frameworks to offer **native Vector Search** without any 
 To store embeddings (vectors), use the `Field.Vector` type. You must specify the number of dimensions.
 
 ```python
+from asok import Model, Field
+
 class Article(Model):
     title = Field.String()
     content = Field.Text()

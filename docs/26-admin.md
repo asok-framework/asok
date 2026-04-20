@@ -141,6 +141,8 @@ Creates a user with `is_admin = True` **and** an `admin` role (with `*` permissi
 Customize how a model appears in admin by adding a nested `Admin` class:
 
 ```python
+from asok import Model, Field
+
 class Post(Model):
     title = Field.String()
     body = Field.Text()

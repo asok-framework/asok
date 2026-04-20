@@ -7,6 +7,8 @@ Asok's form engine now supports modern HTML5 inputs and deep synchronization wit
 Enjoy native browser widgets for specific data types:
 
 ```python
+from asok import Form
+
 form = Form({
     "q": Form.search("Search"),
     "website": Form.url("Website"),
@@ -23,6 +25,7 @@ Automatically generate a dropdown from any Python `enum.Enum` class:
 
 ```python
 import enum
+from asok import Form
 
 class TaskStatus(enum.Enum):
     TODO = "todo"
@@ -38,6 +41,8 @@ form = Form({
 Asok provides a `textarea` that automatically includes a `json` validation rule.
 
 ```python
+from asok import Form
+
 form = Form({
     "metadata": Form.json("Extra Data")
 })
@@ -58,6 +63,8 @@ The `Form.from_model()` helper now automatically maps advanced ORM types to thei
 
 ### Example
 ```python
+from asok import Form
+
 # Generate a professional form from your Model in one line
 form = Form.from_model(Product, request)
 

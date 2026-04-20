@@ -10,3 +10,5 @@ db.sqlite3-wal
 .asok/
 src/partials/uploads/
 src/partials/css/base.build.css
+article/
+asok_debug.log

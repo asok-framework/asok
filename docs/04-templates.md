@@ -323,7 +323,9 @@ The simplest case: a form (or link) submits via `fetch` and the response replace
 Server side:
 
 ```python
-def render(request):
+from asok import Request, Form
+
+def render(request: Request):
     form = Form({'email': Form.email('Email', 'required|email')}, request)
     if form.validate():
         Subscriber.create(**form.data)

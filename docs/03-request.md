@@ -153,6 +153,7 @@ def render(request: Request):
 
 Useful for shared forms (newsletter, search) that can be submitted from any page.
 
+
 ```python
 def post(request: Request):
     # Process something...
@@ -160,7 +161,6 @@ def post(request: Request):
     
     # Custom default fallback if Referer is missing
     request.back(default='/home')
-```
 ```
 
 ## Flash messages

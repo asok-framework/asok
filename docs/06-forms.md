@@ -188,7 +188,7 @@ For an edit page:
 
 ```python
 def render(request: Request):
-    contact = Contact.find(id=request.params['id'])
+    contact = Contact.find(id=request.params.get('id'))
     form = Form.from_model(Contact, request).fill(contact)
     if form.validate():
         contact.update(**form.data)

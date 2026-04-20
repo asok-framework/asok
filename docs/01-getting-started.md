@@ -1,5 +1,7 @@
 # Getting Started
 
+Asok is a **zero-dependency** Python framework that combines the simplicity of Flask, the included batteries of Django, and the modern file-based routing of Next.js/SvelteKit.
+
 ## Installation
 
 ```bash
@@ -19,40 +21,43 @@ asok create myapp
 
 If you prefer to skip questions, use flags: `asok create myapp --tailwind --admin --image`.
 
+Run the server:
+
+```bash
+asok dev
+```
+
 Open http://127.0.0.1:8000 — your app is running with **live browser reload**. Edit any file and the browser refreshes automatically.
 
 Want a different port? Use `asok dev -p 3000`. If the port is busy, Asok finds the next free one automatically.
 
 ## Project structure
 
-```
+```text
 myapp/
-├── wsgi.py              # Entry point
-├── .env                 # Environment variables
-├── db.sqlite3           # Database (auto-created)
-│
-└── src/
-    ├── pages/           # Routes (file-based)
-    │   ├── page.py      # → /
-    │   ├── about/
-    │   │   └── page.html  # → /about
-    │   └── contact/
-    │       ├── page.py    # → /contact
-    │       └── page.html
-    │
-    ├── components/      # Reactive (Live) Components
-    │   ├── Counter.py
-    │   └── counter.html
-    │
-    ├── models/          # Database models
-    ├── middlewares/      # Middleware handlers
-    ├── locales/         # Translation files (en.json, fr.json)
-    │
-    └── partials/        # Shared assets
-        ├── html/        # Layout templates (base.html, navbar.html)
-        ├── css/         # Stylesheets
-        ├── js/          # Scripts
-        └── images/      # Images, favicons
+├── .env                        # Environment variables
+├── src
+│   ├── components               # Reactive (Live) Components
+│   ├── locales                  # Translation files (en.json, fr.json)
+│   │   ├── en.json
+│   │   └── fr.json
+│   ├── middlewares              # Middleware handlers
+│   ├── models                   # Database models
+│   │   └── user.py
+│   ├── pages                    # Routes (file-based)
+│   │   ├── page.html
+│   │   └── page.py
+│   └── partials                 # Shared assets
+│       ├── css
+│       │   └── base.css
+│       ├── html
+│       │   └── base.html
+│       ├── images
+│       │   └── logo.svg
+│       ├── js
+│       │   └── base.js
+│       └── uploads
+└── wsgi.py                   # Entry point
 ```
 
 ## How it works
