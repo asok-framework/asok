@@ -8,8 +8,8 @@ import hashlib
 import hmac
 import json
 import math
-import re
 import os
+import re
 import secrets
 import sqlite3
 import struct
@@ -44,11 +44,11 @@ def _pluralize(word: str) -> str:
     if not word:
         return word
     word = word.lower()
-    if word.endswith('y') and len(word) > 1 and word[-2] not in 'aeiou':
-        return word[:-1] + 'ies'
-    if word.endswith(('s', 'sh', 'ch', 'x', 'z')):
-        return word + 'es'
-    return word + 's'
+    if word.endswith("y") and len(word) > 1 and word[-2] not in "aeiou":
+        return word[:-1] + "ies"
+    if word.endswith(("s", "sh", "ch", "x", "z")):
+        return word + "es"
+    return word + "s"
 
 
 class ModelError(Exception):

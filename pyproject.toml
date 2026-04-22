@@ -1,12 +1,13 @@
 [project]
 name = "asok"
-version = "0.1.0"
+version = "0.1.1"
 description = "A minimalist, zero-dependency Python web framework."
 readme = "README.md"
 requires-python = ">=3.7"
 license = "MIT"
 authors = [
-  { name="Asok Maintainers", email="asok-framework@outlook.com" },
+  { name="Mpia M.", email="asok-framework@outlook.com" },
+  { name="Asok Maintainers" },
 ]
 keywords = ["web", "framework", "zero-dependency", "minimalist", "orm", "wsgi"]
 classifiers = [

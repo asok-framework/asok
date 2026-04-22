@@ -40,15 +40,18 @@ def minify_html(html: str) -> str:
             tag_pattern, protect, current_html, flags=re.DOTALL | re.IGNORECASE
         )
 
-    # 2. Basic minification
+    # 2. Aggressive minification
     # Remove HTML comments (except IE conditional comments)
     current_html = re.sub(r"<!--(?!\s*\[if).*?-->", "", current_html, flags=re.DOTALL)
 
-    # Collapse multiple whitespaces/newlines into a single space
+    # Collapse multiple whitespaces/newlines into a single space everywhere
     current_html = re.sub(r"\s+", " ", current_html)
 
-    # Remove whitespace between tags (only if it's pure whitespace)
+    # Remove whitespace between tags
     current_html = re.sub(r">\s+<", "><", current_html)
+
+    # Remove whitespace around assignment operators in tags (optional but saves space)
+    # current_html = re.sub(r'\s*=\s*', '=', current_html)
 
     # Trim start/end
     current_html = current_html.strip()
@@ -58,3 +61,37 @@ def minify_html(html: str) -> str:
         current_html = current_html.replace(f"___ASOK_PROTECTED_{i}___", content)
 
     return current_html
+
+
+def minify_css(css: str) -> str:
+    """Minifies CSS content using regex.
+    Removes comments and collapses all unnecessary whitespace.
+    """
+    if not css:
+        return ""
+    # Remove comments
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    # Collapse all whitespace into a single space
+    css = re.sub(r"\s+", " ", css)
+    # Remove spaces around symbols
+    css = re.sub(r"\s*([{:;,>+])\s*", r"\1", css)
+    return css.strip()
+
+
+def minify_js(js: str) -> str:
+    """Safe but effective JS minification.
+    Removes comments and collapses whitespace/newlines.
+    """
+    if not js:
+        return ""
+    # Remove multi-line comments
+    js = re.sub(r"/\*.*?\*/", "", js, flags=re.DOTALL)
+    # Remove single-line comments safely
+    js = re.sub(r"(^|[^\\])//.*?\n", r"\1\n", js)
+    # Collapse multiple spaces
+    js = re.sub(r"[ \t]+", " ", js)
+    # Collapse newlines around symbols where safe
+    js = re.sub(r"\s*([{}()=;,:])\s*", r"\1", js)
+    # Remove redundant newlines
+    js = re.sub(r"\n+", "\n", js)
+    return js.strip()

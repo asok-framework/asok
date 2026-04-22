@@ -471,7 +471,7 @@ class WebSocketServer:
         if self._running:
             return self
         if self.secret_key is None:
-            self.secret_key = os.getenv("SECRET_KEY", "")
+            self.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -670,13 +670,17 @@ class WebSocketServer:
                 if conn.session is not None:
                     conn.session[f"_comp_{cid}"] = new_state_signed
                     self.app._session_store.save(conn.session.sid, conn.session)
-                    if getattr(self.app, "config", {}).get("DEBUG"):
-                        print(
-                            f"  [WS] Persisted '{comp.__class__.__name__}' (cid: {cid}) state to session"
-                        )
 
                 new_html = str(comp)
-                conn.send_json({"op": "render", "cid": cid, "html": new_html})
+                # Invalidate SPA cache so navigation shows updated state
+                conn.send_json(
+                    {
+                        "op": "render",
+                        "cid": cid,
+                        "html": new_html,
+                        "invalidate_cache": True,
+                    }
+                )
 
         except Exception:
             traceback.print_exc()
@@ -693,7 +697,6 @@ class WebSocketServer:
                 return
             self._connection_count += 1
 
-        print(f"  [WS] New connection from {addr}")
         try:
             sock.settimeout(10)
             path, headers = _parse_http_request(sock)
@@ -730,7 +733,6 @@ class WebSocketServer:
                 sock.close()
                 return
 
-            print(f"  [WS] Handshake: {addr} -> {route_path} (Origin: {origin})")
             sock.sendall(_handshake_response(key))
 
             user = self._resolve_user(headers)

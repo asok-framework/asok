@@ -4,7 +4,7 @@ import re
 
 
 def scope_css(content: str, page_id: str) -> str:
-    """Scope CSS content by prefixing selectors with [data-asok-page='ID'].
+    """Scope CSS content by prefixing selectors with [data-page-id='ID'].
     Supports :global(.class) to opt-out of scoping.
 
     Args:
@@ -17,7 +17,7 @@ def scope_css(content: str, page_id: str) -> str:
     if not content:
         return ""
 
-    prefix = f'[data-asok-page="{page_id}"]'
+    prefix = f'[data-page-id="{page_id}"]'
     global_marker = "___GLOBAL___"
 
     # 1. Protect globals
@@ -60,10 +60,10 @@ def scope_css(content: str, page_id: str) -> str:
                         # Unwrap :global
                         prefixed_parts.append(part.replace(global_marker, ""))
                     elif part in ["html", "body"]:
-                        # body -> body[data-asok-page="id"]
+                        # body -> body[data-page-id="id"]
                         prefixed_parts.append(f"{part}{prefix}")
                     else:
-                        # .class -> [data-asok-page="id"] .class
+                        # .class -> [data-page-id="id"] .class
                         prefixed_parts.append(f"{prefix} {part}")
 
                 result.append(" " + ", ".join(prefixed_parts) + " ")

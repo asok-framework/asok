@@ -14,10 +14,8 @@ import time
 from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar, Union
 from urllib.parse import parse_qsl, unquote
 
-from .exceptions import (
-    AbortException,  # noqa: F401 — re-export for compat
-    RedirectException,
-)
+from .exceptions import AbortException  # noqa: F401 — re-export for compat
+from .exceptions import RedirectException
 
 if TYPE_CHECKING:
     from .core import Asok
@@ -365,6 +363,7 @@ class Request:
         self.meta: Metadata = Metadata()
         self.page_id: Optional[str] = None
         self.scoped_assets: dict[str, Optional[str]] = {"css": None, "js": None}
+        self._nonce: Optional[str] = None
         raw_flash = self.cookies_dict.get(self._flash_cookie_name)
         if raw_flash:
             try:
@@ -546,29 +545,25 @@ class Request:
         }
 
         # -- component() helper ----------------------------------------
-        # Instance counter for stable CIDs, reset each request
-        _comp_counters = {}
+        # Instance counter for stable CIDs, shared across all templates in this request
+        if not hasattr(self, "_comp_counters"):
+            self._comp_counters = {}
 
         def component(name, *args, **kwargs):
-            """Instantiate and render a reactive component.
-
-            Usage:
-                {{ component("Counter") }}
-                {{ component("Counter", 10) }}           # positional -> first state field
-                {{ component("Counter", count=10) }}     # kwargs
-                {{ component("Counter", cid="main") }}   # explicit stable ID
-            """
+            """Instantiate and render a reactive component."""
             from .component import COMPONENTS_REGISTRY
 
             cls = COMPONENTS_REGISTRY.get(name)
             if cls is None:
                 return SafeString(f"<!-- Component '{name}' not found -->")
 
-            # Stable CID: explicit or auto (name-1, name-2, ...)
+            # Stable CID: explicit or auto (tpl--name--index)
             cid = kwargs.pop("cid", None)
             if cid is None:
-                _comp_counters[name] = _comp_counters.get(name, 0) + 1
-                cid = f"{name.lower()}-{_comp_counters[name]}"
+                tpl_name = getattr(self, "_current_page_file", "global")
+                tpl_name = os.path.basename(tpl_name).replace(".", "-")
+                self._comp_counters[name] = self._comp_counters.get(name, 0) + 1
+                cid = f"{tpl_name}--{name.lower()}--{self._comp_counters[name]}"
 
             app_ref = self.environ.get("asok.app")
             is_debug = app_ref.config.get("DEBUG") if app_ref else False
@@ -581,6 +576,7 @@ class Request:
             # Try to restore from session (persists across page refreshes)
             sess = self.session
             saved_signed = sess.get(f"_comp_{cid}")
+
             slot = kwargs.pop("slot", None)
             if slot is not None:
                 slot = SafeString(slot)
@@ -590,20 +586,11 @@ class Request:
                     instance = cls._from_signed_state(saved_signed, secret, cid=cid)
                     if instance is not None:
                         instance._slot = slot
-                        if is_debug:
-                            print(
-                                f"  [Component] Restored '{name}' (cid: {cid}) from session"
-                            )
                         return SafeString(str(instance))
-                except Exception as e:
-                    if is_debug:
-                        print(
-                            f"  [Component] Failed to restore '{name}' (cid: {cid}): {e}"
-                        )
+                except Exception:
+                    pass
 
             # Fresh instance
-            if is_debug:
-                print(f"  [Component] Created fresh '{name}' (cid: {cid})")
             if args:
                 state_keys = [
                     k
@@ -617,7 +604,8 @@ class Request:
             instance = cls(_cid=cid, **kwargs)
             instance._slot = slot
             # Save initial state so it survives a refresh
-            sess[f"_comp_{cid}"] = instance._sign_state(secret)
+            signed_state = instance._sign_state(secret)
+            sess[f"_comp_{cid}"] = signed_state
             return SafeString(str(instance))
 
         ctx["component"] = component
@@ -662,7 +650,7 @@ class Request:
         # Detect block request
         block_header = self.environ.get("HTTP_X_BLOCK")
         if block_header:
-            return self.html(filepath, **context)
+            return self._stream_blocks(filepath, block_header, **context)
 
         from .templates import stream_template_string
 
@@ -670,6 +658,20 @@ class Request:
         return stream_template_string(
             content, self._template_context(context), root_dir=tpl_root
         )
+
+    def _stream_blocks(
+        self, filepath: str, block_header: str, **context: Any
+    ) -> Iterator[str]:
+        """Internal helper to stream multiple template blocks."""
+        names = [b.strip() for b in block_header.split(",")]
+        content, tpl_root = self._resolve_template(filepath)
+        for name in names:
+            self._current_block = name
+            tpl_ctx = self._template_context(context)
+            from .templates import render_block_string
+
+            block_html = render_block_string(content, name, tpl_ctx, root_dir=tpl_root)
+            yield f'<template data-block="{name}">{block_html}</template>'
 
     def block(
         self, filepath: str, block_name: Optional[str] = None, **context: Any
@@ -681,6 +683,7 @@ class Request:
             raise ValueError(
                 "block_name is required — pass it explicitly or use data-block on the form"
             )
+        self._current_block = block_name
         content, tpl_root = self._resolve_template(filepath)
         return render_block_string(
             content, block_name, self._template_context(context), root_dir=tpl_root
@@ -887,6 +890,16 @@ class Request:
             str(token), str(self.csrf_token_value or "")
         ):
             self.abort(403, "CSRF validation failed")
+
+    @property
+    def nonce(self) -> str:
+        """Return a stable security nonce for the current request.
+
+        The nonce is generated on first access and cached for the duration of the request.
+        """
+        if self._nonce is None:
+            self._nonce = secrets.token_urlsafe(16)
+        return self._nonce
 
     def _sign(self, value: Union[str, int]) -> str:
         """Sign a value using the application's secret key."""

@@ -63,18 +63,20 @@ def internal_only(fn):
     @wraps(fn)
     def wrapper(request, *args, **kwargs):
         is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        
+
         host = request.headers.get("Host", "")
         referer = request.headers.get("Referer", "")
         origin = request.headers.get("Origin", "")
-        
+
         is_same_origin = False
         if host and ((referer and host in referer) or (origin and host in origin)):
             is_same_origin = True
-            
+
         if not (is_ajax and is_same_origin):
-            return request.api_error("Endpoint restricted to internal application use only.", status=403)
-            
+            return request.api_error(
+                "Endpoint restricted to internal application use only.", status=403
+            )
+
         return fn(request, *args, **kwargs)
-        
+
     return wrapper

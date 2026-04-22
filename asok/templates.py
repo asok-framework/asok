@@ -601,16 +601,22 @@ def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True)
                 else:
                     depth_inner -= 1
                     if depth_inner == 0:
-                        blocks_to_replace.append((m.start(), nxt_close.end(), name, start, nxt_close.start()))
+                        blocks_to_replace.append(
+                            (m.start(), nxt_close.end(), name, start, nxt_close.start())
+                        )
                         break
                     pos = nxt_close.end()
 
         # Sort blocks by start position descending to handle nested blocks correctly
         # and keep string offsets valid during replacement.
-        for full_start, full_end, name, content_start, content_end in sorted(blocks_to_replace, key=lambda x: x[0], reverse=True):
-            content = child_blocks.get(name, parent_text[content_start : content_end])
+        for full_start, full_end, name, content_start, content_end in sorted(
+            blocks_to_replace, key=lambda x: x[0], reverse=True
+        ):
+            content = child_blocks.get(name, parent_text[content_start:content_end])
             replacement = f"{{% block {name} %}}{content}{{% endblock %}}"
-            parent_text = parent_text[:full_start] + replacement + parent_text[full_end:]
+            parent_text = (
+                parent_text[:full_start] + replacement + parent_text[full_end:]
+            )
         if child_logic:
             parent_text = child_logic + "\n" + parent_text
         return handle_inheritance(parent_text, depth + 1)
@@ -699,10 +705,12 @@ def render_block_string(
     root_dir: Optional[str] = None,
 ) -> str:
     """Render only a specific named block from a template string.
-    
+
     Useful for HTMX-style partial updates where only a specific fragment of the page is needed.
     """
-    template_string = _preprocess(template_string, context, root_dir, strip_blocks=False)
+    template_string = _preprocess(
+        template_string, context, root_dir, strip_blocks=False
+    )
 
     # Find the named block (nesting-aware)
     for open_match in _RE_BLOCK_OPEN.finditer(template_string):
@@ -723,11 +731,10 @@ def render_block_string(
             else:
                 depth -= 1
                 if depth == 0:
-                    return "".join(
-                        _compile_and_run(
-                            template_string[start : next_close.start()], context
-                        )
+                    res = _compile_and_run(
+                        template_string[start : next_close.start()], context
                     )
+                    return "".join(res) if res is not None else ""
                 pos = next_close.end()
 
     raise ValueError(f"Block '{block_name}' not found in template")
@@ -746,10 +753,17 @@ def _apply_filters(
             fargs = fargs.rstrip(")")
             # Note: naive argument split, doesn't handle nested parens perfectly
             # but better than nothing for security resolution
+            # Smart argument split that respects quotes
             resolved_args = []
             if fargs:
-                for arg in fargs.split(","):
-                    resolved_args.append(_resolve_expr(arg.strip(), locals_set, _debug))
+                # Regex to match: quoted strings OR non-comma sequences
+                arg_matches = re.finditer(
+                    r"(\"(?:\\.|[^\"\\])*\"|\'(?:\\.|[^\'\\])*\'|[^,]+)", fargs
+                )
+                for am in arg_matches:
+                    arg_val = am.group(0).strip()
+                    if arg_val:
+                        resolved_args.append(_resolve_expr(arg_val, locals_set, _debug))
             args_str = ", ".join(resolved_args)
             val_expr = f"__filters['{fname.strip()}']({val_expr}, {args_str})"
         else:

@@ -1,22 +1,36 @@
-# <img src="icons/favicon.svg" alt="Asok Framework Logo" width="50" align="center" /> Asok Framework
+<p align="center">
+  <img src="https://raw.githubusercontent.com/asok-framework/asok/main/icons/logo.svg" alt="Asok Framework Logo" width="400" />
+</p>
 
-**Asok** is a powerful and elegant "zero-dependency" Python micro-framework. Version 0.1.0 introduces a professional modular architecture, file-based routing through the `src/pages/` directory, and a comprehensive CLI tool.
+<p align="center">
+  <a href="https://github.com/asok-framework/asok/stargazers"><img src="https://img.shields.io/github/stars/asok-framework/asok?style=for-the-badge&color=ffd700" alt="GitHub Stars"></a>
+  <a href="https://github.com/asok-framework/asok/blob/main/LICENSE"><img src="https://img.shields.io/github/license/asok-framework/asok?style=for-the-badge&color=4169e1" alt="License"></a>
+  <a href="https://pypi.org/project/asok/"><img src="https://img.shields.io/pypi/v/asok?style=for-the-badge&color=228b22" alt="PyPI Version"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.7+-3776ab?style=for-the-badge&logo=python&logoColor=white" alt="Python Version"></a>
+</p>
 
-📖 **[→ Full Documentation](docs/README.md)** — 44 chapters, from installation to production deployment.
+---
+
+**Asok** is a powerful and elegant "zero-dependency" Python micro-framework. It introduces a professional modular architecture, file-based routing, and a comprehensive CLI tool designed for speed and simplicity.
+
+🌐 **[Official Website & Documentation](https://asok-framework.com)**
 
 ---
 
 ## ✨ Key Features
-- **Zero Dependencies**: Relies exclusively on the Python standard library.
-- **Professional Typing**: Full support for PEP 484 type hints for a robust developer experience.
-- **Modular Package**: Install via `pip` or by simply dropping the `asok/` folder into your project.
-- **CLI Tool**: Scaffolding (`asok make`), Dev Server (`asok dev`), and assets management.
-- **Local Geolocation**: Built-in IP detection and localization without third-party APIs.
-- **File-based Routing**: Your `src/pages/` directories define your URLs.
-- **Dynamic Routing**: Native support for parameters via `[param]`.
-- **Built-in Authentication**: Secure sessions via signed cookies (HMAC).
-- **AsokDB**: A mini SQLite ORM with relationships and automatic hashing.
-- **Template Engine**: Jinja-like syntax with inheritance (`extends`) and blocks.
+
+- 🚀 **Zero Dependencies**: Relies exclusively on the Python standard library.
+- 💎 **Professional Typing**: Full support for PEP 484 type hints for a robust developer experience.
+- 📦 **Modular Package**: Install via `pip` or by simply dropping the `asok/` folder into your project.
+- ⌨️ **Powerful CLI**: Scaffolding (`asok make`), Dev Server (`asok dev`), and assets management.
+- 🌍 **Local Geolocation**: Built-in IP detection and localization without third-party APIs.
+- 🛣️ **File-based Routing**: Your `src/pages/` directories define your URLs.
+- ⛓️ **Dynamic Routing**: Native support for parameters via `[param]`.
+- 🔐 **Built-in Auth**: Secure sessions via signed cookies (HMAC).
+- 🗄️ **AsokDB**: A minimalist SQLite ORM with relationships and automatic hashing.
+- 🎨 **Template Engine**: Jinja-like syntax with inheritance (`extends`) and blocks.
+- ⚡ **Smart Streaming**: Ultra-fast HTML streaming with on-the-fly asset injection.
+- 💾 **Component Persistence**: Reactive component state preserved across page navigations.
 
 ---
 
@@ -208,12 +222,15 @@ make test
 
 ---
 
+## 🌐 Ecosystem
+
+Explore the Asok ecosystem:
+- 🛠️ **[Asok Examples](https://github.com/asok-framework/asok-examples)**: A collection of ready-to-use projects and templates.
+- 🧪 **[Asok Lab](https://github.com/asok-framework/asok-lab)**: Experimental features, benchmarks, and playground.
+- 📖 **[Asok Docs & Website Source](https://github.com/asok-framework/asok-docs)**: The source code for the documentation and the official website.
+
+---
+
 ## 📜 License
+
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-<br><br>
-<p align="left">
-  <img src="icons/logo.svg" alt="Asok Framework" width="300" />
-</p>
-
-

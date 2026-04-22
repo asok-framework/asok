@@ -2297,7 +2297,7 @@ class Admin:
             target = field.related_model
             if isinstance(target, str):
                 target = MODELS_REGISTRY.get(target)
-            
+
             try:
                 count = target.count() if target else 0
             except Exception:
@@ -2353,7 +2353,9 @@ class Admin:
         readonly_set = set(entry["readonly_fields"])
         # Auto-readonly slugs that auto-populate and always update
         for name, field in model._fields.items():
-            if getattr(field, "is_slug", False) and getattr(field, "always_update", False):
+            if getattr(field, "is_slug", False) and getattr(
+                field, "always_update", False
+            ):
                 readonly_set.add(name)
 
         schema = {}
@@ -2383,7 +2385,9 @@ class Admin:
                                 target_model = field.related_model
                                 if isinstance(target_model, str):
                                     target_model = MODELS_REGISTRY.get(target_model)
-                                rel = target_model.find(id=val) if target_model else None
+                                rel = (
+                                    target_model.find(id=val) if target_model else None
+                                )
                             except Exception:
                                 rel = None
                             if rel:

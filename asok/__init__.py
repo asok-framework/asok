@@ -1,7 +1,7 @@
 import os
 import sys
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Disable bytecode generation (__pycache__) by default to keep the file-system based routing clean.
 # Can be overridden by setting ASOK_WRITE_BYTECODE=true in the environment.
@@ -19,7 +19,6 @@ from .forms import Form as Form
 from .logger import RequestLogger as RequestLogger
 from .logger import get_logger as get_logger
 from .mail import Mail as Mail
-from .utils.security import internal_only as internal_only
 from .orm import Field as Field
 from .orm import Model as Model
 from .orm import ModelError as ModelError
@@ -33,6 +32,7 @@ from .session import Session as Session
 from .session import SessionStore as SessionStore
 from .templates import render_template_string as render_template_string
 from .testing import TestClient as TestClient
+from .utils.security import internal_only as internal_only
 from .validation import Schema as Schema
 from .validation import Validator as Validator
 from .ws import WebSocketServer as WebSocketServer

@@ -24,54 +24,67 @@ from .session import SessionStore
 from .templates import render_template_string
 from .utils.css import scope_css
 from .utils.js import scope_js
-from .utils.minify import minify_html
+from .utils.minify import minify_css, minify_html, minify_js
 
 logger = logging.getLogger("asok.security")
 
 
 class SmartStreamer:
-    """Helper to stream HTML chunks with injection and Gzip support."""
+    """
+    Advanced streaming response wrapper that handles:
+    1. Automatic asset injection (JS/CSS)
+    2. HTML minification on the fly
+    3. Proper buffer management to avoid cutting tags
+    4. SPA block extraction
+    """
 
-    def __init__(self, generator, request, app, use_gzip=False):
+    def __init__(self, generator: Iterator[str], request: Request, app: "Asok"):
         self.generator = generator
         self.request = request
         self.app = app
-        self.use_gzip = use_gzip
-        self.injected = False
-        self.nonce = secrets.token_urlsafe(16)
-        self.buffer = b""
+        self.nonce = getattr(request, "nonce", secrets.token_urlsafe(16))
+        self.buffer_str = ""
 
-    def __iter__(self):
-        gzip_obj = None
-        if self.use_gzip:
-            buf = io.BytesIO()
-            gzip_obj = gzip_mod.GzipFile(fileobj=buf, mode="wb")
+    def __iter__(self) -> Iterator[bytes]:
+        write = self.request.environ.get("asok.write")
+        if not write:
 
-        def write(chunk):
-            if gzip_obj:
-                gzip_obj.write(chunk)
-                gzip_obj.flush()
-                val = buf.getvalue()
-                buf.seek(0)
-                buf.truncate()
-                return val
-            return chunk
+            def write_fallback(data: bytes):
+                return data
 
-        for chunk_str in self.generator:
-            if not chunk_str:
-                continue
-            if not self.injected and "text/html" in self.request.content_type:
-                # Inject CSRF and Scripts in the first viable HTML chunk
-                chunk_str = self.app._inject_assets(
-                    chunk_str, self.request, self.nonce, stream=True
+            write = write_fallback
+
+        should_minify = self.app.config.get("MINIFY_HTML", True)
+
+        def finalize(text):
+            if not should_minify or not text:
+                return text
+            return minify_html(text)
+
+        try:
+            # Buffer EVERYTHING to avoid chunking issues with asset injection
+            full_content = ""
+            for chunk_str in self.generator:
+                full_content += chunk_str
+
+            # Now inject all assets in one go on the complete document
+            final_content = self.app._inject_assets(
+                full_content, self.request, self.nonce, stream=False, only_scripts=False
+            )
+
+            yield write(finalize(final_content).encode("utf-8"))
+
+        except Exception as e:
+            logger.error(f"Streamer Error: {e}\n{traceback.format_exc()}")
+            if self.app.config.get("DEBUG"):
+                yield write(f"\n<!-- STREAM ERROR: {e} -->\n".encode("utf-8"))
+
+        finally:
+            # Save session if modified during template rendering
+            if self.request._session is not None and self.request._session.modified:
+                self.app._session_store.save(
+                    self.request._session.sid, self.request._session
                 )
-                self.injected = True
-
-            yield write(chunk_str.encode("utf-8"))
-
-        if gzip_obj:
-            gzip_obj.close()
-            yield buf.getvalue()
 
 
 class Asok:
@@ -87,6 +100,9 @@ class Asok:
             root_dir: The root directory of the project. Defaults to current working directory.
         """
         self.root_dir: str = os.path.abspath(root_dir or os.getcwd())
+        import asok
+
+        self.version = getattr(asok, "__version__", "0.1.0")
         self.dirs: dict[str, str] = {
             "LOCALES": "src/locales",
             "PAGES": "src/pages",
@@ -566,9 +582,38 @@ class Asok:
             )
             if os.path.isfile(error_file):
                 try:
+                    # Inject global shared variables into the error context
+                    shared_vars = self._shared
+
+                    # Set context for relative template lookups
+                    request._current_page_file = error_file
+                    request.environ["asok.page_dir"] = os.path.dirname(error_file)
+
+                    # Set page_id for scoped assets (e.g. error-404)
+                    request.page_id = f"error-{code}"
+
+                    # Populate request.meta for automatic <title> and <meta> override
+                    request.meta.title(f"Error {code}")
+                    request.meta.description(message or "An error occurred.")
+
+                    # Direct injection into params to be 100% sure templates see it
+                    request.params["title"] = f"Error {code}"
+                    request.params["description"] = message or "An error occurred."
+
+                    # Detect scoped assets for error pages (Works for both .py and .html)
+                    base_path = error_file.rsplit(".", 1)[0]
+                    for a_ext in ("css", "js"):
+                        p = f"{base_path}.{a_ext}"
+                        if os.path.isfile(p):
+                            request.scoped_assets[a_ext] = p
+
                     if ext == ".py":
                         mod = self._load_module(error_file)
                         if hasattr(mod, "render"):
+                            # Update request params to include shared vars for the template
+                            for k, v in shared_vars.items():
+                                if k not in request.params:
+                                    request.params[k] = v
                             return mod.render(request)
                     else:
                         content = self._read_template(error_file)
@@ -578,11 +623,20 @@ class Asok:
                             "static": request.static,
                             "get_flashed_messages": request.get_flashed_messages,
                             "error_message": message,
+                            "title": f"Error {code}",
+                            "description": "An error occurred.",
+                            "nonce": getattr(request, "nonce", ""),
+                            **shared_vars,
                         }
                         return render_template_string(
                             content, ctx, root_dir=self._tpl_root
                         )
-                except Exception:
+                except Exception as e:
+                    import traceback
+
+                    logger.error(
+                        f"Error rendering custom {code} page: {e}\n{traceback.format_exc()}"
+                    )
                     pass
 
         fallback = f"<h1>{code}</h1>"
@@ -672,8 +726,10 @@ class Asok:
         # We must NOT cache the chain because core_layer is dynamic per request
         chain = core_layer
         for mw_handle in reversed(self.middleware_handlers):
+
             def mw_wrapper(req, mw=mw_handle, nxt=chain):
                 return mw(req, nxt)
+
             chain = mw_wrapper
         return chain
 
@@ -686,10 +742,15 @@ class Asok:
         headers = []
         if "asok.session_cookie" in environ:
             headers.append(("Set-Cookie", environ["asok.session_cookie"]))
-        # Auto-save session if modified
-        if request._session is not None and request._session.modified:
+        # Always send session cookie to ensure it persists across requests
+        # This is especially important for streaming responses where the session
+        # may be modified after headers are sent
+        if request._session is not None:
             sid = request._session.sid
-            self._session_store.save(sid, request._session)
+            # Save if modified (will be saved again in SmartStreamer if modified during streaming)
+            if request._session.modified:
+                self._session_store.save(sid, request._session)
+            # Always send the cookie (not just when modified)
             signed = self._sign(sid)
             debug = self.config.get("DEBUG")
             cookie = f"asok_sid={signed}; HttpOnly; Path=/; SameSite=Lax; Max-Age={self.config['SESSION_TTL']}"
@@ -722,25 +783,39 @@ class Asok:
         return headers
 
     def _inject_assets(
-        self, content: str, request: Request, nonce: str, stream: bool = False
+        self,
+        content: str,
+        request: Request,
+        nonce: str,
+        stream: bool = False,
+        include_scripts: bool = True,
+        only_scripts: bool = False,
     ) -> str:
         """Inject required CSRF tags, metadata, and scripts into the HTML response."""
         if not isinstance(content, str):
             return content
 
-        scripts = ""
+        if not hasattr(request, "_asok_pending_scripts"):
+            request._asok_pending_scripts = ""
 
         # 0. SEO Metadata (Title, Metas, Links)
         meta_html = ""
-        meta_obj = getattr(request, "meta", None)
-        if meta_obj:
-            # 0.1 Handle Title (Replacement-aware)
-            if meta_obj._title:
-                # Remove any existing title tags to ensure override
-                content = re.sub(
-                    r"<title>.*?</title>", "", content, flags=re.IGNORECASE | re.DOTALL
-                )
-                meta_html += f"    <title>{_html.escape(meta_obj._title)}</title>\n"
+        # Only inject metadata once
+        if not only_scripts and not getattr(request, "_asok_meta_done", False):
+            meta_obj = getattr(request, "meta", None)
+            if meta_obj:
+                # 0.1 Handle Title (Replacement-aware)
+                if meta_obj._title:
+                    # Robust removal of ANY existing title tag
+                    if "<title>" in content.lower():
+                        start = content.lower().find("<title>")
+                        end = content.lower().find("</title>", start)
+                        if end != -1:
+                            content = content[:start] + content[end + 8 :]
+
+                    meta_html += (
+                        f"    <title>{_html.escape(str(meta_obj._title))}</title>\n"
+                    )
 
             # 0.2 Handle Description (Replacement-aware)
             if meta_obj._description:
@@ -770,6 +845,9 @@ class Asok:
                     meta_html += f'    <link rel="{_html.escape(ikey)}" href="{_html.escape(ival)}" {extra}>'
                 meta_html += "\n"
 
+            if meta_html:
+                request._asok_meta_done = True
+
         if meta_html:
             if "<head>" in content:
                 content = content.replace("<head>", "<head>\n" + meta_html, 1)
@@ -780,66 +858,125 @@ class Asok:
                     content = content[: end + 1] + "\n" + meta_html + content[end + 1 :]
 
         # 0.5 Scoped Assets (CSS/JS) and Page ID
+        page_id = getattr(request, "page_id", "unknown")
         if request.page_id:
-            # Inject data-asok-page attribute into <body>
-            body_match = re.search(r"<body(\s+[^>]*)?>", content, re.I)
-            if body_match:
-                orig_body = body_match.group(0)
-                if "data-asok-page" not in orig_body:
-                    if orig_body.endswith("/>"):  # Unlikely for body but...
-                        new_body = (
-                            orig_body[:-2] + f' data-asok-page="{request.page_id}"/>'
+            # 1. Inject Page ID Marker (for SPA engine)
+            if not getattr(request, "_asok_page_id_done", False):
+                # Tag body for CSS scoping
+                if "<body" in content:
+                    if 'data-page-id="' not in content:
+                        content = content.replace(
+                            "<body", f'<body data-page-id="{page_id}"', 1
                         )
                     else:
-                        new_body = (
-                            orig_body[:-1] + f' data-asok-page="{request.page_id}">'
+                        content = re.sub(
+                            r'data-page-id="[^"]*"',
+                            f'data-page-id="{page_id}"',
+                            content,
+                            1,
                         )
-                    content = content.replace(orig_body, new_body, 1)
-            else:
-                # For block requests, inject a marker that the SPA engine can read
-                content += f'<div id="asok-page-id-marker" data-page-id="{request.page_id}" style="display:none"></div>'
 
-            # Inject Scoped CSS
-            if request.scoped_assets.get("css"):
-                try:
-                    with open(request.scoped_assets["css"], "r", encoding="utf-8") as f:
-                        raw_css = f.read()
-                    scoped_css_content = scope_css(raw_css, request.page_id)
-                    style_tag = f'\n<style id="asok-scoped-css">\n{scoped_css_content}\n</style>\n'
-                    # Inject at end of head to ensure higher specificity
-                    if "</head>" in content:
-                        content = content.replace("</head>", style_tag + "</head>", 1)
-                    else:
-                        # For block requests, just append it
-                        content += style_tag
-                except Exception:
-                    pass
+                marker = f'\n<div id="asok-page-id-marker" data-page-id="{page_id}" style="display:none"></div>\n'
+                if "</body>" in content.lower():
 
-            # Prepare Scoped JS
-            if request.scoped_assets.get("js"):
-                try:
-                    with open(request.scoped_assets["js"], "r", encoding="utf-8") as f:
-                        raw_js = f.read()
-                    scoped_js_content = scope_js(raw_js)
-                    scripts += f'\n<script id="asok-scoped-js" nonce="{nonce}">\n{scoped_js_content}\n</script>\n'
-                except Exception:
-                    pass
+                    def inject_marker(m):
+                        return marker + m.group(1)
 
-        # 1. CSRF Meta Tag
-        csrf_meta = f'<meta name="csrf-token" content="{request.csrf_token_value}">'
-        if "<head>" in content:
-            content = content.replace("<head>", "<head>" + csrf_meta, 1)
-        elif "<head " in content:
-            idx = content.find("<head ")
-            end = content.find(">", idx)
-            if end != -1:
-                content = content[: end + 1] + csrf_meta + content[end + 1 :]
+                    content = re.sub(
+                        r"(</body>)", inject_marker, content, flags=re.I, count=1
+                    )
+                    request._asok_page_id_done = True
+                elif not stream:
+                    content += marker
+                    request._asok_page_id_done = True
+
+            # 2. Inject Scoped CSS
+            if not getattr(request, "_asok_css_done", False):
+                if request.scoped_assets.get("css"):
+                    try:
+                        with open(
+                            request.scoped_assets["css"], "r", encoding="utf-8"
+                        ) as f:
+                            raw_css = f.read()
+
+                        scoped_css_content = scope_css(raw_css, page_id)
+                        if not self.config.get("DEBUG"):
+                            scoped_css_content = minify_css(scoped_css_content)
+                        style_tag = f'\n<style id="asok-scoped-css" data-page-id="{page_id}">\n{scoped_css_content}\n</style>\n'
+
+                        if "</head>" in content.lower():
+
+                            def inject_css(m):
+                                return style_tag + m.group(1)
+
+                            content = re.sub(
+                                r"(</head>)", inject_css, content, flags=re.I, count=1
+                            )
+                            request._asok_css_done = True
+                        else:
+                            # For streamed chunks, fragments, or SPA blocks, just prepend
+                            content = style_tag + content
+                            request._asok_css_done = True
+                    except Exception:
+                        pass
+
+            # 3. Inject Scoped JS
+            if not getattr(request, "_asok_js_done", False):
+                if request.scoped_assets.get("js"):
+                    try:
+                        with open(
+                            request.scoped_assets["js"], "r", encoding="utf-8"
+                        ) as f:
+                            raw_js = f.read()
+                        scoped_js_content = scope_js(raw_js)
+                        if not self.config.get("DEBUG"):
+                            scoped_js_content = minify_js(scoped_js_content)
+                        request._asok_pending_scripts += (
+                            f'\n<script id="asok-scoped-js" nonce="{nonce}">'
+                            "(function(){"
+                            "const init=function(){" + scoped_js_content + "};"
+                            "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);"
+                            "else init();"
+                            "})()"
+                            "</script>\n"
+                        )
+                        request._asok_js_done = True
+                    except Exception:
+                        pass
+
+        # [END OF ASSET INJECTION]
+        if not only_scripts and not getattr(request, "_asok_csrf_done", False):
+            csrf_meta = f'<meta name="csrf-token" content="{getattr(request, "csrf_token_value", "")}">'
+            if "<head>" in content.lower():
+
+                def inject_csrf(m):
+                    return m.group(1) + "\n" + csrf_meta
+
+                content = re.sub(
+                    r"(<head.*?>)", inject_csrf, content, flags=re.I, count=1
+                )
+                request._asok_csrf_done = True
 
         # 2. Asok Transitions (Independent & Opt-in)
-        needs_transition = "asok-transition" in content
+        # Skip engine injection if it's a block request (already on parent page)
+        is_block = bool(request.environ.get("HTTP_X_BLOCK"))
+        needs_transition = (
+            "asok-transition" in content
+            and not is_block
+            and not getattr(request, "_asok_transition_done", False)
+        )
+        if (
+            stream
+            and only_scripts
+            and not is_block
+            and not getattr(request, "_asok_transition_done", False)
+        ):
+            needs_transition = True
+
         if needs_transition:
+            request._asok_transition_done = True
             # Shared transition styles
-            scripts += (
+            request._asok_pending_scripts += (
                 f'<style id="asok-transitions" nonce="{nonce}">'
                 ".asok-transitioning { position: relative; overflow: hidden; pointer-events: none; }"
                 ".asok-fade-out { opacity: 0; transition: opacity 300ms ease-out; }"
@@ -881,23 +1018,45 @@ class Asok:
                 "</script>"
             )
 
-        # 3. Reactive Engine & Block Swap Logic
-        needs_reactive = any(
-            attr in content
-            for attr in ["data-block", "data-sse", "data-url", "data-method"]
+        needs_reactive = (
+            any(
+                attr in content
+                for attr in ["data-block", "data-sse", "data-url", "data-method"]
+            )
+            and not is_block
+            and not getattr(request, "_asok_reactive_done", False)
         )
+        if (
+            stream
+            and only_scripts
+            and not is_block
+            and not getattr(request, "_asok_reactive_done", False)
+        ):
+            needs_reactive = True
+
         if needs_reactive:
-            scripts += (
+            request._asok_reactive_done = True
+            request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
                 "(function(){const ca={};"
+                "window.__asokClearCache=function(){Object.keys(ca).forEach(k=>delete ca[k])};"
                 "function ct(){const m=document.querySelector('meta[name=csrf-token]');return m?m.content:''}"
                 "function qb(s){if(!s)return null;let t;try{t=document.querySelector(s)}catch(e){}"
                 "if(!t&&/^[a-zA-Z0-9_-]+$/.test(s))t=document.getElementById(s);return t}"
-                "function doSwap(t,h,mode){ (window.Asok&&window.Asok.swap)?window.Asok.swap(t,h,mode):t.innerHTML=h; }"
+                "function doSwap(t,h,mode){"
+                "  const raw=function(t,h,mode){"
+                "    (window.Asok&&window.Asok.swap)?window.Asok.swap(t,h,mode):t.innerHTML=h;"
+                "  };"
+                "  raw(t,h,mode);"
+                "  if(window.Asok&&window.Asok.init)window.Asok.init(t);"
+                "  document.dispatchEvent(new CustomEvent('asok:success',{detail:{target:t,mode:mode}}));"
+                "}"
                 "function sw(url,b,sel,mode,opts,src){"
+                "if(document.dispatchEvent(new CustomEvent('asok:before',{detail:{url:url,block:b}}))===false)return;"
                 "const h=Object.assign({'X-Block':b,'X-CSRF-Token':ct()},opts.headers||{});"
                 "opts.headers=h;"
                 "const key=url+b;const p=ca[key]?Promise.resolve(ca[key]):fetch(url,opts).then(function(r){"
+                "if(!r.ok){document.dispatchEvent(new CustomEvent('asok:error',{detail:{url:url,status:r.status}}));return r.text().then(function(t){throw t})}"
                 "const redir=r.headers.get('X-Asok-Redirect');"
                 "if(redir){window.location.href=redir;return Promise.reject('r')}"
                 "const c=r.headers.get('X-CSRF-Token');"
@@ -920,12 +1079,19 @@ class Asok:
                 "}else{"
                 "const t=qb(sel);"
                 "if(t)doSwap(t,h,mode)}"
-                "const scs=d.querySelector('#asok-scoped-css');if(scs){const e=document.getElementById('asok-scoped-css');if(e)e.remove();document.head.appendChild(scs)}"
-                "const scj=d.querySelector('#asok-scoped-js');if(scj){const e=document.getElementById('asok-scoped-js');if(e)e.remove();const ns=document.createElement('script');ns.id='asok-scoped-js';if(scj.nonce)ns.nonce=scj.nonce;ns.textContent=scj.textContent;document.body.appendChild(ns)}"
-                "const pid=d.querySelector('#asok-page-id-marker');if(pid){document.body.dataset.asokPage=pid.dataset.pageId}"
+                "const isP=(src&&src.dataset&&src.dataset.pushUrl!==undefined)||(!src&&url);"
+                "const get=function(s){let e=d.querySelector(s);if(!e){const ts=d.querySelectorAll('template');for(let i=0;i<ts.length;i++){e=ts[i].content.querySelector(s);if(e)break}}return e};"
+                "const scs=get('#asok-scoped-css');const oldCss=document.getElementById('asok-scoped-css');if(scs){if(oldCss)oldCss.remove();document.head.appendChild(scs)}else if(oldCss&&isP){oldCss.remove()}"
+                "const scj=get('#asok-scoped-js');const oldJs=document.getElementById('asok-scoped-js');if(scj){if(oldJs)oldJs.remove();const ns=document.createElement('script');ns.id='asok-scoped-js';if(scj.nonce)ns.nonce=scj.nonce;ns.textContent=scj.textContent;document.body.appendChild(ns)}else if(oldJs&&isP){oldJs.remove()}"
+                "const pid=get('#asok-page-id-marker');if(pid){document.body.dataset.pageId=pid.dataset.pageId}else if(isP){delete document.body.dataset.pageId}"
+                "if(isP){"
+                "const ov=document.getElementById('search-overlay');if(ov)ov.classList.remove('open');"
+                "const mm=document.getElementById('mobile-menu');if(mm)mm.classList.add('hidden');"
+                "document.body.style.overflow='';"
                 "if(src&&src.dataset&&src.dataset.pushUrl!==undefined){"
                 "const pu=src.dataset.pushUrl||url;"
                 "history.pushState({b:b,sel:sel,mode:mode,url:url},'',pu)"
+                "}"
                 "}"
                 "},function(){})"
                 "}"
@@ -1064,11 +1230,23 @@ class Asok:
                 "</script>"
             )
 
-        # 4. WebSocket connectivity helper & Alive Engine
-        needs_alive = "data-asok-component" in content or "ws-" in content
+        needs_alive = (
+            ("data-asok-component" in content or "ws-" in content)
+            and not is_block
+            and not getattr(request, "_asok_alive_done", False)
+        )
+        if (
+            stream
+            and only_scripts
+            and not is_block
+            and not getattr(request, "_asok_alive_done", False)
+        ):
+            needs_alive = True
+
         if needs_alive:
+            request._asok_alive_done = True
             ws_port = self.config.get("WS_PORT", 8001)
-            scripts += (
+            request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
                 "window.asokWS=function(path){"
                 "const p=location.protocol==='https:'?'wss:':'ws:';"
@@ -1079,7 +1257,7 @@ class Asok:
                 "</script>"
             )
             # Alive Engine
-            scripts += (
+            request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
                 "(function(){"
                 "let ws;const timers={};function connect(){"
@@ -1087,6 +1265,7 @@ class Asok:
                 "ws.onopen=function(){document.querySelectorAll('[data-asok-component]').forEach(init)};"
                 "ws.onmessage=function(e){"
                 "const d=JSON.parse(e.data);if(d.op==='render'){"
+                "if(d.invalidate_cache&&window.__asokClearCache)window.__asokClearCache();"
                 "const el=document.getElementById('asok-'+d.cid);"
                 "if(el){const a=document.activeElement,aid=a?a.id:null,sel=a?a.selectionStart:null;"
                 "if(window.Asok&&window.Asok.swap){window.Asok.swap(el,d.html,'outerHTML')}"
@@ -1122,14 +1301,20 @@ class Asok:
                 "n.oninput=function(){send({op:'sync',cid:cid,prop:prop,val:n.value},n)};"
                 "});"
                 "}"
+                "window.Asok=window.Asok||{};window.Asok.init=function(el){if(!el)return;if(el.dataset.asokComponent)init(el);el.querySelectorAll('[data-asok-component]').forEach(init)};"
                 "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',connect);else connect();"
                 "})();"
                 "</script>"
             )
 
         # 5. Live Reload (DEBUG only)
-        if self.config.get("DEBUG"):
-            scripts += (
+        if (
+            self.config.get("DEBUG")
+            and not is_block
+            and not getattr(request, "_asok_reload_done", False)
+        ):
+            request._asok_reload_done = True
+            request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
                 '(function(){let m="";setInterval(function(){'
                 'fetch("/__reload").then(function(r){return r.text()})'
@@ -1137,11 +1322,55 @@ class Asok:
                 '.catch(function(){m=""})},1000)})()</script>'
             )
 
-        if stream:
-            return content + scripts
-        if "</body>" in content:
-            return content.replace("</body>", scripts + "\n</body>")
-        return content + scripts
+        # Final Injection of accumulated scripts
+        scripts = request._asok_pending_scripts
+        if scripts and not getattr(request, "_asok_scripts_done", False):
+            # 1. Best case: Inject before </body>
+            if "</body>" in content.lower():
+                request._asok_scripts_done = True
+                request._asok_pending_scripts = ""  # Clear
+
+                def inject_scripts(m):
+                    return scripts + m.group(1)
+
+                return re.sub(
+                    r"(</body>)", inject_scripts, content, flags=re.I, count=1
+                )
+
+            # 2. For fragments or final chunks (when stream=False)
+            if not stream:
+                # Check for clear closing tags first
+                is_end = (
+                    "</html>" in content.lower() or "</template>" in content.lower()
+                )
+
+                if is_end:
+                    request._asok_scripts_done = True
+                    request._asok_pending_scripts = ""  # Clear
+                    return content + "\n" + scripts
+
+                # If no clear end tag, check if we are currently inside a tag
+                # (i.e. there is a '<' that hasn't been closed by a '>')
+                stripped = content.strip()
+                inside_tag = re.search(r"<[^>]*$", content)
+
+                # ALSO check if we are a continuation of a tag from a previous chunk
+                # (i.e. we don't start with '<' but we have a '>')
+                is_continuation = (
+                    stripped and not stripped.startswith("<") and ">" in stripped
+                )
+
+                request._asok_scripts_done = True
+                request._asok_pending_scripts = ""  # Clear
+
+                if inside_tag or is_continuation:
+                    # We are in the middle of a tag! Prepend to avoid breaking it.
+                    return scripts + content
+                else:
+                    # We seem to be between tags. Safe to append.
+                    return content + "\n" + scripts
+
+        return content
 
     # ── Security headers ──────────────────────────────────────
 
@@ -1185,13 +1414,15 @@ class Asok:
         # Narrow connect-src to self and local WS, while allowing broad ws:/wss:
         # only if necessary (restricting 'self' or app domain is safer)
         csp = (
-            f"default-src 'self'; style-src 'self' 'unsafe-inline'; "
-            f"connect-src 'self' ws://127.0.0.1:{ws_port} ws://localhost:{ws_port};"
+            "default-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            f"connect-src 'self' ws://127.0.0.1:{ws_port} ws://localhost:{ws_port} ws://0.0.0.0:{ws_port};"
         )
         if nonce:
-            csp += f"; script-src 'self' 'nonce-{nonce}'"
+            # Use strict-dynamic to allow scripts loaded by our trusted reactive engine
+            csp += f"; script-src 'self' 'nonce-{nonce}' 'unsafe-eval' 'strict-dynamic' https: http:;"
         else:
-            csp += "; script-src 'self'"
+            csp += "; script-src 'self' 'unsafe-eval' 'unsafe-inline';"
 
         base["Content-Security-Policy"] = csp
 
@@ -1222,14 +1453,22 @@ class Asok:
         environ["asok.root"] = self.root_dir
         environ["asok.app"] = self
         environ["asok.secret_key"] = self.config.get("SECRET_KEY")
-        
+
         # Debug Log
         with open("asok_debug.log", "a") as f:
-            f.write(f"\n[{environ.get('REQUEST_METHOD')}] {environ.get('PATH_INFO')} (DEBUG={self.config.get('DEBUG')})\n")
+            f.write(
+                f"\n[{environ.get('REQUEST_METHOD')}] {environ.get('PATH_INFO')} (DEBUG={self.config.get('DEBUG')})\n"
+            )
 
         request = Request(environ)
-        request.nonce = secrets.token_urlsafe(16)
         path_info = request.path
+
+        # Security nonce
+        self.nonce = secrets.token_urlsafe(16)
+        request._nonce = self.nonce
+
+        # Force session loading early (session is lazy-loaded, but we need it before headers)
+        _ = request.session
 
         # HEAD support: treat as GET, strip body at the end
         is_head = request.method == "HEAD"
@@ -1352,7 +1591,7 @@ class Asok:
 
         # Routing (cached in production)
         page_file, route_params = self._resolve_route(parts)
-        
+
         with open("asok_debug.log", "a") as f:
             f.write(f"  Resolved: {page_file} (Params: {route_params})\n")
 
@@ -1366,9 +1605,11 @@ class Asok:
                 pages_root = os.path.join(self.root_dir, self.dirs["PAGES"])
                 rel = os.path.relpath(page_file, pages_root)
                 base_name = os.path.splitext(rel)[0]
-                
+
                 # Normalize index pages
-                if base_name == self.config["INDEX"] or base_name.endswith(os.sep + self.config["INDEX"]):
+                if base_name == self.config["INDEX"] or base_name.endswith(
+                    os.sep + self.config["INDEX"]
+                ):
                     base_name = os.path.dirname(rel) or "index"
 
                 request.page_id = (
@@ -1391,6 +1632,15 @@ class Asok:
 
         if not page_file:
             body = self._render_error_page(request, 404)
+            if inspect.isgenerator(body):
+                headers = [("Content-Type", "text/html; charset=utf-8")]
+                headers += self._cookie_headers(request, environ)
+                start_response("404 Not Found", headers)
+                return SmartStreamer(body, request, self)
+
+            # Ensure assets and nonces are injected even for error strings
+            body = self._inject_assets(body, request, getattr(request, "nonce", ""))
+
             headers = [("Content-Type", "text/html; charset=utf-8")]
             headers += self._cookie_headers(request, environ)
             start_response("404 Not Found", headers)
@@ -1542,20 +1792,18 @@ class Asok:
             content_str = chain(request)
 
             # Override default error responses with custom pages if available
-            if (
-                request.status.startswith("403")
-                and str(content_str) == "<h1>403 Forbidden</h1>"
+            status_code = request.status.split(" ")[0]
+            is_default_error = False
+            if isinstance(content_str, str) and "<h1>" in content_str:
+                is_default_error = True
+            elif status_code.startswith(("4", "5")) and not isinstance(
+                content_str, str
             ):
-                content_str = self._render_error_page(request, 403)
-            elif (
-                request.status.startswith("404")
-                and str(content_str) == "<h1>404 Not Found</h1>"
-            ):
-                content_str = self._render_error_page(request, 404)
-            elif request.status.startswith("429") and str(content_str).startswith(
-                "<h1>429"
-            ):
-                content_str = self._render_error_page(request, 429)
+                # If it's an error and not a string, it might be a missing route generator
+                is_default_error = True
+
+            if status_code.startswith(("4", "5")) and is_default_error:
+                content_str = self._render_error_page(request, int(status_code))
         except AbortException as abort:
             request.status = Request._STATUS_MAP.get(
                 abort.status, f"{abort.status} Unknown"
@@ -1592,6 +1840,8 @@ class Asok:
                 )
                 return [f"ERROR: {str(e)}\n\n{traceback.format_exc()}".encode()]
             body = self._render_error_page(request, 500)
+            body = self._inject_assets(body, request, getattr(request, "nonce", ""))
+
             start_response(
                 "500 Internal Server Error",
                 [("Content-Type", "text/html; charset=utf-8")],
@@ -1641,13 +1891,14 @@ class Asok:
             )
             if use_gzip:
                 headers.append(("Content-Encoding", "gzip"))
-
             start_response(request.status, headers)
-            return SmartStreamer(content_str, request, self, use_gzip=use_gzip)
+            return SmartStreamer(content_str, request, self)
 
         # Standard String Response
         if "text/html" in request.content_type:
-            content_str = self._inject_assets(content_str, request, request.nonce)
+            content_str = self._inject_assets(
+                content_str, request, getattr(request, "nonce", None)
+            )
 
             # HTML Minification
             should_minify = self.config.get("HTML_MINIFY")
