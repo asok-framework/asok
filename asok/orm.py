@@ -309,7 +309,9 @@ class Field:
         protected: bool = False,
     ) -> Field:
         """Date without time."""
-        return Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f.is_date = True
+        return f
 
     @staticmethod
     def DateTime(
@@ -898,7 +900,8 @@ class ModelMeta(type):
         attrs["_search_fields"] = [
             k for k, v in fields.items() if getattr(v, "searchable", False)
         ]
-        attrs["_table"] = _pluralize(name)
+        # Use explicit __tablename__ if provided, otherwise auto-pluralize
+        attrs["_table"] = attrs.get("__tablename__", _pluralize(name))
         attrs["_model_name"] = name
         attrs["_conn_attr"] = f"conn_{attrs.get('_db_path', 'db.sqlite3')}"
 
@@ -913,7 +916,7 @@ class ModelMeta(type):
                     val = getattr(self, field_name)
                     return model.find(id=val) if val else None
 
-                attrs[rel_name] = get_related
+                attrs[rel_name] = property(get_related)
 
         for k, v in relations.items():
             if v.type == "HasMany":
@@ -928,7 +931,7 @@ class ModelMeta(type):
                     fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
                     return target_model.all(**{fk: self.id})
 
-                attrs[k] = get_collection
+                attrs[k] = property(get_collection)
 
             elif v.type == "HasOne":
 
@@ -942,7 +945,7 @@ class ModelMeta(type):
                     fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
                     return target_model.find(**{fk: self.id})
 
-                attrs[k] = get_one
+                attrs[k] = property(get_one)
 
             elif v.type == "BelongsTo":
 
@@ -957,7 +960,7 @@ class ModelMeta(type):
                     val = getattr(self, fk, None)
                     return target_model.find(id=val) if val else None
 
-                attrs[k] = get_parent
+                attrs[k] = property(get_parent)
 
             elif v.type == "BelongsToMany":
 
@@ -978,7 +981,7 @@ class ModelMeta(type):
                         rows = conn.execute(sql, (self.id,)).fetchall()
                     return ModelList(target_model(**dict(row)) for row in rows)
 
-                attrs[k] = get_many_to_many
+                attrs[k] = property(get_many_to_many)
 
         for k in fields:
             if k in attrs and isinstance(attrs[k], Field):
@@ -997,12 +1000,18 @@ class Model(metaclass=ModelMeta):
 
     def __init__(self, _trust: bool = False, **kwargs: Any):
         self.id: Optional[int] = kwargs.get("id")
+        is_new = not self.id  # New instance being created
         for name in self._fields:
             field = self._fields[name]
             if name in kwargs:
                 # Security: prevent mass assignment for protected fields unless trusted
+                # Exception: allow password fields during creation (new instances)
                 if not _trust and getattr(field, "protected", False):
-                    val = field.default
+                    # Allow password assignment during creation, block during updates
+                    if getattr(field, "is_password", False) and is_new:
+                        val = kwargs[name]
+                    else:
+                        val = field.default
                 else:
                     val = kwargs[name]
             else:
@@ -1066,7 +1075,7 @@ class Model(metaclass=ModelMeta):
 
     def _hash_value(self, password):
         salt = secrets.token_hex(16)
-        iterations = 100000
+        iterations = 200000
         hash_bytes = hashlib.pbkdf2_hmac(
             "sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations
         )

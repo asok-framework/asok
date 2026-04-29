@@ -13,7 +13,7 @@ class OpenAPIGenerator:
                 "title": app.config.get(
                     "API_TITLE", app.config.get("PROJECT_NAME", "Asok API")
                 ),
-                "version": app.config.get("VERSION", "0.1.0"),
+                "version": app.config.get("VERSION", "0.1.2"),
                 "description": app.config.get(
                     "API_DESCRIPTION",
                     "A sleek, automatically generated reference for your Asok API endpoints.",

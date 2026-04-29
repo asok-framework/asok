@@ -11,23 +11,24 @@ import os
 import re
 import secrets
 import time
-from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Type, TypeVar, Union
 from urllib.parse import parse_qsl, unquote
 
-from .exceptions import AbortException  # noqa: F401 — re-export for compat
-from .exceptions import RedirectException
-
-if TYPE_CHECKING:
-    from .core import Asok
-    from .forms import Form
-
 from .auth import BearerToken, MagicLink, OAuth
+from .exceptions import (
+    AbortException,  # noqa: F401 — re-export for compat
+    RedirectException,
+)
 from .orm import MODELS_REGISTRY
 from .session import Session
 from .templates import SafeString, render_block_string, render_template_string
 from .utils.geo import IPLocation
 from .utils.image import is_image, optimize_image
 from .utils.security import is_safe_url, secure_filename
+
+if TYPE_CHECKING:
+    from .core import Asok
+    from .forms import Form
 
 
 class QueryDict(dict):
@@ -566,7 +567,6 @@ class Request:
                 cid = f"{tpl_name}--{name.lower()}--{self._comp_counters[name]}"
 
             app_ref = self.environ.get("asok.app")
-            is_debug = app_ref.config.get("DEBUG") if app_ref else False
             secret = (
                 app_ref.config.get("SECRET_KEY", "dev-secret-key")
                 if app_ref
@@ -662,16 +662,32 @@ class Request:
     def _stream_blocks(
         self, filepath: str, block_header: str, **context: Any
     ) -> Iterator[str]:
-        """Internal helper to stream multiple template blocks."""
+        """Internal helper to stream multiple template blocks.
+
+        Wraps content in <template> tags ONLY for SPA block requests.
+        For normal page loads, returns unwrapped content for better SEO and first paint.
+        """
         names = [b.strip() for b in block_header.split(",")]
         content, tpl_root = self._resolve_template(filepath)
+
+        # Check if this is a genuine SPA block request (has X-Block header)
+        # vs a streaming response that happens to have multiple blocks
+        is_spa_request = bool(self.environ.get("HTTP_X_BLOCK"))
+
         for name in names:
             self._current_block = name
             tpl_ctx = self._template_context(context)
             from .templates import render_block_string
 
             block_html = render_block_string(content, name, tpl_ctx, root_dir=tpl_root)
-            yield f'<template data-block="{name}">{block_html}</template>'
+
+            # Only wrap in <template> for actual SPA block requests
+            if is_spa_request:
+                yield f'<template data-block="{name}">{block_html}</template>'
+            else:
+                # For normal page loads, return unwrapped content
+                # This ensures better SEO, accessibility, and first paint
+                yield block_html
 
     def block(
         self, filepath: str, block_name: Optional[str] = None, **context: Any
@@ -689,6 +705,45 @@ class Request:
             content, block_name, self._template_context(context), root_dir=tpl_root
         )
 
+    def blocks(self, filepath: str, block_names: list[str], **context: Any) -> str:
+        """Render multiple blocks intelligently.
+
+        For SPA requests (with X-Block header): Returns wrapped in <template> tags
+        For normal page loads: Returns unwrapped HTML for better SEO/accessibility
+
+        Args:
+            filepath: Template file path
+            block_names: List of block names to render
+            **context: Template context variables
+
+        Returns:
+            String containing rendered blocks (wrapped or unwrapped based on request type)
+
+        Example:
+            # In your page handler:
+            def render(request):
+                return request.blocks('page.html', ['main', 'title', 'sidebar'])
+
+            # SPA request: Returns <template data-block="main">...</template>...
+            # Normal request: Returns just the HTML content
+        """
+        is_spa = bool(self.environ.get("HTTP_X_BLOCK"))
+        content, tpl_root = self._resolve_template(filepath)
+        from .templates import render_block_string
+
+        parts = []
+        for name in block_names:
+            self._current_block = name
+            tpl_ctx = self._template_context(context)
+            block_html = render_block_string(content, name, tpl_ctx, root_dir=tpl_root)
+
+            if is_spa:
+                parts.append(f'<template data-block="{name}">{block_html}</template>')
+            else:
+                parts.append(block_html)
+
+        return "\n".join(parts)
+
     def static(self, filepath: str) -> str:
         """Return the public URL for a static asset, with versioning/optimization."""
         app_ref: Optional[Asok] = self.environ.get("asok.app")
@@ -696,15 +751,20 @@ class Request:
 
         target_path = filepath
         # Smart WebP Swap
-        if os.environ.get("IMAGE_OPTIMIZATION") == "true" and is_image(filepath):
-            webp_path = filepath + ".webp"
-            # Check if webp version exists in parts or uploads
-            full_parts = os.path.join(root, "src/partials", webp_path.lstrip("/"))
-            full_uploads = os.path.join(
-                root, "src/partials/uploads", webp_path.lstrip("/")
-            )
-            if os.path.isfile(full_parts) or os.path.isfile(full_uploads):
-                target_path = webp_path
+        if is_image(filepath) and not filepath.endswith(".webp"):
+            # Try both: image.webp and image.jpg.webp
+            webp_candidates = [
+                filepath.rsplit(".", 1)[0] + ".webp",
+                filepath + ".webp",
+            ]
+            for webp_path in webp_candidates:
+                full_parts = os.path.join(root, "src/partials", webp_path.lstrip("/"))
+                full_uploads = os.path.join(
+                    root, "src/partials/uploads", webp_path.lstrip("/")
+                )
+                if os.path.isfile(full_parts) or os.path.isfile(full_uploads):
+                    target_path = webp_path
+                    break
 
         # Smart Min Swap (JS/CSS)
         elif app_ref and not app_ref.config.get("DEBUG"):

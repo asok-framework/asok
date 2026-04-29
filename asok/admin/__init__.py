@@ -115,7 +115,7 @@ class AdminLog(Model):
 
 
 def _user_roles_accessor(self):
-    """BelongsToMany accessor for User.roles() — reads the role_user pivot."""
+    """BelongsToMany accessor for User.roles — reads the role_user pivot."""
     cached = self.__dict__.get("_eager_roles")
     if cached is not None:
         return cached
@@ -133,7 +133,7 @@ def _user_roles_accessor(self):
 
 
 def _user_role_ids(self):
-    return [r.id for r in self.roles()]
+    return [r.id for r in self.roles]
 
 
 def _user_can(self, perm):
@@ -145,7 +145,7 @@ def _user_can(self, perm):
     """
     if getattr(self, "is_admin", False):
         return True
-    for r in self.roles():
+    for r in self.roles:
         raw = (getattr(r, "permissions", "") or "").strip()
         if not raw:
             continue
@@ -430,8 +430,11 @@ class Admin:
             opts = getattr(model, "Admin", None)
             if opts and getattr(opts, "hidden", False):
                 continue
-            slug = getattr(opts, "slug", None) or _slugify_name(model.__name__)
-            label = getattr(opts, "label", None) or _humanize(model.__name__)
+            slug = getattr(opts, "slug", None) or model._table
+            label = (
+                getattr(opts, "label", None)
+                or model._table.replace("_", " ").capitalize()
+            )
             columns = getattr(opts, "list_display", None) or self._default_columns(
                 model
             )
@@ -448,6 +451,7 @@ class Admin:
                 "slug": slug,
                 "list_filter": getattr(opts, "list_filter", []) or [],
                 "readonly_fields": getattr(opts, "readonly_fields", []) or [],
+                "form_exclude": getattr(opts, "form_exclude", []) or [],
                 "fieldsets": getattr(opts, "fieldsets", None),
                 "per_page": getattr(opts, "per_page", 20),
                 "inlines": getattr(opts, "inlines", []) or [],
@@ -610,7 +614,7 @@ class Admin:
         can_fn = getattr(u, "can", None)
         if callable(can_fn):
             try:
-                roles = u.roles() if hasattr(u, "roles") else []
+                roles = u.roles if hasattr(u, "roles") else []
             except Exception:
                 roles = []
             if roles:
@@ -966,7 +970,7 @@ class Admin:
             )
             if user and (
                 getattr(user, "is_admin", False)
-                or (hasattr(user, "roles") and user.roles())
+                or (hasattr(user, "roles") and user.roles)
             ):
                 self._login_rate_reset(request)
                 _, totp_enabled = self._get_user_2fa(user.id)
@@ -2338,7 +2342,14 @@ class Admin:
             meta["is_text"] = True
             meta["wysiwyg"] = getattr(field, "wysiwyg", False)
             tup = Form.textarea(label, rules, **attrs)
+        elif getattr(field, "is_datetime", False):
+            tup = Form.datetime_local(label, rules, **attrs)
+        elif getattr(field, "is_date", False):
+            tup = Form.date(label, rules, **attrs)
+        elif getattr(field, "is_time", False):
+            tup = Form.time(label, rules, **attrs)
         else:
+            # Fallback: heuristic based on field name
             if is_timestamp or name.endswith("_at") or name.endswith("_on"):
                 tup = Form.datetime_local(label, rules, **attrs)
             elif name == "date" or name.endswith("_date"):
@@ -2351,6 +2362,7 @@ class Admin:
         """Build a real Form instance from the model fields and pre-fill from item."""
         model = entry["model"]
         readonly_set = set(entry["readonly_fields"])
+        form_exclude = set(entry["form_exclude"])
         # Auto-readonly slugs that auto-populate and always update
         for name, field in model._fields.items():
             if getattr(field, "is_slug", False) and getattr(
@@ -2361,6 +2373,9 @@ class Admin:
         schema = {}
         meta = {}
         for name, field in model._fields.items():
+            # Skip excluded fields
+            if name in form_exclude:
+                continue
             tup, m = self._field_meta(name, field, readonly_set)
             if tup is None:
                 continue
@@ -2551,7 +2566,7 @@ class Admin:
         selected_ids = set()
         if item and item.id:
             try:
-                selected_ids = {r.id for r in item.roles()}
+                selected_ids = {r.id for r in item.roles}
             except Exception:
                 selected_ids = set()
         options = [
@@ -2645,12 +2660,17 @@ class Admin:
         """
         model = entry["model"]
         readonly = set(entry["readonly_fields"])
+        form_exclude = set(entry["form_exclude"])
         is_role = model.__name__ == "Role"
         auth_name = self.app.config.get("AUTH_MODEL", "User")
         is_user = model.__name__ == auth_name
         editing_self = is_user and self._is_self(request, entry, item)
         for name, field in model._fields.items():
-            if name in readonly or getattr(field, "protected", False):
+            if (
+                name in readonly
+                or name in form_exclude
+                or getattr(field, "protected", False)
+            ):
                 continue
             if getattr(field, "is_timestamp", False):
                 continue

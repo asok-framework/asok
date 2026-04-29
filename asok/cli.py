@@ -182,7 +182,7 @@ def scaffold(
     <link rel="icon" href="{{{{ static('images/logo.svg') }}}}" type="image/svg+xml">
     <title>{{% block title %}}{{% endblock %}} &mdash; {app_name}</title>
     <link rel="stylesheet" href="{{{{ static('{css_link}') }}}}">
-    <script defer src="{{{{ static('js/base.js') }}}}"></script>
+    <script defer src="{{{{ static('js/base.js') }}}}" nonce="{{{{ request.nonce }}}}"></script>
 </head>
 <body>
     <main>{{% block main %}}{{% endblock %}}</main>
@@ -407,7 +407,9 @@ def _project_uses_tailwind(root):
 def _find_project_root(start=None):
     cur = start or os.getcwd()
     for _ in range(10):
-        if os.path.isfile(os.path.join(cur, "wsgi.py")):
+        if os.path.isfile(os.path.join(cur, "wsgi.py")) or os.path.isfile(
+            os.path.join(cur, "wsgi.pyc")
+        ):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:
@@ -911,10 +913,10 @@ def _start_server(port):
     """
     wsgi_path = os.path.join(os.getcwd(), "wsgi.py")
     if not os.path.isfile(wsgi_path):
-        print(f"Error: 'wsgi.py' not found in {os.getcwd()}")
-        print(
-            "  Run 'asok create .' to scaffold a project here, or 'cd' into your project directory."
-        )
+        wsgi_path = os.path.join(os.getcwd(), "wsgi.pyc")
+
+    if not os.path.isfile(wsgi_path):
+        print(f"Error: WSGI entry point (wsgi.py/c) not found in {os.getcwd()}")
         return None
 
     pid = os.fork() if hasattr(os, "fork") else 0
@@ -944,7 +946,7 @@ def _start_server(port):
                 logging.getLogger("asok.security").setLevel(logging.DEBUG)
 
         except Exception as e:
-            print(f"Error loading 'wsgi.py': {e}")
+            print(f"Error loading WSGI entry point: {e}")
             traceback.print_exc()
             sys.exit(1)
 
@@ -1076,7 +1078,10 @@ def run_preview(port_arg=None):
 
     wsgi_path = os.path.join(root, "wsgi.py")
     if not os.path.isfile(wsgi_path):
-        print(f"Error: 'wsgi.py' not found in {root}")
+        wsgi_path = os.path.join(root, "wsgi.pyc")
+
+    if not os.path.isfile(wsgi_path):
+        print(f"Error: WSGI entry point (wsgi.py/c) not found in {root}")
         return
 
     requested_port = port_arg or int(os.environ.get("ASOK_PORT", "8000"))
@@ -1109,6 +1114,196 @@ def run_preview(port_arg=None):
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.server_close()
+
+
+def _minify_html(html):
+    """Simple regex-based HTML minifier (Zero dependencies)."""
+    import re
+
+    # Remove comments
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    # Collapse whitespace between tags
+    html = re.sub(r">\s+<", "><", html)
+    # Trim lines
+    html = "\n".join(line.strip() for line in html.splitlines() if line.strip())
+    return html
+
+
+def run_build(root, keep_source=False, output=None):
+    """Generate a production-ready optimized distribution."""
+    import py_compile
+
+    Style.heading("BUILDING PRODUCTION DISTRIBUTION")
+
+    app_name = output or "dist"
+    build_root = os.path.join(root, app_name)
+
+    if os.path.exists(build_root):
+        shutil.rmtree(build_root)
+    os.makedirs(build_root)
+
+    Style.info(f"Cloning project to {Style.BOLD}{app_name}/{Style.RESET}...")
+
+    # Exclude development-only files and folders
+    ignore = shutil.ignore_patterns(
+        "build",
+        "dist",
+        "venv",
+        ".venv",
+        ".asok",
+        ".git",
+        ".env",
+        "__pycache__",
+        "*.pyc",
+        ".DS_Store",
+        "db.sqlite3*",
+        "tests",
+    )
+
+    shutil.copytree(root, build_root, ignore=ignore, dirs_exist_ok=True)
+
+    # 1. Tailwind Build (if used)
+    if _project_uses_tailwind(root):
+        Style.info("Optimizing Tailwind CSS...")
+        bin_path = _tailwind_binary_path(root)
+        if os.path.isfile(bin_path):
+            input_path = os.path.join(build_root, "src/partials/css/base.css")
+            output_path = os.path.join(build_root, "src/partials/css/base.build.css")
+            res = subprocess.run(
+                [bin_path, "-i", input_path, "-o", output_path, "--minify"],
+                cwd=root,
+                capture_output=True,
+            )
+            if res.returncode != 0:
+                Style.error(f"Tailwind build failed: {res.stderr.decode()}")
+            else:
+                if os.path.exists(input_path):
+                    os.remove(input_path)
+                Style.success("Tailwind CSS optimized and source removed.")
+
+    # 2. Assets Minification (Universal JS/CSS)
+    bin_path = _esbuild_binary_path(root)
+    if os.path.isfile(bin_path):
+        Style.info("Minifying JS and CSS assets...")
+        target_dir = os.path.join(build_root, "src/partials")
+        if os.path.exists(target_dir):
+            for r, d, files in os.walk(target_dir):
+                for f in files:
+                    if (f.endswith(".js") or f.endswith(".css")) and not f.endswith(
+                        ".build.css"
+                    ):
+                        path = os.path.join(r, f)
+                        rel_path = os.path.relpath(path, build_root)
+                        print(f"  {Style.DIM}Optimizing {rel_path}...{Style.RESET}")
+                        # Minify and overwrite original
+                        res = subprocess.run(
+                            [
+                                bin_path,
+                                path,
+                                "--minify",
+                                f"--outfile={path}",
+                                "--allow-overwrite",
+                            ],
+                            cwd=root,
+                            capture_output=True,
+                        )
+                        if res.returncode != 0:
+                            Style.warn(f"Minify failed for {f}: {res.stderr.decode()}")
+        Style.success("Universal JS/CSS assets optimized.")
+    else:
+        Style.warn(
+            "Asset minification skipped (esbuild not found). Run 'asok assets --install'."
+        )
+
+    Style.info("Minifying HTML templates...")
+    for r, d, files in os.walk(build_root):
+        for f in files:
+            if f.endswith(".html"):
+                path = os.path.join(r, f)
+                try:
+                    with open(path, "r", encoding="utf-8") as f_in:
+                        content = f_in.read()
+                    minified = _minify_html(content)
+                    with open(path, "w", encoding="utf-8") as f_out:
+                        f_out.write(minified)
+                except Exception as e:
+                    Style.warn(f"HTML minify failed for {f}: {e}")
+    Style.success("All HTML templates minified.")
+
+    # 4. Python Compilation
+    Style.info("Compiling Python source code...")
+    success_count = 0
+    # Walk through EVERYTHING in the build root
+    for r, d, files in os.walk(build_root):
+        for f in files:
+            if f.endswith(".py"):
+                src = os.path.join(r, f)
+                dst = src + "c"
+                try:
+                    # Compile to .pyc
+                    py_compile.compile(src, cfile=dst, optimize=2)
+                    if os.path.exists(dst) and os.path.getsize(dst) > 0:
+                        success_count += 1
+                        # If we don't want sources, remove the .py file
+                        if not keep_source:
+                            try:
+                                os.remove(src)
+                            except OSError:
+                                pass
+                except Exception as e:
+                    Style.warn(f"Compile failed for {f}: {e}")
+
+    Style.success(
+        f"Compiled {success_count} Python files {'(sources removed recursively)' if not keep_source else ''}."
+    )
+
+    # Final sanity check: remove ANY remaining .py file if keep_source is False
+    if not keep_source:
+        for r, d, files in os.walk(build_root):
+            for f in files:
+                if f.endswith(".py"):
+                    try:
+                        os.remove(os.path.join(r, f))
+                    except OSError:
+                        pass
+
+    # 5. Image Optimization (Only if enabled in config)
+    if os.environ.get("IMAGE_OPTIMIZATION") == "true":
+        Style.info("Optimizing project images to WebP...")
+        try:
+            from .utils.image import is_image, optimize_image
+
+            optimized_count = 0
+            for r, d, files in os.walk(build_root):
+                for f in files:
+                    if is_image(f) and not f.endswith(".webp"):
+                        path = os.path.join(r, f)
+                        try:
+                            # Convert to webp and DELETE original
+                            optimize_image(path, keep_original=False)
+                            optimized_count += 1
+                        except Exception:
+                            pass
+            Style.success(
+                f"Optimized {optimized_count} images to WebP (originals removed)."
+            )
+        except ImportError:
+            Style.warn("Image optimization skipped (Pillow not installed).")
+    else:
+        Style.info("Image optimization skipped (IMAGE_OPTIMIZATION not enabled).")
+
+    # 6. Production .env
+    env_prod = os.path.join(build_root, ".env.production")
+    with open(env_prod, "w") as f:
+        f.write("DEBUG=false\n")
+        f.write("SECRET_KEY=change-me-for-production\n")
+        f.write("ALLOWED_HOSTS=*\n")
+        f.write("IMAGE_OPTIMIZATION=true\n")
+
+    Style.success(
+        f"Build complete! Distribution ready in: {Style.BOLD}{app_name}/{Style.RESET}"
+    )
+    print(f"  {Style.DIM}To preview: cd {app_name} && asok preview{Style.RESET}\n")
 
 
 def run_deploy(root):
@@ -1313,7 +1508,9 @@ def run_migrate():
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    changes = 0
+    # Collect all changes grouped by table
+    all_changes = {}
+
     for name, model_cls in MODELS_REGISTRY.items():
         model_cls.create_table()
         table = model_cls._table
@@ -1324,6 +1521,8 @@ def run_migrate():
         ]
         existing = set(existing_cols)
         model_fields = set(model_cls._fields.keys())
+
+        table_changes = {"added": [], "removed": [], "failed": []}
 
         # Add new columns
         for field_name, field_obj in model_cls._fields.items():
@@ -1337,31 +1536,60 @@ def run_migrate():
                     else:
                         default = f" DEFAULT '{field_obj.default}'"
                 sql = f"ALTER TABLE {table} ADD COLUMN {field_name} {field_obj.sql_type}{default}"
-                conn.execute(sql)
-                print(
-                    f"  {Style.GREEN}+{Style.RESET} {table}.{Style.BOLD}{field_name}{Style.RESET} ({Style.DIM}{field_obj.sql_type}{Style.RESET})"
-                )
-                changes += 1
+                try:
+                    conn.execute(sql)
+                    table_changes["added"].append((field_name, field_obj.sql_type))
+                except sqlite3.OperationalError as e:
+                    table_changes["failed"].append((field_name, str(e)))
 
         # Drop removed columns (SQLite 3.35+ supports DROP COLUMN)
         removed = [c for c in existing_cols if c != "id" and c not in model_fields]
         for col in removed:
             try:
                 conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
-                print(
-                    f"  {Style.RED}-{Style.RESET} {table}.{Style.BOLD}{col}{Style.RESET}"
-                )
-                changes += 1
-            except sqlite3.OperationalError as e:
-                print(
-                    f"  {Style.YELLOW}!{Style.RESET} Could not drop {table}.{col}: {e}"
-                )
+                table_changes["removed"].append(col)
+            except sqlite3.OperationalError:
+                # Silently skip if DROP COLUMN not supported
+                pass
+
+        # Only track tables with actual changes
+        if (
+            table_changes["added"]
+            or table_changes["removed"]
+            or table_changes["failed"]
+        ):
+            all_changes[table] = table_changes
 
     conn.commit()
     conn.close()
 
-    if changes:
-        Style.success(f"Migrations applied: {changes} change(s).")
+    # Display changes grouped by table
+    total_changes = 0
+    for table in sorted(all_changes.keys()):
+        changes = all_changes[table]
+        if changes["added"] or changes["removed"] or changes["failed"]:
+            print(f"\n  {Style.BOLD}{table}{Style.RESET}")
+
+            for field_name, sql_type in changes["added"]:
+                print(
+                    f"    {Style.GREEN}+{Style.RESET} {field_name} {Style.DIM}({sql_type}){Style.RESET}"
+                )
+                total_changes += 1
+
+            for col in changes["removed"]:
+                print(f"    {Style.RED}−{Style.RESET} {col}")
+                total_changes += 1
+
+            for field_name, error in changes["failed"]:
+                print(
+                    f"    {Style.YELLOW}!{Style.RESET} {field_name} {Style.DIM}(failed: {error}){Style.RESET}"
+                )
+
+    print()  # Empty line before summary
+    if total_changes:
+        Style.success(
+            f"Applied {total_changes} change(s) across {len(all_changes)} table(s)."
+        )
     else:
         Style.info("Database schema is up to date.")
 
@@ -1551,8 +1779,11 @@ def run_shell():
     model_dir = os.path.join(os.getcwd(), "src/models")
     ns = {"Model": Model}
 
-    # Load wsgi.py to get 'app' instance
+    # Load wsgi.py or wsgi.pyc to get 'app' instance
     wsgi_path = os.path.join(os.getcwd(), "wsgi.py")
+    if not os.path.isfile(wsgi_path):
+        wsgi_path = os.path.join(os.getcwd(), "wsgi.pyc")
+
     if os.path.isfile(wsgi_path):
         try:
             spec = _ilu.spec_from_file_location("_wsgi", wsgi_path)
@@ -1561,7 +1792,7 @@ def run_shell():
             if hasattr(mod, "app"):
                 ns["app"] = mod.app
         except Exception as e:
-            Style.warn(f"Could not load 'app' from wsgi.py: {e}")
+            Style.warn(f"Could not load 'app' from WSGI entry point: {e}")
 
     if os.path.isdir(model_dir):
         for filename in sorted(os.listdir(model_dir)):
@@ -1602,14 +1833,18 @@ def run_test(path=None):
 def run_createsuperuser(email=None, password=None):
     root = _find_project_root()
     if not root:
-        print("Error: Not inside an Asok project (no wsgi.py found).")
+        print("Error: Not inside an Asok project (no wsgi.py/c found).")
         sys.exit(1)
     os.chdir(root)
     if "src" not in sys.path:
         sys.path.insert(0, os.path.join(root, "src"))
 
-    # Load wsgi.py to ensure models are registered
-    spec = _ilu.spec_from_file_location("_wsgi", os.path.join(root, "wsgi.py"))
+    # Load wsgi entry point to ensure models are registered
+    wsgi_path = os.path.join(root, "wsgi.py")
+    if not os.path.isfile(wsgi_path):
+        wsgi_path = os.path.join(root, "wsgi.pyc")
+
+    spec = _ilu.spec_from_file_location("_wsgi", wsgi_path)
     mod = _ilu.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
@@ -1711,6 +1946,7 @@ def print_help():
                 "deploy",
                 "Generate production deployment configs (Gunicorn/Nginx/SystemD)",
             ),
+            ("build", "Generate a production-ready optimized build folder"),
         ],
     }
 
@@ -1765,6 +2001,15 @@ def main() -> None:
     assets_parser.add_argument("--minify", action="store_true")
 
     subparsers.add_parser("deploy")
+    build_parser = subparsers.add_parser("build")
+    build_parser.add_argument(
+        "--keep-source",
+        action="store_true",
+        help="Keep .py source files along with bytecode",
+    )
+    build_parser.add_argument(
+        "--output", "-o", default=None, help="Output directory name"
+    )
 
     subparsers.add_parser("dev").add_argument("-p", "--port", type=int, default=None)
     subparsers.add_parser("preview").add_argument(
@@ -1796,7 +2041,7 @@ def main() -> None:
     elif args.command == "tailwind":
         root = _find_project_root()
         if not root:
-            Style.error("Not inside an Asok project (no wsgi.py found).")
+            Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
 
         try:
@@ -1818,7 +2063,7 @@ def main() -> None:
     elif args.command == "admin":
         root = _find_project_root()
         if not root:
-            Style.error("Not inside an Asok project (no wsgi.py found).")
+            Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
         if args.enable:
             admin_enable(root)
@@ -1827,7 +2072,7 @@ def main() -> None:
     elif args.command == "image":
         root = _find_project_root()
         if not root:
-            Style.error("Not inside an Asok project (no wsgi.py found).")
+            Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
         if args.enable:
             image_enable(root)
@@ -1840,7 +2085,7 @@ def main() -> None:
     elif args.command == "assets":
         root = _find_project_root()
         if not root:
-            Style.error("Not inside an Asok project (no wsgi.py found).")
+            Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
         if args.install:
             assets_install(root)
@@ -1851,9 +2096,15 @@ def main() -> None:
     elif args.command == "deploy":
         root = _find_project_root()
         if not root:
-            Style.error("Not inside an Asok project (no wsgi.py found).")
+            Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
         run_deploy(root)
+    elif args.command == "build":
+        root = _find_project_root()
+        if not root:
+            Style.error("Not inside an Asok project (no wsgi.py/c found).")
+            return
+        run_build(root, keep_source=args.keep_source, output=args.output)
     elif args.command == "dev":
         run_dev(args.port)
     elif args.command == "preview":

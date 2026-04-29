@@ -14,7 +14,8 @@ import os
 import re
 import secrets
 import sys
-from typing import Any, Callable, Optional, Union
+import traceback
+from typing import Any, Callable, Iterator, Optional, Union
 from urllib.parse import quote, urlparse
 
 from .exceptions import AbortException, RedirectException
@@ -54,7 +55,11 @@ class SmartStreamer:
 
             write = write_fallback
 
-        should_minify = self.app.config.get("MINIFY_HTML", True)
+        # In production, files are already minified by 'asok build'.
+        # We only minify at runtime if explicitly enabled or if in DEBUG mode.
+        should_minify = self.app.config.get("HTML_MINIFY")
+        if should_minify is None:
+            should_minify = self.app.config.get("DEBUG", True)
 
         def finalize(text):
             if not should_minify or not text:
@@ -424,7 +429,6 @@ class Asok:
 
     def _resolve_route(self, parts: list[str]) -> tuple[Optional[str], dict[str, str]]:
         """Resolve a list of URL segments to a page file and captured parameters."""
-        cache_key = "/".join(str(p) for p in parts)
         # Disable routing cache for now to prevent corruption in production
         # if not debug and cache_key in self._route_cache:
         #    match, params = self._route_cache[cache_key]
@@ -797,6 +801,8 @@ class Asok:
 
         if not hasattr(request, "_asok_pending_scripts"):
             request._asok_pending_scripts = ""
+        if not hasattr(request, "_asok_pending_styles"):
+            request._asok_pending_styles = ""
 
         # 0. SEO Metadata (Title, Metas, Links)
         meta_html = ""
@@ -943,6 +949,25 @@ class Asok:
                         request._asok_js_done = True
                     except Exception:
                         pass
+
+        # 4. Final Injection of accumulated styles
+        styles = request._asok_pending_styles
+        if styles and not getattr(request, "_asok_styles_done", False):
+            if "</head>" in content.lower():
+                request._asok_styles_done = True
+                request._asok_pending_styles = ""  # Clear
+
+                def inject_styles(m):
+                    return styles + m.group(1)
+
+                content = re.sub(
+                    r"(</head>)", inject_styles, content, flags=re.I, count=1
+                )
+            elif not stream:
+                # Fallback for fragments
+                request._asok_styles_done = True
+                request._asok_pending_styles = ""
+                content = styles + content
 
         # [END OF ASSET INJECTION]
         if not only_scripts and not getattr(request, "_asok_csrf_done", False):
@@ -1307,7 +1332,89 @@ class Asok:
                 "</script>"
             )
 
-        # 5. Live Reload (DEBUG only)
+        # 2. Inject nonce into all existing <script> tags to satisfy strict-dynamic CSP
+        if nonce:
+            content = re.sub(
+                r"<script\b([^>]*?)>",
+                lambda m: (
+                    f'<script{m.group(1)} nonce="{nonce}">'
+                    if "nonce=" not in m.group(1)
+                    else m.group(0)
+                ),
+                content,
+                flags=re.IGNORECASE,
+            )
+
+        # 3. Handle directives asset injection
+        needs_directives = (
+            any(
+                attr in content
+                for attr in [
+                    "asok-state",
+                    "asok-on:",
+                    "asok-text",
+                    "asok-show",
+                    "asok-hide",
+                    "asok-class:",
+                    "asok-bind:",
+                    "asok-model",
+                    "asok-if",
+                    "asok-for",
+                    "asok-init",
+                    "asok-ref",
+                    "asok-teleport",
+                    "asok-cloak",
+                ]
+            )
+            and not is_block
+            and not getattr(request, "_asok_directives_done", False)
+        )
+        if needs_directives:
+            request._asok_directives_done = True
+            request._asok_pending_styles += (
+                f'<style nonce="{nonce}">[asok-cloak]{{display:none!important}}</style>'
+            )
+            request._asok_pending_scripts += (
+                f'<script nonce="{nonce}">'
+                "(function(){'use strict';const w=new WeakMap();"
+                "const st=new Proxy({},{get(t,p){return t[p]},set(t,p,v){t[p]=v;document.querySelectorAll('[asok-state]').forEach(el=>{const c=w.get(el);if(c)us(el)});return true}});"
+                "const fss=(el)=>{while(el&&el!==document.documentElement){if(w.has(el))return el;el=el.parentElement}return null};"
+                "const gs=(st,el,ev)=>{const sc=fss(el),c=sc?w.get(sc):{refs:{}};return[st,window.Asok.store,el,ev,c.refs||{},f=>Promise.resolve().then(f)]};"
+                "const se=(ex,st,el)=>{try{return(new Function('$','$store','$el','$event','$refs','$nextTick','with($){return('+ex+')}'))(...gs(st,el))}catch(e){}};"
+                "const es=(sm,st,ev,el)=>{try{const c=sm.includes(';')||sm.includes('if')||sm.includes('return');return(new Function('$','$store','$el','$event','$refs','$nextTick','with($){'+(c?sm:'return('+sm+')')+'}'))(...gs(st,el,ev))}catch(e){}};"
+                "const ub=(el,st)=>{if(!el||!st)return;const at=el.getAttribute.bind(el),tr=at('asok-transition');"
+                "if(el.hasAttribute('asok-text')){const v=se(at('asok-text'),st,el);if(v!==undefined)el.textContent=String(v)}"
+                "if(el.hasAttribute('asok-html')){const v=se(at('asok-html'),st,el);if(v!==undefined)el.innerHTML=String(v).replace(/<script\\b[^<]*(?:(?!<\\/script>)<[^<]*)*<\\/script>/gi,'')}"
+                "if(el.hasAttribute('asok-show')){const v=se(at('asok-show'),st,el);if(v){if(el.style.display==='none')el._st=Date.now();el.style.display='';if(tr)el.classList.add(...tr.split(' '));el.setAttribute('data-show-active','');if(tr)el.addEventListener('transitionend',()=>el.classList.remove(...tr.split(' ')),{once:true})}else{if(tr){el.classList.add(...tr.split(' '));el.addEventListener('transitionend',()=>{{el.style.display='none';el.classList.remove(...tr.split(' '))}},{once:true})}else el.style.display='none';el.removeAttribute('data-show-active')}}"
+                "if(el.hasAttribute('asok-hide')){const v=se(at('asok-hide'),st,el);if(!v){el.style.display='';if(tr)el.classList.add(...tr.split(' '));el.removeAttribute('data-hide-active');if(tr)el.addEventListener('transitionend',()=>el.classList.remove(...tr.split(' ')),{once:true})}else{if(tr){el.classList.add(...tr.split(' '));el.addEventListener('transitionend',()=>{{el.style.display='none';el.classList.remove(...tr.split(' '))}},{once:true})}else el.style.display='none';el.setAttribute('data-hide-active','')}}"
+                "Array.from(el.attributes).forEach(a=>{"
+                "if(a.name.startsWith('asok-class:')){const c=a.name.substring(11);el.classList[se(a.value,st,el)?'add':'remove'](c)}"
+                "if(a.name.startsWith('asok-bind:')){const n=a.name.substring(10),v=se(a.value,st,el);if(v!==undefined&&v!==null&&v!==false)el.setAttribute(n,String(v));else el.removeAttribute(n)}"
+                "})};"
+                "const uif=(el,st)=>{let c=el,ok=0;while(c&&(c.hasAttribute('asok-if')||c.hasAttribute('asok-elif')||c.hasAttribute('asok-else'))){c._ai=1;let v=c.hasAttribute('asok-else')?!ok:se(c.getAttribute(c.hasAttribute('asok-if')?'asok-if':'asok-elif'),st,c);if(v&&!ok){if(!c._n){const n=c.content.cloneNode(true);c._n=n.firstElementChild;c.parentNode.insertBefore(n,c.nextSibling);w.set(c._n,w.get(el)||{state:st,refs:{}});init(c._n)}ok=1}else if(c._n){c._n.remove();c._n=null}c=c.nextElementSibling}}; "
+                "const ufo=(el,st)=>{el._ai=1;const at=el.getAttribute('asok-for'),[v,l]=at.split(' in '),items=se(l,st,el)||[];if(!el._m){el._m=document.createComment('for');el.parentNode.insertBefore(el._m,el.nextSibling)} (el._ns||[]).forEach(n=>n.remove());el._ns=[];items.forEach((it,i)=>{const n=el.content.cloneNode(true),child=n.firstElementChild,sub=rpx({[v]:it,index:i},()=>us(fss(el)),st);w.set(child,{state:sub,refs:{},cleanup:[]});el.parentNode.insertBefore(n,el._m);el._ns.push(child);init(child)})};"
+                "const us=(sc,rt=1)=>{const c=w.get(sc);if(!c)return;ub(sc,c.state);sc.querySelectorAll('*').forEach(el=>{if(el._uv)el._uv();if(el.tagName==='TEMPLATE'){if(el.hasAttribute('asok-if'))uif(el,c.state);if(el.hasAttribute('asok-for'))ufo(el,c.state);return} let p=el.parentElement;while(p&&p!==sc){if(p&&p.hasAttribute('asok-state'))return;p=p.parentElement}ub(el,c.state)});if(rt&&(c._ts||[]).forEach(t=>us(t,0)))return};"
+                "const rpx=(obj,cb,st)=>{if(!obj||typeof obj!=='object'||obj._isProxy)return obj;return new Proxy(obj,{get(t,p){if(p==='_isProxy')return true;const v=(p in t)?t[p]:(st?st[p]:undefined);if(typeof v==='function'){if(['push','pop','splice','shift','unshift','reverse','sort'].includes(p))return(...args)=>{const r=v.apply(t,args);cb();return r};return v.bind(t)}return rpx(v,cb,st)},has(t,p){return p in t||(st&&p in st)},set(t,p,v){if(p in t){if(t[p]===v)return true;t[p]=v;cb();return true}if(st){if(st[p]===v)return true;st[p]=v;return true}if(t[p]===v)return true;t[p]=v;cb();return true}})};"
+                "const is=(el)=>{if(el._ai)return;const a=el.getAttribute('asok-state');try{const s=rpx(se(a||'{}',{},el)||{},()=>us(el));w.set(el,{state:s,cleanup:[],refs:{},_ts:[]});el._ai=1;if(el.hasAttribute('asok-init'))es(el.getAttribute('asok-init'),s,null,el);us(el)}catch(e){}};"
+                "const im=(el)=>{if(el._ami)return;const m=el.getAttribute('asok-model'),sc=fss(el);if(!m||!sc)return;const s=w.get(sc).state;el._ami=1;"
+                "el._uv=()=>{const v=s[m]||'';if(el.value!==String(v)&&document.activeElement!==el){if(el.type==='checkbox')el.checked=!!v;else if(el.type==='radio')el.checked=el.value===v;else el.value=v}};"
+                "el._uv();const h=()=>{if(el.type==='checkbox')s[m]=el.checked;else if(el.type==='radio'){if(el.checked)s[m]=el.value}else s[m]=el.value};"
+                "el.addEventListener('input',h);el.addEventListener('change',h);w.get(sc).cleanup.push(()=>{el.removeEventListener('input',h);el.removeEventListener('change',h)})};"
+                "const ie=(el)=>{if(el._aei)return;const sc=fss(el);if(!sc)return;const s=w.get(sc).state;el._aei=1;Array.from(el.attributes).forEach(a=>{if(!a.name.startsWith('asok-on:'))return;"
+                "const en=a.name.substring(8),st=a.value,[ev,...mods]=en.split('.'),h=(e)=>{if(mods.includes('prevent'))e.preventDefault();if(mods.includes('stop'))e.stopPropagation();"
+                "if(mods.some(m=>['enter','escape','space','tab'].includes(m))&&!mods.some(m=>e.key.toLowerCase()===m))return;es(st,s,e,el)};"
+                "if(mods.includes('outside')){const oh=(e)=>{if(el.offsetWidth>0&&!el.contains(e.target)&&(!el._st||Date.now()-el._st>50))h(e)};document.addEventListener('click',oh);w.get(sc).cleanup.push(()=>document.removeEventListener('click',oh))}else{"
+                "const deb=mods.find(m=>m.startsWith('debounce')),ms=deb?parseInt(deb.split('-')[1])||300:0;if(ms){let t;const dh=(e)=>{clearTimeout(t);t=setTimeout(()=>h(e),ms)};el.addEventListener(ev,dh);w.get(sc).cleanup.push(()=>el.removeEventListener(ev,dh))}"
+                "else{el.addEventListener(ev,h);w.get(sc).cleanup.push(()=>el.removeEventListener(ev,h))}}});};"
+                "const init=(r=document)=>{const els=r===document?document.querySelectorAll('*'):[r,...r.querySelectorAll('*')];els.forEach(el=>{if(el.hasAttribute('asok-state'))is(el);if(el.hasAttribute('asok-ref')&&!el._ari){const sc=fss(el);if(sc){w.get(sc).refs[el.getAttribute('asok-ref')]=el;el._ari=1}}"
+                "if(el.hasAttribute('asok-teleport')&&!el._ati){const t=el.getAttribute('asok-teleport'),tg=document.querySelector(t),sc=fss(el);if(tg&&sc){const ctx=w.get(sc),n=el.content.cloneNode(true),child=n.firstElementChild;w.set(child,{state:ctx.state,refs:ctx.refs,cleanup:[],_ts:[]});ctx._ts.push(child);tg.appendChild(n);init(child);el._ati=1;el.style.display='none'}} if(el.tagName==='TEMPLATE' && !el._ai){const sc=fss(el);if(sc){const s=w.get(sc).state;if(el.hasAttribute('asok-if'))uif(el,s);if(el.hasAttribute('asok-for'))ufo(el,s)}}});els.forEach(el=>{const sc=fss(el);if(sc)ub(el,w.get(sc).state);if(el.hasAttribute('asok-model'))im(el);if(Array.from(el.attributes).some(a=>a.name.startsWith('asok-on:')))ie(el)});if(r===document)document.querySelectorAll('[asok-cloak]').forEach(e=>e.removeAttribute('asok-cloak'))};"
+                "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>init());else init();"
+                "if(window.Asok){const oi=window.Asok.init;window.Asok.init=(el)=>{if(oi)oi(el);init(el)}}"
+                "document.addEventListener('asok:success',e=>{if(e.detail&&e.detail.target)init(e.detail.target)});window.Asok=window.Asok||{};window.AsokDirectives={init,version:'1.0.0'};window.Asok.store=st;})()"
+                "</script>"
+            )
+
+        # 6. Live Reload (DEBUG only)
         if (
             self.config.get("DEBUG")
             and not is_block
@@ -1732,13 +1839,26 @@ class Asok:
                             "action"
                         )
                         if action_name:
+                            # Security: validate action name (alphanumeric + underscore only)
+                            if (
+                                not action_name.replace("_", "")
+                                .replace("-", "")
+                                .isalnum()
+                            ):
+                                action_name = None
+                            # Security: block private actions (starting with _)
+                            elif action_name.startswith("_"):
+                                action_name = None
+
+                        if action_name:
                             action_func = getattr(module, f"action_{action_name}", None)
                             if callable(action_func):
                                 res = action_func(req)
                                 if res is None:
                                     req.abort(
                                         500,
-                                        f"Action 'action_{action_name}' in {page_file} returned None.",
+                                        f"Action handler 'action_{action_name}' in {page_file} returned None. "
+                                        "Ensure your action returns request.html(), request.json(), or calls request.redirect().",
                                     )
                                 return res
 

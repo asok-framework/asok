@@ -5,11 +5,7 @@ Uses render_template_string (the actual public API).
 
 import json
 
-from asok.templates import (
-    SafeString,
-    html_safe_json,
-    render_template_string,
-)
+from asok.templates import SafeString, html_safe_json, render_template_string
 
 
 def render(src, **ctx):
