@@ -100,10 +100,56 @@ class FormField:
         attrs = _merge_attrs({"for": self.name}, overrides)
         return f"<label{_render_attrs(attrs)}>{escape(self._label)}</label>"
 
+    def _format_value_for_input(self) -> str:
+        """Format value appropriately for HTML5 input types."""
+        if not self.value:
+            return ""
+
+        val_str = str(self.value)
+
+        # Format for HTML5 date/time inputs
+        if self.type == "date":
+            # Convert "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS" to "YYYY-MM-DD"
+            if "T" in val_str:
+                return val_str.split("T")[0]
+            elif " " in val_str:
+                return val_str.split(" ")[0]
+            return val_str[:10] if len(val_str) >= 10 else val_str
+
+        elif self.type == "datetime-local":
+            # Convert to "YYYY-MM-DDTHH:MM" (no seconds, no timezone)
+            val_str = val_str.replace(" ", "T")  # Convert space to T
+            # Remove seconds, microseconds, and timezone
+            if "T" in val_str:
+                parts = val_str.split("T")
+                date_part = parts[0]
+                time_part = parts[1] if len(parts) > 1 else "00:00"
+                # Remove timezone info if present (+00:00, Z, etc.)
+                time_part = time_part.split("+")[0].split("-")[0].split("Z")[0]
+                # Keep only HH:MM
+                time_parts = time_part.split(":")
+                time_part = (
+                    ":".join(time_parts[:2]) if len(time_parts) >= 2 else time_part
+                )
+                return f"{date_part}T{time_part}"
+            return val_str
+
+        elif self.type == "time":
+            # Convert to "HH:MM"
+            if "T" in val_str:
+                val_str = val_str.split("T")[1]
+            elif " " in val_str:
+                val_str = val_str.split(" ")[1]
+            # Remove seconds and keep only HH:MM
+            time_parts = val_str.split(":")
+            return ":".join(time_parts[:2]) if len(time_parts) >= 2 else val_str
+
+        return val_str
+
     def render_input(self, **overrides: Any) -> str:
         """Internal method for rendering the HTML input element (input, select, or textarea)."""
         esc = escape
-        val = esc(str(self.value)) if self.value else ""
+        val = esc(self._format_value_for_input())
 
         if self.readonly:
             display = val if val else "—"
