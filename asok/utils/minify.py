@@ -41,14 +41,20 @@ def minify_html(html: str) -> str:
         )
 
     # 2. Aggressive minification
-    # Remove HTML comments (except IE conditional comments)
-    current_html = re.sub(r"<!--(?!\s*\[if).*?-->", "", current_html, flags=re.DOTALL)
+    # Remove HTML comments (except IE conditional comments and Asok markers)
+    # Preserve: <!-- block:name:start/end --> and <!-- page-id:name -->
+    current_html = re.sub(
+        r"<!--(?!\s*\[if)(?!\s*block:)(?!\s*page-id:).*?-->",
+        "",
+        current_html,
+        flags=re.DOTALL
+    )
 
     # Collapse multiple whitespaces/newlines into a single space everywhere
     current_html = re.sub(r"\s+", " ", current_html)
 
-    # Remove whitespace between tags
-    current_html = re.sub(r">\s+<", "><", current_html)
+    # Remove whitespace between tags (commented out for template safety)
+    # current_html = re.sub(r">\s+<", "><", current_html)
 
     # Remove whitespace around assignment operators in tags (optional but saves space)
     # current_html = re.sub(r'\s*=\s*', '=', current_html)

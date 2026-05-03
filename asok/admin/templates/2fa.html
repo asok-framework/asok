@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="{{ admin_locale | default('en') }}">
+
 <head>
   <script>
-    (function() {
+    (function () {
       var theme = localStorage.getItem('asok-theme') || 'light';
       document.documentElement.setAttribute('data-theme', theme);
     })();
@@ -14,57 +15,68 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ admin_prefix }}/static/admin.css">
+  {% if admin_favicon %}
+  <link rel="icon" type="image/x-icon" href="{{ static(admin_favicon) }}">
+  {% else %}
+  <link rel="icon" type="image/svg+xml" href="{{ static('logo.svg') }}">
+  {% endif %}
 </head>
+
 <body>
-{% from "macros.html" import icon, flash %}
+  {% from "macros.html" import icon, flash %}
 
-<div class="login-page">
-  <div class="login-card">
+  <div class="login-page">
+    <div class="login-card">
 
-    <div class="login-header">
-      <div style="width:56px; height:56px; border-radius:12px; background:var(--brand-pale); color:var(--brand); display:flex; align-items:center; justify-content:center; margin:0 auto 16px">
-        {{ icon('shield', 28) }}
+      <div class="login-header">
+        <div
+          style="width:56px; height:56px; border-radius:12px; background:var(--brand-pale); color:var(--brand); display:flex; align-items:center; justify-content:center; margin:0 auto 16px">
+          {{ icon('shield', 28) }}
+        </div>
+        <h1 class="login-title">{{ t('Two-factor Auth') }}</h1>
+        <p class="login-subtitle">{{ t('Enter the 6-digit code from your app') }}</p>
       </div>
-      <h1 class="login-title">{{ t('Two-factor Auth') }}</h1>
-      <p class="login-subtitle">{{ t('Enter the 6-digit code from your app') }}</p>
-    </div>
 
-    <div class="login-body">
-      {# Flash messages #}
-      {% set flashes = get_flashed_messages() %}
-      {% if flashes %}
+      <div class="login-body">
+        {# Flash messages #}
+        {% set flashes = get_flashed_messages() %}
+        {% if flashes %}
         <div class="login-flashes">
           {% for f in flashes %}
-            {{ flash(f.message, f.category | default('error')) }}
+          {{ flash(f.message, f.category | default('error')) }}
           {% endfor %}
         </div>
-      {% endif %}
+        {% endif %}
 
-      <form method="post" autocomplete="off">
-        {{ request.csrf_input() }}
-        <div class="form-group">
-          <label class="form-label" style="justify-content:center">{{ form.code._label }}</label>
-          {{ form.code.input(placeholder='000 000', autofocus=True, inputmode='numeric', pattern='[0-9]{6}', maxlength='6', style='font-size:1.75rem; letter-spacing:0.4em; text-align:center; height:60px; font-weight:700; color:var(--brand)') }}
-          {% if form.code.error %}
+        <form method="post" autocomplete="off">
+          {{ request.csrf_input() }}
+          <div class="form-group">
+            <label class="form-label" style="justify-content:center">{{ form.code._label }}</label>
+            {{ form.code.input(placeholder='000 000', autofocus=True, inputmode='numeric', pattern='[0-9]{6}',
+            maxlength='6', style='font-size:1.75rem; letter-spacing:0.4em; text-align:center; height:60px;
+            font-weight:700; color:var(--brand)') }}
+            {% if form.code.error %}
             <div class="form-error" style="justify-content:center">{{ icon('x', 14) }} {{ form.code.error }}</div>
-          {% endif %}
+            {% endif %}
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-lg"
+            style="width:100%; margin-top:24px; justify-content:center; border-radius:var(--r-lg)">
+            {{ icon('check', 16) }} {{ t('Verify & Sign In') }}
+          </button>
+        </form>
+
+        <div style="text-align:center; margin-top:20px">
+          <a href="{{ admin_prefix }}/logout" class="muted" style="font-size:0.875rem; text-decoration:none">
+            {{ icon('arrow-left', 12) }} {{ t('Back to Sign in') }}
+          </a>
         </div>
-
-        <button type="submit" class="btn btn-primary btn-lg" style="width:100%; margin-top:24px; justify-content:center; border-radius:var(--r-lg)">
-          {{ icon('check', 16) }} {{ t('Verify & Sign In') }}
-        </button>
-      </form>
-
-      <div style="text-align:center; margin-top:20px">
-        <a href="{{ admin_prefix }}/logout" class="muted" style="font-size:0.875rem; text-decoration:none">
-          {{ icon('arrow-left', 12) }} {{ t('Back to Sign in') }}
-        </a>
       </div>
+
     </div>
-
   </div>
-</div>
 
-<script src="{{ admin_prefix }}/static/admin.js"></script>
+  <script src="{{ admin_prefix }}/static/admin.js"></script>
 </body>
+
 </html>

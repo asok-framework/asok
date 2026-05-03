@@ -51,7 +51,7 @@ import threading
 import time
 from urllib.parse import quote, urlencode
 
-from ..exceptions import RedirectException
+from ..exceptions import AbortException, RedirectException
 from ..forms import Form
 from ..orm import MODELS_REGISTRY, ModelError, ModelList, Relation
 from ..templates import SafeString, render_block_string, render_template_string
@@ -59,6 +59,34 @@ from .translations import LOCALES, MESSAGES, translate
 
 # Admin permission verbs available per model
 ADMIN_VERBS = ["view", "add", "edit", "delete", "export"]
+
+
+class ModelAdmin:
+    """Base class for inner Admin configuration in Models to provide autocompletion.
+
+    Example:
+        class Contact(Model):
+            class Admin(ModelAdmin):
+                list_display = ["id", "name"]
+    """
+
+    label: str = None
+    slug: str = None
+    group: str = "General"
+    hidden: bool = False
+    list_display: list[str] = None
+    search_fields: list[str] = None
+    list_filter: list[str] = None
+    readonly_fields: list[str] = None
+    form_exclude: list[str] = None
+    fieldsets: list[tuple[str, list[str]]] = None
+    per_page: int = 20
+    inlines: list[str] = None
+    can_add: bool = True
+    can_edit: bool = True
+    can_delete: bool = True
+    actions: list[str] = None
+    vector_search_field: str = None
 
 # Above this many target rows, FK fields render as autocomplete instead of <select>
 FK_AUTOCOMPLETE_THRESHOLD = 200
@@ -142,6 +170,12 @@ def _user_can(self, perm):
     Permission format: "<slug>.<verb>" (e.g. "posts.edit").
     Special values: "*" (superuser), "<slug>.*" (all verbs on a slug).
     `is_admin = True` users bypass all checks.
+
+    SECURITY NOTE: Users with `is_admin = True` have unrestricted access
+    to all admin operations without granular permission checks. For production
+    systems requiring fine-grained access control, prefer using role-based
+    permissions instead of granting `is_admin` status. Only assign `is_admin`
+    to fully trusted administrators.
     """
     if getattr(self, "is_admin", False):
         return True
@@ -681,9 +715,24 @@ class Admin:
 
         raise RedirectException(back)
 
+    def _render_error(self, request, code, title, message):
+        """Render a beautiful error page consistent with admin design."""
+        request.status_code(code)
+        return self._render(
+            request,
+            "error.html",
+            error_code=code,
+            error_title=title,
+            error_message=message,
+        )
+
     def _forbid(self, request, msg="Forbidden"):
-        request.status_code(403)
-        return f"<h1>403 — {msg}</h1>"
+        return self._render_error(
+            request,
+            403,
+            self.t(request, "Access Denied"),
+            msg,
+        )
 
     # ── Dispatcher ───────────────────────────────────────────
 
@@ -780,8 +829,12 @@ class Admin:
         slug = parts[0]
         entry = self._registered.get(slug)
         if not entry:
-            request.status_code(404)
-            return "<h1>404</h1>"
+            return self._render_error(
+                request,
+                404,
+                self.t(request, "Page Not Found"),
+                self.t(request, "The page you are looking for does not exist or has been moved."),
+            )
 
         if not self._can(request, slug, "view"):
             return self._forbid(request)
@@ -819,16 +872,24 @@ class Admin:
         try:
             obj_id = int(action)
         except ValueError:
-            request.status_code(404)
-            return "<h1>404</h1>"
+            return self._render_error(
+                request,
+                404,
+                self.t(request, "Invalid ID"),
+                self.t(request, "The requested item could not be found."),
+            )
 
         if entry["model"]._soft_delete_field:
             item = entry["model"].with_trashed().where("id", obj_id).first()
         else:
             item = entry["model"].find(id=obj_id)
         if not item:
-            request.status_code(404)
-            return "<h1>404</h1>"
+            return self._render_error(
+                request,
+                404,
+                self.t(request, "Item Not Found"),
+                self.t(request, "The requested item does not exist or has been deleted."),
+            )
 
         if len(parts) == 3:
             sub = parts[2]
@@ -964,48 +1025,55 @@ class Admin:
                     f"Too many failed attempts. Try again in {remaining}s.",
                 )
                 return self._render(request, "login.html", form=form)
-        if form.validate():
-            user = request.authenticate(
-                email=form.email.value, password=form.password.value
-            )
-            if user and (
-                getattr(user, "is_admin", False)
-                or (hasattr(user, "roles") and user.roles)
-            ):
-                self._login_rate_reset(request)
-                _, totp_enabled = self._get_user_2fa(user.id)
-                if totp_enabled:
-                    # Demote to a pending-2FA state
-                    pending_uid = user.id
-                    request.logout()
-                    try:
-                        request.session["pending_2fa_uid"] = pending_uid
-                    except Exception:
-                        pass
-                    raise RedirectException(self.prefix + "/2fa")
+        try:
+            if form.validate():
+                user = request.authenticate(
+                    email=form.email.value, password=form.password.value
+                )
+                if user and (
+                    getattr(user, "is_admin", False)
+                    or (hasattr(user, "roles") and user.roles)
+                ):
+                    self._login_rate_reset(request)
+                    _, totp_enabled = self._get_user_2fa(user.id)
+                    if totp_enabled:
+                        # Demote to a pending-2FA state
+                        pending_uid = user.id
+                        request.logout()
+                        try:
+                            request.session["pending_2fa_uid"] = pending_uid
+                        except Exception:
+                            pass
+                        raise RedirectException(self.prefix + "/2fa")
+                    self._log(
+                        request,
+                        "login",
+                        "User",
+                        entity_id=getattr(user, "id", None),
+                    )
+                    request.flash(
+                        "success",
+                        self.t(
+                            request, "Welcome back, {name}!", name=user.name or user.email
+                        ),
+                    )
+                    raise RedirectException(self.prefix)
+                # Failed auth — count it
+                self._login_rate_record_failure(request)
                 self._log(
                     request,
-                    "login",
+                    "login_failed",
                     "User",
-                    entity_id=getattr(user, "id", None),
+                    entity_id=None,
+                    changes={"email": form.email.value},
                 )
-                request.flash(
-                    "success",
-                    self.t(
-                        request, "Welcome back, {name}!", name=user.name or user.email
-                    ),
-                )
-                raise RedirectException(self.prefix)
-            # Failed auth — count it
-            self._login_rate_record_failure(request)
-            self._log(
-                request,
-                "login_failed",
-                "User",
-                entity_id=None,
-                changes={"email": form.email.value},
-            )
-            request.flash("error", self.t(request, "Invalid credentials"))
+                request.flash("error", self.t(request, "Invalid credentials"))
+        except AbortException as e:
+            # Special handling for CSRF failure in login form to avoid 403 pages
+            if e.status == 403:
+                request.flash("error", self.t(request, "Security session expired. Please try again."))
+            else:
+                raise
         return self._render(request, "login.html", form=form)
 
     # ── 2FA / TOTP ───────────────────────────────────────────
@@ -1852,8 +1920,12 @@ class Admin:
 
     def _trash(self, request, entry):
         if not entry["model"]._soft_delete_field:
-            request.status_code(404)
-            return "<h1>No trash for this model</h1>"
+            return self._render_error(
+                request,
+                404,
+                self.t(request, "Trash Not Available"),
+                self.t(request, "This model does not support soft delete functionality."),
+            )
         return self._list(request, entry, trash=True)
 
     # ── Bulk + custom actions ────────────────────────────────
@@ -2248,7 +2320,7 @@ class Admin:
 
     # ── Form rendering ───────────────────────────────────────
 
-    def _field_meta(self, name, field, readonly_set):
+    def _field_meta(self, name, field, readonly_set, is_creation=False):
         """Build a Form factory tuple + extra metadata for one model field.
 
         Returns (form_field_tuple, meta_dict) or (None, None) if the field
@@ -2266,6 +2338,9 @@ class Admin:
         if getattr(field, "nullable", True) is False and not is_readonly:
             if not getattr(field, "is_password", False):
                 rules_parts.append("required")
+        # Password fields: required on creation, optional on edit
+        if getattr(field, "is_password", False) and is_creation and not is_readonly:
+            rules_parts.append("required")
         if getattr(field, "is_email", False):
             rules_parts.append("email")
         max_length = getattr(field, "max_length", None)
@@ -2293,10 +2368,10 @@ class Admin:
 
         if getattr(field, "is_password", False):
             meta["is_password"] = True
-            tup = Form.password(label, "", **attrs)
+            tup = Form.password(label, rules, **attrs)
         elif getattr(field, "is_file", False):
             meta["is_file"] = True
-            tup = Form.file(label, "", **attrs)
+            tup = Form.file(label, rules, **attrs)
         elif getattr(field, "is_foreign_key", False):
             target = field.related_model
             if isinstance(target, str):
@@ -2325,10 +2400,12 @@ class Admin:
                 choices = [("", "— None —")] + choices
                 tup = Form.select(label, choices, rules, **attrs)
         elif getattr(field, "is_boolean", False):
-            tup = Form.checkbox(label, "", **attrs)
+            tup = Form.checkbox(label, rules, **attrs)
+        elif getattr(field, "is_enum", False):
+            tup = Form.enum(label, field.enum_class, rules, **attrs)
         elif field.sql_type == "INTEGER":
             if name.startswith("is_") or name.startswith("has_"):
-                tup = Form.checkbox(label, "", **attrs)
+                tup = Form.checkbox(label, rules, **attrs)
             else:
                 tup = Form.number(label, rules, **attrs)
         elif field.sql_type == "REAL":
@@ -2372,11 +2449,12 @@ class Admin:
 
         schema = {}
         meta = {}
+        is_creation = not (item and getattr(item, 'id', None))
         for name, field in model._fields.items():
             # Skip excluded fields
             if name in form_exclude:
                 continue
-            tup, m = self._field_meta(name, field, readonly_set)
+            tup, m = self._field_meta(name, field, readonly_set, is_creation)
             if tup is None:
                 continue
             schema[name] = tup
@@ -2666,6 +2744,13 @@ class Admin:
         is_user = model.__name__ == auth_name
         editing_self = is_user and self._is_self(request, entry, item)
         for name, field in model._fields.items():
+            # Handle password fields BEFORE the protected check (passwords are protected but need special handling)
+            if getattr(field, "is_password", False):
+                val = request.form.get(name)
+                if val:
+                    setattr(item, name, val)
+                continue
+
             if (
                 name in readonly
                 or name in form_exclude
@@ -2689,15 +2774,11 @@ class Admin:
                     upload.save(os.path.join(field.upload_to or "", upload.filename))
                     setattr(item, name, upload.filename)
                 continue
-            if getattr(field, "is_password", False):
-                val = request.form.get(name)
-                if val:
-                    setattr(item, name, val)
-                continue
             raw = form._fields[name].value if name in form._fields else None
             if field.sql_type == "INTEGER":
                 if name.startswith("is_") or name.startswith("has_"):
-                    setattr(item, name, 1 if raw else 0)
+                    # Checkbox: raw is "0" or "1" (string), not boolean
+                    setattr(item, name, 1 if raw == "1" else 0)
                 elif raw in (None, ""):
                     setattr(item, name, None)
                 else:
@@ -2710,6 +2791,9 @@ class Admin:
                     setattr(item, name, float(raw) if raw else None)
                 except (ValueError, TypeError):
                     setattr(item, name, None)
+            elif getattr(field, "is_boolean", False):
+                # Boolean checkbox: raw is "0" or "1" (string)
+                setattr(item, name, 1 if raw == "1" else 0)
             else:
                 setattr(item, name, raw or None)
         return True
@@ -2739,7 +2823,7 @@ class Admin:
 
         try:
             item = entry["model"]()
-            form, meta = self._build_form(request, entry, None)
+            form, meta = self._build_form(request, entry, item)
 
             if not form.validate():
                 return self._edit_form(request, entry, item, form=form, meta=meta)

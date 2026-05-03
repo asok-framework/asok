@@ -9,58 +9,59 @@
     <p class="page-subtitle">{{ model_label[:-1] if model_label else '' }} <strong>#{{ item.id }}</strong></p>
   </div>
   <div class="page-actions">
-    <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}"
-       class="btn btn-default btn-sm"
-       data-spa>
+    <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}" class="btn btn-default btn-sm" data-spa>
       {{ icon('arrow-left', 14) }} {{ t('Back to edit') }}
     </a>
   </div>
 </div>
 
 {% if entries %}
-  <div style="display:flex;flex-direction:column;gap:16px">
-    {% for e in entries %}
-      <div class="card" style="overflow:hidden">
-        <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:{% if e.changes %}1px solid var(--border){% else %}none{% endif %};background:var(--surface-2)">
-          <div class="log-dot"></div>
-          {{ badge(e.action, 'brand') }}
-          <span style="font-size:0.9rem;font-weight:600">{{ e.who }}</span>
-          <span class="muted" style="font-size:0.8rem;margin-left:auto">{{ e.when }}</span>
-        </div>
-        {% if e.changes %}
-          <div class="table-wrap" style="border:none; border-radius:0; box-shadow:none">
-            <table>
-              <thead>
-                <tr>
-                  <th style="padding-left:20px">{{ t('Field') }}</th>
-                  <th>{{ t('Before') }}</th>
-                  <th>{{ t('After') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for c in e.changes %}
-                  <tr>
-                    <td style="padding-left:20px; width:200px">
-                      <code style="font-size:0.75rem;background:var(--bg);color:var(--brand);padding:2px 6px;border-radius:4px; font-weight:600">{{ c.field }}</code>
-                    </td>
-                    <td class="muted">{{ c.old if c.old is not None else '—' }}</td>
-                    <td style="font-weight:600; color:var(--fg)">{{ c.new if c.new is not None else '—' }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% endif %}
-      </div>
-    {% endfor %}
-  </div>
-{% else %}
-  <div class="empty-state">
-    <div style="width:64px; height:64px; border-radius:50%; background:var(--surface); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; margin-bottom:16px">
-      {{ icon('history', 24, 'empty-icon') }}
+<div style="display:flex;flex-direction:column;gap:16px">
+  {% for e in entries %}
+  <div class="card" style="overflow:hidden">
+    <div
+      style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:{% if e.changes %}1px solid var(--border){% else %}none{% endif %};background:var(--surface-2)">
+      <div class="log-dot"></div>
+      {{ badge(e.action, 'brand') }}
+      <span style="font-size:0.9rem;font-weight:600">{{ e.who }}</span>
+      <span class="muted" style="font-size:0.8rem;margin-left:auto">{{ e.when }}</span>
     </div>
-    <p class="empty-title">{{ t('No history records') }}</p>
-    <p class="empty-text">{{ t('There are no recorded changes for this item in the audit log.') }}</p>
+    {% if e.changes %}
+    <div class="table-wrap" style="border:none; border-radius:0; box-shadow:none">
+      <table>
+        <thead>
+          <tr>
+            <th style="padding-left:20px">{{ t('Field') }}</th>
+            <th>{{ t('Before') }}</th>
+            <th>{{ t('After') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in e.changes %}
+          <tr>
+            <td style="padding-left:20px; width:200px">
+              <code
+                style="font-size:0.75rem;background:var(--bg);color:var(--brand);padding:2px 6px;border-radius:4px; font-weight:600">{{ c.field }}</code>
+            </td>
+            <td class="muted">{{ c.old if c.old is not None else '—' }}</td>
+            <td style="font-weight:600; color:var(--fg)">{{ c.new if c.new is not None else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
   </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <div
+    style="width:64px; height:64px; border-radius:50%; background:var(--surface); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; margin-bottom:16px">
+    {{ icon('history', 24, 'empty-icon') }}
+  </div>
+  <p class="empty-title">{{ t('No history records') }}</p>
+  <p class="empty-text">{{ t('There are no recorded changes for this item in the audit log.') }}</p>
+</div>
 {% endif %}
 {% endblock %}

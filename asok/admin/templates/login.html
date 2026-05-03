@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="{{ admin_locale | default('en') }}">
+
 <head>
   <script>
-    (function() {
+    (function () {
       var theme = localStorage.getItem('asok-theme') || 'light';
       document.documentElement.setAttribute('data-theme', theme);
     })();
@@ -14,75 +15,85 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ admin_prefix }}/static/admin.css">
+  {% if admin_favicon %}
+  <link rel="icon" type="image/x-icon" href="{{ static(admin_favicon) }}">
+  {% else %}
+  <link rel="icon" type="image/svg+xml" href="{{ static('logo.svg') }}">
+  {% endif %}
 </head>
+
 <body>
-{% from "macros.html" import icon, flash %}
+  {% from "macros.html" import icon, flash %}
 
-<div class="login-page">
-  <div class="login-card">
+  <div class="login-page">
+    <div class="login-card">
 
-    <div class="login-header">
-      <img src="{{ static(admin_favicon or 'logo.svg') }}" alt="{{ admin_site_name }}" class="login-logo">
-      <h1 class="login-title">{{ admin_site_name }}</h1>
-      <p class="login-subtitle">{{ t('Secure access to your dashboard') }}</p>
-    </div>
+      <div class="login-header">
+        <img src="{{ static(admin_favicon or 'logo.svg') }}" alt="{{ admin_site_name }}" class="login-logo">
+        <h1 class="login-title">{{ admin_site_name }}</h1>
+        <p class="login-subtitle">{{ t('Secure access to your dashboard') }}</p>
+      </div>
 
-    <div class="login-body">
-      {# Flash messages #}
-      {% set flashes = get_flashed_messages() %}
-      {% if flashes %}
+      <div class="login-body">
+        {# Flash messages #}
+        {% set flashes = get_flashed_messages() %}
+        {% if flashes %}
         <div class="login-flashes">
           {% for f in flashes %}
-            {{ flash(f.message, f.category | default('error')) }}
+          {{ flash(f.message, f.category | default('error')) }}
           {% endfor %}
         </div>
-      {% endif %}
+        {% endif %}
 
-      <form method="post" action="{{ admin_prefix }}/login" id="login-form">
-        {{ request.csrf_input() }}
+        <form method="post" action="{{ admin_prefix }}/login" id="login-form">
+          {{ request.csrf_input() }}
 
-        <div class="form-group">
-          <label class="form-label" for="email">{{ t('Email Address') }}</label>
-          {{ form.email.input(placeholder='you@example.com', autocomplete='email', autofocus=True) }}
-          {% if form.email._error %}
-            <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+          <div class="form-group">
+            <label class="form-label" for="email">{{ t('Email Address') }}</label>
+            {{ form.email.input(placeholder='you@example.com', autocomplete='email', autofocus=True) }}
+            {% if form.email._error %}
+            <div class="form-error"
+              style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
               {{ icon('x', 14) }} {{ form.email._error }}
             </div>
-          {% endif %}
-        </div>
+            {% endif %}
+          </div>
 
-        <div class="form-group" style="margin-top:20px">
-          <label class="form-label" for="password">{{ t('Password') }}</label>
-          {{ form.password.input(placeholder='••••••••', autocomplete='current-password') }}
-          {% if form.password._error %}
-            <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
+          <div class="form-group" style="margin-top:20px">
+            <label class="form-label" for="password">{{ t('Password') }}</label>
+            {{ form.password.input(placeholder='••••••••', autocomplete='current-password') }}
+            {% if form.password._error %}
+            <div class="form-error"
+              style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
               {{ icon('x', 14) }} {{ form.password._error }}
             </div>
-          {% endif %}
-        </div>
+            {% endif %}
+          </div>
 
-        <button type="submit" class="btn btn-primary btn-lg" style="width:100%; margin-top:32px; justify-content:center; border-radius:var(--r-lg)">
-          {{ t('Sign in to dashboard') }} {{ icon('arrow-right', 16) }}
-        </button>
-      </form>
+          <button type="submit" class="btn btn-primary btn-lg"
+            style="width:100%; margin-top:32px; justify-content:center; border-radius:var(--r-lg)">
+            {{ t('Sign in to dashboard') }} {{ icon('arrow-right', 16) }}
+          </button>
+        </form>
 
-      {# Language switcher #}
-      {% if admin_locales | length > 1 %}
+        {# Language switcher #}
+        {% if admin_locales | length > 1 %}
         <div class="login-footer" style="padding: 24px 0 0; margin-top: 32px; border-top: 1px solid var(--border)">
           <span class="muted" style="margin-right:12px">{{ t('Language:') }}</span>
           {% for loc in admin_locales %}
-            <a href="{{ admin_prefix }}/lang?code={{ loc.code }}"
-               style="margin:0 8px; font-weight:600; font-size:0.8125rem; {% if loc.active %}color:var(--brand){% else %}color:var(--fg-3){% endif %}">
-              {{ loc.label }}
-            </a>
+          <a href="{{ admin_prefix }}/lang?code={{ loc.code }}"
+            style="margin:0 8px; font-weight:600; font-size:0.8125rem; {% if loc.active %}color:var(--brand){% else %}color:var(--fg-3){% endif %}">
+            {{ loc.label }}
+          </a>
           {% endfor %}
         </div>
-      {% endif %}
+        {% endif %}
+      </div>
+
     </div>
-
   </div>
-</div>
 
-<script src="{{ admin_prefix }}/static/admin.js"></script>
+  <script src="{{ admin_prefix }}/static/admin.js"></script>
 </body>
+
 </html>

@@ -16,6 +16,7 @@ import struct
 import threading
 import unicodedata
 import uuid
+import warnings
 from typing import Any, Generic, Optional, TypeVar, Union
 
 T = TypeVar("T", bound="Model")
@@ -176,6 +177,9 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ):
         self.sql_type: str = sql_type
         self.default: Any = default
@@ -183,6 +187,9 @@ class Field:
         self.nullable: bool = nullable
         self.hidden: bool = hidden
         self.protected: bool = protected
+        self.label: Optional[str] = label
+        self.rules: Optional[str] = rules
+        self.messages: dict[str, str] = messages or {}
 
     @staticmethod
     def String(
@@ -192,9 +199,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Short text, rendered as <input type="text">."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.max_length = max_length
         return f
 
@@ -206,9 +216,12 @@ class Field:
         wysiwyg: bool = False,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Long text, rendered as <textarea>."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_text = True
         f.wysiwyg = wysiwyg
         return f
@@ -221,9 +234,12 @@ class Field:
         wysiwyg: bool = False,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Text field indexed for full-text search (FTS5)."""
-        f = Field("TEXT", default, False, nullable, hidden, protected)
+        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
         f.searchable = True
         if max_length:
             f.max_length = max_length
@@ -240,9 +256,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Email field with automatic validation."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.max_length = max_length
         f.is_email = True
         return f
@@ -255,9 +274,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Telephone field with automatic validation."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.max_length = max_length
         f.is_tel = True
         return f
@@ -269,9 +291,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Integer number."""
-        return Field("INTEGER", default, unique, nullable, hidden, protected)
+        return Field("INTEGER", default, unique, nullable, hidden, protected, label, rules, messages)
 
     @staticmethod
     def Boolean(
@@ -280,9 +305,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Boolean value, rendered as a checkbox."""
-        f = Field("INTEGER", default, unique, nullable, hidden, protected)
+        f = Field("INTEGER", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_boolean = True
         return f
 
@@ -294,9 +322,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Floating-point number."""
-        f = Field("REAL", default, unique, nullable, hidden, protected)
+        f = Field("REAL", default, unique, nullable, hidden, protected, label, rules, messages)
         f.precision = precision
         return f
 
@@ -307,9 +338,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Date without time."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_date = True
         return f
 
@@ -320,9 +354,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Date and time."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_datetime = True
         return f
 
@@ -333,9 +370,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Time only."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_time = True
         return f
 
@@ -346,14 +386,27 @@ class Field:
         unique: bool = False,
         nullable: bool = False,
         autocomplete: bool = False,
+        dropdown: bool = False,
+        dropdown_title: str = "name",
+        dropdown_subtitle: Optional[str] = None,
+        dropdown_image: Optional[str] = None,
+        dropdown_searchable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Relationship column pointing to another model."""
-        f = Field("INTEGER", default, unique, nullable, hidden, protected)
+        f = Field("INTEGER", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_foreign_key = True
         f.related_model = model_class
         f.autocomplete = autocomplete
+        f.dropdown = dropdown
+        f.dropdown_title = dropdown_title
+        f.dropdown_subtitle = dropdown_subtitle
+        f.dropdown_image = dropdown_image
+        f.dropdown_searchable = dropdown_searchable
         return f
 
     @staticmethod
@@ -364,19 +417,27 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Uploaded file reference."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_file = True
         f.upload_to = upload_to
         return f
 
     @staticmethod
     def Password(
-        default: Any = None, unique: bool = False, nullable: bool = False
+        default: Any = None,
+        unique: bool = False,
+        nullable: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Hashed password field, hidden in forms and protected from mass assignment."""
-        f = Field("TEXT", default, unique, nullable, hidden=True, protected=True)
+        f = Field("TEXT", default, unique, nullable, hidden=True, protected=True, label=label, rules=rules, messages=messages)
         f.is_password = True
         return f
 
@@ -409,9 +470,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Field for storing JSON objects as text."""
-        f = Field("TEXT", default, False, nullable, hidden, protected)
+        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
         f.is_json = True
         return f
 
@@ -422,11 +486,33 @@ class Field:
         nullable: bool = False,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Restricted values from a Python Enum."""
-        f = Field("TEXT", default, False, nullable, hidden, protected)
+        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
         f.is_enum = True
         f.enum_class = enum_class
+        return f
+
+    @staticmethod
+    def Dropdown(
+        choices: list[tuple[Any, str]],
+        default: Any = None,
+        nullable: bool = False,
+        hidden: bool = False,
+        protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
+        searchable: bool = True,
+    ) -> Field:
+        """Field for fixed-choice dropdowns with rich UI support."""
+        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
+        f.is_dropdown = True
+        f.choices = choices
+        f.dropdown_searchable = searchable
         return f
 
     @staticmethod
@@ -437,9 +523,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Fixed-point decimal for currencies/accuracy."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_decimal = True
         f.precision = precision
         return f
@@ -451,9 +540,12 @@ class Field:
         nullable: bool = False,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Universal unique identifier."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_uuid = True
         return f
 
@@ -465,9 +557,12 @@ class Field:
         hidden: bool = False,
         protected: bool = False,
         always_update: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """URL-friendly string automatically generated from another field."""
-        f = Field("TEXT", None, unique, nullable, hidden, protected)
+        f = Field("TEXT", None, unique, nullable, hidden, protected, label, rules, messages)
         f.is_slug = True
         f.populate_from = populate_from
         f.always_update = always_update
@@ -480,9 +575,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """URL string with validation."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_url = True
         return f
 
@@ -493,9 +591,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Hex color code, rendered as <input type="color">."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected)
+        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
         f.is_color = True
         return f
 
@@ -506,9 +607,12 @@ class Field:
         nullable: bool = True,
         hidden: bool = False,
         protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
     ) -> Field:
         """Vector field for storing embeddings (BLOB)."""
-        f = Field("BLOB", default, False, nullable, hidden, protected)
+        f = Field("BLOB", default, False, nullable, hidden, protected, label, rules, messages)
         f.is_vector = True
         f.dimensions = dimensions
         return f
@@ -650,6 +754,8 @@ class Query(Generic[T]):
             raise ValueError(f"Invalid column: {column}")
         self._wheres.append(f"{column} IS NULL")
         return self
+
+
 
     def where_not_null(self, column: str) -> Query[T]:
         """Filter rows where column is NOT NULL."""
@@ -854,12 +960,41 @@ class Query(Generic[T]):
         return self.count() > 0
 
     def delete(self) -> int:
-        """Bulk delete matching records."""
+        """Bulk delete matching records (handles soft delete if enabled)."""
+        if self.model._soft_delete_field:
+            return self.update(
+                **{self.model._soft_delete_field: datetime.datetime.now().isoformat()}
+            )
         sql = f"DELETE FROM {self.model._table}"
         sql += self._build_where()
         with self.model._get_conn() as conn:
             cursor = conn.execute(sql, self._args)
             return cursor.rowcount
+
+    def force_delete(self) -> int:
+        """Bulk delete matching records permanently, bypassing soft delete."""
+        sql = f"DELETE FROM {self.model._table}"
+        sql += self._build_where()
+        with self.model._get_conn() as conn:
+            cursor = conn.execute(sql, self._args)
+            return cursor.rowcount
+
+    def paginate(self, page: int = 1, per_page: int = 10) -> dict[str, Any]:
+        """Paginate the current query and return results with metadata.
+
+        Example:
+            User.query().where("active", 1).paginate(page=2)
+        """
+        total = self.count()
+        pages = math.ceil(total / per_page)
+        items = self.limit(per_page).offset((page - 1) * per_page).get()
+
+        return {
+            "items": items,
+            "total": total,
+            "pages": pages,
+            "current_page": page,
+        }
 
 
 class ModelMeta(type):
@@ -1020,6 +1155,14 @@ class Model(metaclass=ModelMeta):
             if val is not None:
                 if hasattr(field, "is_file") and not isinstance(val, FileRef):
                     val = FileRef(val, field.upload_to)
+                elif hasattr(field, "is_boolean"):
+                    # Convert string/bool to int (0 or 1)
+                    if isinstance(val, str):
+                        val = 1 if val and val != "0" else 0
+                    elif isinstance(val, bool):
+                        val = 1 if val else 0
+                    elif val:
+                        val = int(bool(val))
                 elif hasattr(field, "is_json") and isinstance(val, str):
                     try:
                         val = json.loads(val)
@@ -1178,6 +1321,29 @@ class Model(metaclass=ModelMeta):
                 conn.execute(ad)
                 conn.execute(au)
 
+            # Create pivot tables for BelongsToMany relationships
+            if hasattr(cls, "_relations"):
+                for rel_name, rel in cls._relations.items():
+                    if rel.type == "BelongsToMany":
+                        # Compute pivot table name and foreign keys
+                        a = cls.__name__.lower()
+                        b = rel.target_model_name.lower()
+                        pivot_table = rel.pivot_table or "_".join(sorted([a, b]))
+                        pivot_fk = rel.pivot_fk or f"{a}_id"
+                        pivot_other_fk = rel.pivot_other_fk or f"{b}_id"
+
+                        # Create the pivot table
+                        pivot_sql = f"""
+                        CREATE TABLE IF NOT EXISTS {pivot_table} (
+                            {pivot_fk} INTEGER NOT NULL,
+                            {pivot_other_fk} INTEGER NOT NULL,
+                            PRIMARY KEY ({pivot_fk}, {pivot_other_fk}),
+                            FOREIGN KEY ({pivot_fk}) REFERENCES {cls._table}(id) ON DELETE CASCADE,
+                            FOREIGN KEY ({pivot_other_fk}) REFERENCES {_pluralize(b)}(id) ON DELETE CASCADE
+                        )
+                        """
+                        conn.execute(pivot_sql)
+
     @classmethod
     def create(cls: type[T], _trust: bool = False, **kwargs: Any) -> T:
         """Create a new model instance, save it to the database, and return it."""
@@ -1327,7 +1493,11 @@ class Model(metaclass=ModelMeta):
             elif hasattr(field, "is_decimal"):
                 values.append(str(val))
             elif hasattr(field, "is_enum"):
-                values.append(val.value)
+                # Handle both Enum objects and raw strings
+                if isinstance(val, enum.Enum):
+                    values.append(val.value)
+                else:
+                    values.append(val)
             elif hasattr(field, "is_vector"):
                 if val is None:
                     values.append(None)
@@ -1545,6 +1715,28 @@ class Model(metaclass=ModelMeta):
         Good:  ``User.raw("SELECT * FROM users WHERE email = ?", [email])``
         Bad:   ``User.raw(f"SELECT * FROM users WHERE email = '{email}'")``
         """
+        # SECURITY: Warn if SQL contains suspicious patterns that might indicate
+        # direct user input interpolation instead of parameterized queries
+
+        # Check for common SQL injection patterns
+        suspicious_patterns = [
+            r"=\s*['\"].*?['\"]",  # = 'value' or = "value"
+            r"(?:WHERE|AND|OR)\s+.*?=\s*f['\"]",  # f-string interpolation
+            r"\{.*?\}",  # Python f-string placeholders
+            r"%\(.*?\)",  # Python % formatting
+        ]
+
+        for pattern in suspicious_patterns:
+            if re.search(pattern, sql, re.IGNORECASE):
+                warnings.warn(
+                    f"SECURITY WARNING: Raw SQL query may contain interpolated values. "
+                    f"Use parameterized queries with '?' placeholders and pass values via args parameter. "
+                    f"Query: {sql[:100]}...",
+                    UserWarning,
+                    stacklevel=2
+                )
+                break
+
         with cls._get_conn() as conn:
             rows = conn.execute(sql, args or []).fetchall()
         return ModelList(cls(**dict(row)) for row in rows)
@@ -1718,41 +1910,15 @@ class Model(metaclass=ModelMeta):
         return q
 
     @classmethod
-    def paginate(cls, page=1, per_page=10, order_by=None, **kwargs):
-        for k in kwargs:
-            if not cls._valid_column(k):
-                raise ValueError(f"Invalid column: {k}")
-        offset = (page - 1) * per_page
-        wheres = [f"{k} = ?" for k in kwargs]
-        args = list(kwargs.values())
-        sd = cls._soft_delete_where()
-        if sd:
-            wheres.append(sd)
-        if wheres:
-            where_clause = " WHERE " + " AND ".join(wheres)
-        else:
-            where_clause = ""
-        sql = f"SELECT * FROM {cls._table}{where_clause}"
-        count_sql = f"SELECT COUNT(*) FROM {cls._table}{where_clause}"
-        count_args = list(args)
+    def paginate(cls, page: int = 1, per_page: int = 10, order_by: Optional[str] = None, **kwargs: Any) -> dict[str, Any]:
+        """Paginate results matching the given criteria.
 
+        Example:
+            User.paginate(page=1, per_page=10, active=1)
+        """
+        q = cls.query()
+        for k, v in kwargs.items():
+            q.where(k, v)
         if order_by:
-            col = order_by.lstrip("-")
-            if not cls._valid_column(col):
-                raise ValueError(f"Invalid column for order_by: {col}")
-            direction = "DESC" if order_by.startswith("-") else "ASC"
-            sql += f" ORDER BY {col} {direction}"
-
-        sql += " LIMIT ? OFFSET ?"
-        args += [per_page, offset]
-
-        with cls._get_conn() as conn:
-            rows = conn.execute(sql, args).fetchall()
-            total = conn.execute(count_sql, count_args).fetchone()[0]
-
-        return {
-            "items": [cls(**dict(row)) for row in rows],
-            "total": total,
-            "pages": math.ceil(total / per_page),
-            "current_page": page,
-        }
+            q.order_by(order_by)
+        return q.paginate(page, per_page)

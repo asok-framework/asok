@@ -478,10 +478,61 @@
             container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
                 cb.addEventListener('change', updateHidden);
             });
-            
+
             // Initial sync
             updateHidden();
         });
+
+        // 5. Permission Matrix Handling
+        const permInput = document.getElementById('perm-input');
+        const permWildcard = document.getElementById('perm-wildcard');
+
+        if (permInput && permWildcard) {
+            const updatePermissions = () => {
+                if (permWildcard.checked) {
+                    permInput.value = '*';
+                    // Disable all individual checkboxes when wildcard is active
+                    document.querySelectorAll('.perm-cb, .perm-row-all').forEach(cb => {
+                        cb.disabled = true;
+                        cb.checked = true;
+                    });
+                } else {
+                    // Re-enable checkboxes
+                    document.querySelectorAll('.perm-cb, .perm-row-all').forEach(cb => {
+                        cb.disabled = false;
+                    });
+
+                    // Collect individual permissions
+                    const perms = Array.from(document.querySelectorAll('.perm-cb:checked'))
+                        .map(cb => cb.dataset.perm)
+                        .filter(p => p);
+                    permInput.value = perms.join(',');
+                }
+            };
+
+            // Wildcard checkbox
+            permWildcard.addEventListener('change', updatePermissions);
+
+            // Individual permission checkboxes
+            document.querySelectorAll('.perm-cb').forEach(cb => {
+                cb.addEventListener('change', updatePermissions);
+            });
+
+            // Row "select all" checkboxes
+            document.querySelectorAll('.perm-row-all').forEach(rowCb => {
+                rowCb.addEventListener('change', (e) => {
+                    const slug = rowCb.dataset.slug;
+                    const checked = rowCb.checked;
+                    document.querySelectorAll(`.perm-cb[data-perm^="${slug}."]`).forEach(cb => {
+                        cb.checked = checked;
+                    });
+                    updatePermissions();
+                });
+            });
+
+            // Initial sync
+            updatePermissions();
+        }
 
         // Sidebar Search Filtering
         const navSearch = document.getElementById('nav-search');

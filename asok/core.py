@@ -16,7 +16,7 @@ import secrets
 import sys
 import traceback
 from typing import Any, Callable, Iterator, Optional, Union
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from .exceptions import AbortException, RedirectException
 from .orm import Model
@@ -59,7 +59,8 @@ class SmartStreamer:
         # We only minify at runtime if explicitly enabled or if in DEBUG mode.
         should_minify = self.app.config.get("HTML_MINIFY")
         if should_minify is None:
-            should_minify = self.app.config.get("DEBUG", True)
+            # Minify in production (DEBUG=False), skip in development (DEBUG=True)
+            should_minify = not self.app.config.get("DEBUG", False)
 
         def finalize(text):
             if not should_minify or not text:
@@ -73,8 +74,9 @@ class SmartStreamer:
                 full_content += chunk_str
 
             # Now inject all assets in one go on the complete document
+            # Note: stream=True to inject page-id marker for streaming
             final_content = self.app._inject_assets(
-                full_content, self.request, self.nonce, stream=False, only_scripts=False
+                full_content, self.request, self.nonce, stream=True, only_scripts=False
             )
 
             yield write(finalize(final_content).encode("utf-8"))
@@ -197,7 +199,9 @@ class Asok:
                 sec_key = f"dev-secret-{h}"
                 logger.warning(
                     "Running with auto-generated SECRET_KEY (DEBUG mode). "
-                    "Set SECRET_KEY in your .env before deploying to production."
+                    "Set SECRET_KEY in your .env before deploying to production. "
+                    "SECURITY WARNING: The auto-generated key is predictable and creates "
+                    "session fixation risks. Never use DEBUG mode in production."
                 )
             else:
                 raise RuntimeError(
@@ -213,7 +217,7 @@ class Asok:
         mw_dir = os.path.join(self.root_dir, self.dirs["MIDDLEWARES"])
         if os.path.exists(mw_dir):
             for filename in sorted(os.listdir(mw_dir)):
-                if filename.endswith(".py") and not filename.startswith("__"):
+                if (filename.endswith(".py") or filename.endswith(".pyc")) and not filename.startswith("__"):
                     filepath = os.path.join(mw_dir, filename)
                     spec = importlib.util.spec_from_file_location(
                         f"mw_{filename}", filepath
@@ -227,7 +231,7 @@ class Asok:
         model_dir = os.path.join(self.root_dir, self.dirs["MODELS"])
         if os.path.exists(model_dir):
             for filename in sorted(os.listdir(model_dir)):
-                if filename.endswith(".py") and not filename.startswith("__"):
+                if (filename.endswith(".py") or filename.endswith(".pyc")) and not filename.startswith("__"):
                     filepath = os.path.join(model_dir, filename)
                     spec = importlib.util.spec_from_file_location(
                         f"model_{filename}", filepath
@@ -250,10 +254,11 @@ class Asok:
             import sys as _sys
 
             for filename in sorted(os.listdir(comp_dir)):
-                if filename.endswith(".py") and not filename.startswith("__"):
+                if (filename.endswith(".py") or filename.endswith(".pyc")) and not filename.startswith("__"):
                     filepath = os.path.join(comp_dir, filename)
-                    # Use name WITHOUT .py so inspect.getfile() can resolve the path
-                    mod_name = f"comp_{filename[:-3]}"
+                    # Use name WITHOUT extension so inspect.getfile() can resolve the path
+                    ext_len = 4 if filename.endswith(".pyc") else 3
+                    mod_name = f"comp_{filename[:-ext_len]}"
                     spec = importlib.util.spec_from_file_location(mod_name, filepath)
                     mod = importlib.util.module_from_spec(spec)
                     # Register before exec so inspect.getmodule() finds it
@@ -494,7 +499,7 @@ class Asok:
     ) -> tuple[Optional[str], dict[str, Any]]:
         """Recursively walk the pages directory to find a matching route file."""
         if not segments:
-            for ext in (".py", ".html"):
+            for ext in (".py", ".pyc", ".html"):
                 p = os.path.join(current_base, self.config["INDEX"] + ext)
                 if os.path.isfile(p):
                     return p, captured_params
@@ -580,7 +585,7 @@ class Asok:
         self, request: Request, code: int, message: Optional[str] = None
     ) -> str:
         """Render a custom error page or return a fallback heading."""
-        for ext in (".html", ".py"):
+        for ext in (".html", ".py", ".pyc"):
             error_file = os.path.join(
                 self.root_dir, self.dirs["PAGES"], str(code), self.config["INDEX"] + ext
             )
@@ -611,7 +616,7 @@ class Asok:
                         if os.path.isfile(p):
                             request.scoped_assets[a_ext] = p
 
-                    if ext == ".py":
+                    if ext in (".py", ".pyc"):
                         mod = self._load_module(error_file)
                         if hasattr(mod, "render"):
                             # Update request params to include shared vars for the template
@@ -756,22 +761,27 @@ class Asok:
                 self._session_store.save(sid, request._session)
             # Always send the cookie (not just when modified)
             signed = self._sign(sid)
-            debug = self.config.get("DEBUG")
-            cookie = f"asok_sid={signed}; HttpOnly; Path=/; SameSite=Lax; Max-Age={self.config['SESSION_TTL']}"
-            if not debug:
+            # SECURITY: SameSite=Strict provides better CSRF protection than Lax
+            cookie = f"asok_sid={signed}; HttpOnly; Path=/; SameSite=Strict; Max-Age={self.config['SESSION_TTL']}"
+            if request.scheme == "https":
                 cookie += "; Secure"
             headers.append(("Set-Cookie", cookie))
-        csrf_cookie = f"{request._csrf_cookie_name}={request.csrf_token_value}; Path=/; HttpOnly; SameSite=Lax"
-        if not self.config.get("DEBUG"):
-            csrf_cookie += "; Secure"
-        headers.append(("Set-Cookie", csrf_cookie))
+        # Only send CSRF cookie if it's new or changed
+        incoming_csrf = request.cookies_dict.get(request._csrf_cookie_name)
+        if request.csrf_token_value and request.csrf_token_value != incoming_csrf:
+            # SECURITY: SameSite=Strict provides better CSRF protection than Lax
+            csrf_cookie = f"{request._csrf_cookie_name}={request.csrf_token_value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+            if request.scheme == "https":
+                csrf_cookie += "; Secure"
+            headers.append(("Set-Cookie", csrf_cookie))
         if request._new_flashes and not request._new_flashes_consumed:
             # Redirect case: persist new flashes for next request (HMAC-signed)
             signed_flash = self._sign(json.dumps(request._new_flashes))
+            # SECURITY: SameSite=Strict provides better CSRF protection than Lax
             headers.append(
                 (
                     "Set-Cookie",
-                    f"{request._flash_cookie_name}={quote(signed_flash)}; Path=/; HttpOnly; SameSite=Lax",
+                    f"{request._flash_cookie_name}={quote(signed_flash)}; Path=/; HttpOnly; SameSite=Strict",
                 )
             )
         elif request.flashed_messages or request._new_flashes_consumed:
@@ -882,19 +892,21 @@ class Asok:
                             1,
                         )
 
-                marker = f'\n<div id="asok-page-id-marker" data-page-id="{page_id}" style="display:none"></div>\n'
-                if "</body>" in content.lower():
+                # Inject page-id marker ONLY for streaming (to indicate where to inject stream content)
+                if stream:
+                    marker = f'<!-- page-id:{page_id} -->\n'
+                    if "</body>" in content.lower():
 
-                    def inject_marker(m):
-                        return marker + m.group(1)
+                        def inject_marker(m):
+                            return marker + m.group(1)
 
-                    content = re.sub(
-                        r"(</body>)", inject_marker, content, flags=re.I, count=1
-                    )
-                    request._asok_page_id_done = True
-                elif not stream:
-                    content += marker
-                    request._asok_page_id_done = True
+                        content = re.sub(
+                            r"(</body>)", inject_marker, content, flags=re.I, count=1
+                        )
+                        request._asok_page_id_done = True
+                    else:
+                        content += marker
+                        request._asok_page_id_done = True
 
             # 2. Inject Scoped CSS
             if not getattr(request, "_asok_css_done", False):
@@ -1067,19 +1079,36 @@ class Asok:
                 "window.__asokClearCache=function(){Object.keys(ca).forEach(k=>delete ca[k])};"
                 "function ct(){const m=document.querySelector('meta[name=csrf-token]');return m?m.content:''}"
                 "function qb(s){if(!s)return null;let t;try{t=document.querySelector(s)}catch(e){}"
-                "if(!t&&/^[a-zA-Z0-9_-]+$/.test(s))t=document.getElementById(s);return t}"
+                "if(!t&&/^[a-zA-Z0-9_-]+$/.test(s))t=document.getElementById(s);"
+                "if(!t&&/^[a-zA-Z0-9_-]+$/.test(s)){"
+                "const it=document.createNodeIterator(document.body,NodeFilter.SHOW_COMMENT);"
+                "let c;while(c=it.nextNode()){if(c.textContent.trim()==='block:'+s+':start'){"
+                "t={_isBlockMarker:true,_blockName:s,_startMarker:c};break}}}return t}"
                 "function doSwap(t,h,mode){"
                 "  const raw=function(t,h,mode){"
+                "    if(t._isBlockMarker){"
+                "const start=t._startMarker,name=t._blockName;"
+                "const it=document.createNodeIterator(document.body,NodeFilter.SHOW_COMMENT);"
+                "let c,end=null;while(c=it.nextNode()){if(c===start){while(c=it.nextNode()){"
+                "if(c.textContent.trim()==='block:'+name+':end'){end=c;break}}break}}"
+                "if(!end)return;"
+                "const nodes=[];let n=start.nextSibling;while(n&&n!==end){nodes.push(n);n=n.nextSibling}"
+                "nodes.forEach(function(x){x.remove()});"
+                "const tmp=document.createElement('div');tmp.innerHTML=h;"
+                "Array.from(tmp.childNodes).forEach(function(x){start.parentNode.insertBefore(x,end)})"
+                "    }else{"
                 "    (window.Asok&&window.Asok.swap)?window.Asok.swap(t,h,mode):t.innerHTML=h;"
+                "    }"
                 "  };"
                 "  raw(t,h,mode);"
-                "  if(window.Asok&&window.Asok.init)window.Asok.init(t);"
-                "  document.dispatchEvent(new CustomEvent('asok:success',{detail:{target:t,mode:mode}}));"
+                "  const realTarget=t._isBlockMarker?t._startMarker.parentNode:t;"
+                "  if(window.Asok&&window.Asok.init)window.Asok.init(realTarget);"
+                "  document.dispatchEvent(new CustomEvent('asok:success',{detail:{target:realTarget,mode:mode}}));"
                 "}"
                 "function sw(url,b,sel,mode,opts,src){"
                 "if(document.dispatchEvent(new CustomEvent('asok:before',{detail:{url:url,block:b}}))===false)return;"
                 "const h=Object.assign({'X-Block':b,'X-CSRF-Token':ct()},opts.headers||{});"
-                "opts.headers=h;"
+                "opts.headers=h;opts.credentials='same-origin';"
                 "const key=url+b;const p=ca[key]?Promise.resolve(ca[key]):fetch(url,opts).then(function(r){"
                 "if(!r.ok){document.dispatchEvent(new CustomEvent('asok:error',{detail:{url:url,status:r.status}}));return r.text().then(function(t){throw t})}"
                 "const redir=r.headers.get('X-Asok-Redirect');"
@@ -1108,7 +1137,8 @@ class Asok:
                 "const get=function(s){let e=d.querySelector(s);if(!e){const ts=d.querySelectorAll('template');for(let i=0;i<ts.length;i++){e=ts[i].content.querySelector(s);if(e)break}}return e};"
                 "const scs=get('#asok-scoped-css');const oldCss=document.getElementById('asok-scoped-css');if(scs){if(oldCss)oldCss.remove();document.head.appendChild(scs)}else if(oldCss&&isP){oldCss.remove()}"
                 "const scj=get('#asok-scoped-js');const oldJs=document.getElementById('asok-scoped-js');if(scj){if(oldJs)oldJs.remove();const ns=document.createElement('script');ns.id='asok-scoped-js';if(scj.nonce)ns.nonce=scj.nonce;ns.textContent=scj.textContent;document.body.appendChild(ns)}else if(oldJs&&isP){oldJs.remove()}"
-                "const pid=get('#asok-page-id-marker');if(pid){document.body.dataset.pageId=pid.dataset.pageId}else if(isP){delete document.body.dataset.pageId}"
+                "const findPageId=function(){const it=d.createNodeIterator(d.body,NodeFilter.SHOW_COMMENT);let c;while(c=it.nextNode()){const m=c.textContent.match(/^\\s*page-id:(.+)$/);if(m)return m[1].trim()}return null};"
+                "const pid=findPageId();if(pid){document.body.dataset.pageId=pid}else if(isP){delete document.body.dataset.pageId}"
                 "if(isP){"
                 "const ov=document.getElementById('search-overlay');if(ov)ov.classList.remove('open');"
                 "const mm=document.getElementById('mobile-menu');if(mm)mm.classList.add('hidden');"
@@ -1120,7 +1150,7 @@ class Asok:
                 "}"
                 "},function(){})"
                 "}"
-                "function pf(u,b){if(ca[u+b]||!u||!b)return;fetch(u,{headers:{'X-Block':b,'X-Prefetch':'1'}}).then(function(r){if(r.ok)r.text().then(function(t){ca[u+b]=t})})}"
+                "function pf(u,b){if(ca[u+b]||!u||!b)return;fetch(u,{headers:{'X-Block':b,'X-Prefetch':'1'},credentials:'same-origin'}).then(function(r){if(r.ok)r.text().then(function(t){ca[u+b]=t})})}"
                 "function resolve(el){"
                 "const b=el.dataset.block;if(!b)return null;"
                 "const sel=el.dataset.target||b.split(',')[0];"
@@ -1364,6 +1394,8 @@ class Asok:
                     "asok-ref",
                     "asok-teleport",
                     "asok-cloak",
+                    "asok-fetch",
+                    "asok-fetch-async",
                 ]
             )
             and not is_block
@@ -1372,42 +1404,93 @@ class Asok:
         if needs_directives:
             request._asok_directives_done = True
             request._asok_pending_styles += (
-                f'<style nonce="{nonce}">[asok-cloak]{{display:none!important}}</style>'
+                f'<style nonce="{nonce}">'
+                '[asok-cloak]{display:none!important}'
+                '.asok-dropdown{position:relative;width:100%}'
+                '.asok-dropdown-trigger{display:flex;align-items:center;justify-content:space-between;width:100%;padding:0.75rem 1rem;border:1px solid var(--asok-border,#ccc);border-radius:8px;background:var(--asok-input-bg,#fff);cursor:pointer;font-family:inherit;font-size:1rem;text-align:left}'
+                '.asok-dropdown-arrow{transition:transform 0.2s;margin-left:auto}'
+                '.asok-dropdown-menu{position:absolute;top:100%;left:0;right:0;z-index:50;margin-top:0.5rem;background:var(--asok-dropdown-bg,rgba(255,255,255,0.95));border:1px solid var(--asok-border,#ccc);border-radius:8px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);overflow:hidden;backdrop-filter:blur(8px)}'
+                '.asok-dropdown-search{padding:0.5rem;border-bottom:1px solid var(--asok-border,#eee)}'
+                '.asok-dropdown-search input{width:100%;padding:0.5rem;border:none;outline:none;background:transparent;font-size:0.9rem}'
+                '.asok-dropdown-items{max-height:250px;overflow-y:auto}'
+                '.asok-dropdown-item{display:flex;align-items:center;padding:0.75rem 1rem;cursor:pointer;transition:background 0.2s}'
+                '.asok-dropdown-item:hover{background:var(--asok-hover,#f3f4f6)}'
+                '.asok-dropdown-item-img{width:32px;height:32px;border-radius:50%;margin-right:0.75rem;object-fit:cover}'
+                '.asok-dropdown-item-title{font-weight:500;color:var(--asok-text,#111)}'
+                '.asok-dropdown-item-subtitle{font-size:0.8rem;color:var(--asok-text-muted,#666)}'
+                '.asok-table-container{width:100%;background:var(--asok-table-bg,#fff);border:1px solid var(--asok-border,#eee);border-radius:12px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1)}'
+                '.asok-table-header{display:flex;align-items:center;justify-content:space-between;padding:1rem;background:var(--asok-table-header-bg,#f9fafb);border-bottom:1px solid var(--asok-border,#eee);gap:1rem;flex-wrap:wrap}'
+                '.asok-table-wrapper{width:100%;overflow-x:auto}'
+                '.asok-table{width:100%;border-collapse:collapse;text-align:left;font-size:0.95rem}'
+                '.asok-table th{padding:0.75rem 1rem;background:var(--asok-table-header-bg,#f9fafb);font-weight:600;color:var(--asok-text-muted,#4b5563);text-transform:uppercase;font-size:0.75rem;letter-spacing:0.05em}'
+                '.asok-table td{padding:1rem;border-bottom:1px solid var(--asok-border,#eee);color:var(--asok-text,#1f2937)}'
+                '.asok-table tr:hover{background:var(--asok-hover,#f3f4f6)}'
+                '.asok-table-actions{display:flex;gap:0.5rem;align-items:center}'
+                '.asok-btn-table{padding:0.4rem 0.8rem;border-radius:6px;background:var(--asok-accent,#3b82f6);color:#fff;text-decoration:none;font-size:0.85rem;font-weight:500;transition:opacity 0.2s}'
+                '.asok-btn-table:hover{opacity:0.9}'
+                '.asok-table-footer{display:flex;align-items:center;justify-content:space-between;padding:1rem;background:var(--asok-table-header-bg,#f9fafb);border-top:1px solid var(--asok-border,#eee);font-size:0.85rem;color:var(--asok-text-muted,#6b7280);flex-wrap:wrap;gap:1rem}'
+                '.asok-pagination{display:flex;gap:0.25rem}'
+                '.asok-page-link{padding:0.4rem 0.75rem;border:1px solid var(--asok-border,#d1d5db);border-radius:6px;background:#fff;color:var(--asok-text,#374151);text-decoration:none;transition:all 0.2s}'
+                '.asok-page-link:hover{background:#f3f4f6}'
+                '.asok-page-link.active{background:var(--asok-accent,#3b82f6);color:#fff;border-color:var(--asok-accent,#3b82f6)}'
+                '.asok-search-input, .asok-filter-select{padding:0.5rem 0.75rem;border:1px solid var(--asok-border,#d1d5db);border-radius:8px;font-size:0.9rem;outline:none;background:#fff}'
+                '.asok-search-input:focus, .asok-filter-select:focus{border-color:var(--asok-accent,#3b82f6);box-shadow:0 0 0 3px rgba(59,130,246,0.1)}'
+                '.asok-badge{display:inline-flex;padding:0.2rem 0.6rem;border-radius:9999px;font-size:0.75rem;font-weight:600;text-transform:uppercase}'
+                '.asok-badge-success{background:#dcfce7;color:#166534}'
+                '.asok-badge-danger{background:#fee2e2;color:#991b1b}'
+                '.asok-sort-icon{display:inline-block;width:0;height:0;margin-left:5px;vertical-align:middle;border-right:4px solid transparent;border-left:4px solid transparent;transition:all 0.2s}'
+                '.asok-sort-asc{border-bottom:4px solid var(--asok-text,#111)}'
+                '.asok-sort-desc{border-top:4px solid var(--asok-text,#111)}'
+                '.asok-bulk-actions{display:flex;align-items:center;padding:0.5rem 1rem;background:var(--asok-accent-light,#eff6ff);border-radius:8px;border:1px solid var(--asok-accent,#3b82f6);color:var(--asok-accent-dark,#1e40af);font-size:0.9rem}'
+                '.asok-btn-bulk{padding:0.3rem 0.7rem;border-radius:6px;font-size:0.8rem;font-weight:600;margin-left:0.5rem;cursor:pointer;border:none;transition:all 0.2s}'
+                '.asok-btn-danger{background:#ef4444;color:#fff}'
+                '.asok-btn-danger:hover{background:#dc2626}'
+                '.asok-row-selected{background:var(--asok-accent-light,#eff6ff)!important}'
+                '.asok-table-checkbox{width:40px;text-align:center}'
+                '.asok-table-checkbox input{width:18px;height:18px;cursor:pointer}'
+                '</style>'
             )
             request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
-                "(function(){'use strict';const w=new WeakMap();"
-                "const st=new Proxy({},{get(t,p){return t[p]},set(t,p,v){t[p]=v;document.querySelectorAll('[asok-state]').forEach(el=>{const c=w.get(el);if(c)us(el)});return true}});"
+                "(function(){const w=new WeakMap(),sd=new Map();let cs=null;"
+                "const st=new Proxy({},{get(t,p){if(cs&&!p.startsWith('_')){if(!sd.has(p))sd.set(p,new Set());sd.get(p).add(cs)}return t[p]},set(t,p,v){if(t[p]===v)return true;t[p]=v;if(sd.has(p)){sd.get(p).forEach(el=>{const c=w.get(el);if(c)us(el)})}return true}});"
                 "const fss=(el)=>{while(el&&el!==document.documentElement){if(w.has(el))return el;el=el.parentElement}return null};"
                 "const gs=(st,el,ev)=>{const sc=fss(el),c=sc?w.get(sc):{refs:{}};return[st,window.Asok.store,el,ev,c.refs||{},f=>Promise.resolve().then(f)]};"
-                "const se=(ex,st,el)=>{try{return(new Function('$','$store','$el','$event','$refs','$nextTick','with($){return('+ex+')}'))(...gs(st,el))}catch(e){}};"
-                "const es=(sm,st,ev,el)=>{try{const c=sm.includes(';')||sm.includes('if')||sm.includes('return');return(new Function('$','$store','$el','$event','$refs','$nextTick','with($){'+(c?sm:'return('+sm+')')+'}'))(...gs(st,el,ev))}catch(e){}};"
-                "const ub=(el,st)=>{if(!el||!st)return;const at=el.getAttribute.bind(el),tr=at('asok-transition');"
+                "const se=(ex,st,el)=>{try{return(new Function('$','$store','$el','$event','$refs','$nextTick','with($||{}){return('+ex+')}'))(...gs(st,el))}catch(e){}};"
+                "const es=(sm,st,ev,el)=>{try{const c=sm.includes(';')||sm.includes('if')||sm.includes('return');return(new Function('$','$store','$el','$event','$refs','$nextTick','with($||{}){'+(c?sm:'return('+sm+')')+'}'))(...gs(st,el,ev))}catch(e){}};"
+                "const ub=(el,st)=>{if(!el||!st)return;const at=el.getAttribute.bind(el),tra=at('asok-transition'),tr=tra?tra.split(' ').filter(c=>c):[];"
                 "if(el.hasAttribute('asok-text')){const v=se(at('asok-text'),st,el);if(v!==undefined)el.textContent=String(v)}"
                 "if(el.hasAttribute('asok-html')){const v=se(at('asok-html'),st,el);if(v!==undefined)el.innerHTML=String(v).replace(/<script\\b[^<]*(?:(?!<\\/script>)<[^<]*)*<\\/script>/gi,'')}"
-                "if(el.hasAttribute('asok-show')){const v=se(at('asok-show'),st,el);if(v){if(el.style.display==='none')el._st=Date.now();el.style.display='';if(tr)el.classList.add(...tr.split(' '));el.setAttribute('data-show-active','');if(tr)el.addEventListener('transitionend',()=>el.classList.remove(...tr.split(' ')),{once:true})}else{if(tr){el.classList.add(...tr.split(' '));el.addEventListener('transitionend',()=>{{el.style.display='none';el.classList.remove(...tr.split(' '))}},{once:true})}else el.style.display='none';el.removeAttribute('data-show-active')}}"
-                "if(el.hasAttribute('asok-hide')){const v=se(at('asok-hide'),st,el);if(!v){el.style.display='';if(tr)el.classList.add(...tr.split(' '));el.removeAttribute('data-hide-active');if(tr)el.addEventListener('transitionend',()=>el.classList.remove(...tr.split(' ')),{once:true})}else{if(tr){el.classList.add(...tr.split(' '));el.addEventListener('transitionend',()=>{{el.style.display='none';el.classList.remove(...tr.split(' '))}},{once:true})}else el.style.display='none';el.setAttribute('data-hide-active','')}}"
+                "if(el.hasAttribute('asok-show')){const v=se(at('asok-show'),st,el);if(v){if(el.style.display==='none')el._st=Date.now();el.style.display='';if(tr.length)el.classList.add(...tr);el.setAttribute('data-show-active','');if(tr.length)el.addEventListener('transitionend',()=>el.classList.remove(...tr),{once:true})}else{if(tr.length){el.classList.add(...tr);el.addEventListener('transitionend',()=>{el.style.display='none';el.classList.remove(...tr)},{once:true})}else el.style.display='none';el.removeAttribute('data-show-active')}}"
+                "if(el.hasAttribute('asok-hide')){const v=se(at('asok-hide'),st,el);if(!v){el.style.display='';if(tr.length)el.classList.add(...tr);el.removeAttribute('data-hide-active');if(tr.length)el.addEventListener('transitionend',()=>el.classList.remove(...tr),{once:true})}else{if(tr.length){el.classList.add(...tr);el.addEventListener('transitionend',()=>{el.style.display='none';el.classList.remove(...tr)},{once:true})}else el.style.display='none';el.setAttribute('data-hide-active','')}}"
                 "Array.from(el.attributes).forEach(a=>{"
+                "if(a.name==='asok-class'){const v=se(a.value,st,el);if(typeof v==='string'){const prev=(el._ac||'').split(' ').filter(c=>c),curr=v.split(' ').filter(c=>c);prev.forEach(c=>{if(!curr.includes(c))el.classList.remove(c)});curr.forEach(c=>el.classList.add(c));el._ac=v}else if(typeof v==='object'&&v){Object.keys(v).forEach(c=>el.classList[v[c]?'add':'remove'](c))}}"
                 "if(a.name.startsWith('asok-class:')){const c=a.name.substring(11);el.classList[se(a.value,st,el)?'add':'remove'](c)}"
                 "if(a.name.startsWith('asok-bind:')){const n=a.name.substring(10),v=se(a.value,st,el);if(v!==undefined&&v!==null&&v!==false)el.setAttribute(n,String(v));else el.removeAttribute(n)}"
                 "})};"
                 "const uif=(el,st)=>{let c=el,ok=0;while(c&&(c.hasAttribute('asok-if')||c.hasAttribute('asok-elif')||c.hasAttribute('asok-else'))){c._ai=1;let v=c.hasAttribute('asok-else')?!ok:se(c.getAttribute(c.hasAttribute('asok-if')?'asok-if':'asok-elif'),st,c);if(v&&!ok){if(!c._n){const n=c.content.cloneNode(true);c._n=n.firstElementChild;c.parentNode.insertBefore(n,c.nextSibling);w.set(c._n,w.get(el)||{state:st,refs:{}});init(c._n)}ok=1}else if(c._n){c._n.remove();c._n=null}c=c.nextElementSibling}}; "
                 "const ufo=(el,st)=>{el._ai=1;const at=el.getAttribute('asok-for'),[v,l]=at.split(' in '),items=se(l,st,el)||[];if(!el._m){el._m=document.createComment('for');el.parentNode.insertBefore(el._m,el.nextSibling)} (el._ns||[]).forEach(n=>n.remove());el._ns=[];items.forEach((it,i)=>{const n=el.content.cloneNode(true),child=n.firstElementChild,sub=rpx({[v]:it,index:i},()=>us(fss(el)),st);w.set(child,{state:sub,refs:{},cleanup:[]});el.parentNode.insertBefore(n,el._m);el._ns.push(child);init(child)})};"
-                "const us=(sc,rt=1)=>{const c=w.get(sc);if(!c)return;ub(sc,c.state);sc.querySelectorAll('*').forEach(el=>{if(el._uv)el._uv();if(el.tagName==='TEMPLATE'){if(el.hasAttribute('asok-if'))uif(el,c.state);if(el.hasAttribute('asok-for'))ufo(el,c.state);return} let p=el.parentElement;while(p&&p!==sc){if(p&&p.hasAttribute('asok-state'))return;p=p.parentElement}ub(el,c.state)});if(rt&&(c._ts||[]).forEach(t=>us(t,0)))return};"
-                "const rpx=(obj,cb,st)=>{if(!obj||typeof obj!=='object'||obj._isProxy)return obj;return new Proxy(obj,{get(t,p){if(p==='_isProxy')return true;const v=(p in t)?t[p]:(st?st[p]:undefined);if(typeof v==='function'){if(['push','pop','splice','shift','unshift','reverse','sort'].includes(p))return(...args)=>{const r=v.apply(t,args);cb();return r};return v.bind(t)}return rpx(v,cb,st)},has(t,p){return p in t||(st&&p in st)},set(t,p,v){if(p in t){if(t[p]===v)return true;t[p]=v;cb();return true}if(st){if(st[p]===v)return true;st[p]=v;return true}if(t[p]===v)return true;t[p]=v;cb();return true}})};"
+                "const us=(sc,rt=1)=>{const c=w.get(sc);if(!c)return;cs=sc;ub(sc,c.state);sc.querySelectorAll('*').forEach(el=>{if(el._uv)el._uv();if(el.tagName==='TEMPLATE'){if(el.hasAttribute('asok-if'))uif(el,c.state);if(el.hasAttribute('asok-for'))ufo(el,c.state);return} let p=el.parentElement;while(p&&p!==sc){if(p&&p.hasAttribute('asok-state'))return;p=p.parentElement}ub(el,c.state)});cs=null;if(rt&&(c._ts||[]).forEach(t=>us(t,0)))return};"
+                "const rpx=(obj,cb,st)=>{if(!obj||typeof obj!=='object'||obj._isProxy)return obj;return new Proxy(obj,{get(t,p){if(p==='_isProxy')return true;const v=(p in t)?t[p]:(st?st[p]:undefined);if(typeof v==='function'){if(['push','pop','splice','shift','unshift','reverse','sort'].includes(p))return(...args)=>{const r=v.apply(t,args);cb();return r};return v.bind(t)}return rpx(v,cb,st)},has(t,p){return p in t||(st&&p in st)},set(t,p,v){if(p in t){if(t[p]===v)return true;t[p]=v;cb();return true}if(st&&p in st){st[p]=v;return true}t[p]=v;cb();return true}})};"
                 "const is=(el)=>{if(el._ai)return;const a=el.getAttribute('asok-state');try{const s=rpx(se(a||'{}',{},el)||{},()=>us(el));w.set(el,{state:s,cleanup:[],refs:{},_ts:[]});el._ai=1;if(el.hasAttribute('asok-init'))es(el.getAttribute('asok-init'),s,null,el);us(el)}catch(e){}};"
                 "const im=(el)=>{if(el._ami)return;const m=el.getAttribute('asok-model'),sc=fss(el);if(!m||!sc)return;const s=w.get(sc).state;el._ami=1;"
                 "el._uv=()=>{const v=s[m]||'';if(el.value!==String(v)&&document.activeElement!==el){if(el.type==='checkbox')el.checked=!!v;else if(el.type==='radio')el.checked=el.value===v;else el.value=v}};"
                 "el._uv();const h=()=>{if(el.type==='checkbox')s[m]=el.checked;else if(el.type==='radio'){if(el.checked)s[m]=el.value}else s[m]=el.value};"
                 "el.addEventListener('input',h);el.addEventListener('change',h);w.get(sc).cleanup.push(()=>{el.removeEventListener('input',h);el.removeEventListener('change',h)})};"
                 "const ie=(el)=>{if(el._aei)return;const sc=fss(el);if(!sc)return;const s=w.get(sc).state;el._aei=1;Array.from(el.attributes).forEach(a=>{if(!a.name.startsWith('asok-on:'))return;"
-                "const en=a.name.substring(8),st=a.value,[ev,...mods]=en.split('.'),h=(e)=>{if(mods.includes('prevent'))e.preventDefault();if(mods.includes('stop'))e.stopPropagation();"
-                "if(mods.some(m=>['enter','escape','space','tab'].includes(m))&&!mods.some(m=>e.key.toLowerCase()===m))return;es(st,s,e,el)};"
+                "const en=a.name.substring(8),sm=a.value,[ev,...mods]=en.split('.'),h=(e)=>{if(mods.includes('prevent'))e.preventDefault();if(mods.includes('stop'))e.stopPropagation();"
+                "if(mods.some(m=>['enter','escape','space','tab'].includes(m))&&!mods.some(m=>e.key.toLowerCase()===m))return;es(sm,s,e,el)};"
                 "if(mods.includes('outside')){const oh=(e)=>{if(el.offsetWidth>0&&!el.contains(e.target)&&(!el._st||Date.now()-el._st>50))h(e)};document.addEventListener('click',oh);w.get(sc).cleanup.push(()=>document.removeEventListener('click',oh))}else{"
                 "const deb=mods.find(m=>m.startsWith('debounce')),ms=deb?parseInt(deb.split('-')[1])||300:0;if(ms){let t;const dh=(e)=>{clearTimeout(t);t=setTimeout(()=>h(e),ms)};el.addEventListener(ev,dh);w.get(sc).cleanup.push(()=>el.removeEventListener(ev,dh))}"
                 "else{el.addEventListener(ev,h);w.get(sc).cleanup.push(()=>el.removeEventListener(ev,h))}}});};"
+                "const ifetch=(el)=>{if(el._afe)return;const url=el.getAttribute('asok-fetch'),as=el.getAttribute('asok-fetch-as')||'data',on=el.getAttribute('asok-fetch-on')||'load',sc=fss(el);if(!url||!sc)return;const s=w.get(sc).state;el._afe=1;"
+                "const doFetch=async()=>{try{s.loading=true;s.error=null;const r=await fetch(url);if(!r.ok)throw new Error(r.statusText);const d=await r.json();s[as]=d;s.loading=false}catch(e){s.error=e.message;s.loading=false}};"
+                "if(on==='load'){doFetch()}else{const h=()=>doFetch();el.addEventListener(on,h);w.get(sc).cleanup.push(()=>el.removeEventListener(on,h))}};"
+                "const ifa=(el)=>{if(el._afea)return;const expr=el.getAttribute('asok-fetch-async'),on=el.getAttribute('asok-fetch-on')||'click',sc=fss(el);if(!expr||!sc)return;const s=w.get(sc).state;el._afea=1;"
+                "const doAsync=async()=>{try{s.loading=true;s.error=null;await es(expr,s,null,el);s.loading=false}catch(e){s.error=e.message;s.loading=false}};"
+                "const h=()=>doAsync();el.addEventListener(on,h);w.get(sc).cleanup.push(()=>el.removeEventListener(on,h))};"
                 "const init=(r=document)=>{const els=r===document?document.querySelectorAll('*'):[r,...r.querySelectorAll('*')];els.forEach(el=>{if(el.hasAttribute('asok-state'))is(el);if(el.hasAttribute('asok-ref')&&!el._ari){const sc=fss(el);if(sc){w.get(sc).refs[el.getAttribute('asok-ref')]=el;el._ari=1}}"
-                "if(el.hasAttribute('asok-teleport')&&!el._ati){const t=el.getAttribute('asok-teleport'),tg=document.querySelector(t),sc=fss(el);if(tg&&sc){const ctx=w.get(sc),n=el.content.cloneNode(true),child=n.firstElementChild;w.set(child,{state:ctx.state,refs:ctx.refs,cleanup:[],_ts:[]});ctx._ts.push(child);tg.appendChild(n);init(child);el._ati=1;el.style.display='none'}} if(el.tagName==='TEMPLATE' && !el._ai){const sc=fss(el);if(sc){const s=w.get(sc).state;if(el.hasAttribute('asok-if'))uif(el,s);if(el.hasAttribute('asok-for'))ufo(el,s)}}});els.forEach(el=>{const sc=fss(el);if(sc)ub(el,w.get(sc).state);if(el.hasAttribute('asok-model'))im(el);if(Array.from(el.attributes).some(a=>a.name.startsWith('asok-on:')))ie(el)});if(r===document)document.querySelectorAll('[asok-cloak]').forEach(e=>e.removeAttribute('asok-cloak'))};"
+                "if(el.hasAttribute('asok-teleport')&&!el._ati){const t=el.getAttribute('asok-teleport'),tg=document.querySelector(t),sc=fss(el);if(tg&&sc){const ctx=w.get(sc),n=el.content.cloneNode(true),child=n.firstElementChild;w.set(child,{state:ctx.state,refs:ctx.refs,cleanup:[],_ts:[]});ctx._ts.push(child);tg.appendChild(n);init(child);el._ati=1;el.style.display='none'}} if(el.tagName==='TEMPLATE' && !el._ai){const sc=fss(el);if(sc){const s=w.get(sc).state;if(el.hasAttribute('asok-if'))uif(el,s);if(el.hasAttribute('asok-for'))ufo(el,s)}}});els.forEach(el=>{const sc=fss(el);if(sc)ub(el,w.get(sc).state);if(el.hasAttribute('asok-model'))im(el);if(el.hasAttribute('asok-fetch'))ifetch(el);if(el.hasAttribute('asok-fetch-async'))ifa(el);if(Array.from(el.attributes).some(a=>a.name.startsWith('asok-on:')))ie(el)});if(r===document)document.querySelectorAll('[asok-cloak]').forEach(e=>e.removeAttribute('asok-cloak'))};"
                 "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>init());else init();"
                 "if(window.Asok){const oi=window.Asok.init;window.Asok.init=(el)=>{if(oi)oi(el);init(el)}}"
                 "document.addEventListener('asok:success',e=>{if(e.detail&&e.detail.target)init(e.detail.target)});window.Asok=window.Asok||{};window.AsokDirectives={init,version:'1.0.0'};window.Asok.store=st;})()"
@@ -1509,27 +1592,83 @@ class Asok:
                 return False
         return bool(origin) and origin in allowed
 
-    def _security_headers(self, nonce: Optional[str] = None) -> list[tuple[str, str]]:
+    def _security_headers(self, request: Optional[Any] = None, nonce: Optional[str] = None) -> list[tuple[str, str]]:
         """Generate common security headers (HSTS, CSP, etc.)."""
         sec = self.config.get("SECURITY_HEADERS", True)
         if sec is False:
             return []
         base = dict(self._DEFAULT_SECURITY_HEADERS)
 
-        # CSP with WebSocket (connect-src) support
+        # Build CSP with configurable directives
         ws_port = self.config.get("WS_PORT", 8001)
-        # Narrow connect-src to self and local WS, while allowing broad ws:/wss:
-        # only if necessary (restricting 'self' or app domain is safer)
-        csp = (
-            "default-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            f"connect-src 'self' ws://127.0.0.1:{ws_port} ws://localhost:{ws_port} ws://0.0.0.0:{ws_port};"
-        )
-        if nonce:
-            # Use strict-dynamic to allow scripts loaded by our trusted reactive engine
-            csp += f"; script-src 'self' 'nonce-{nonce}' 'unsafe-eval' 'strict-dynamic' https: http:;"
+
+        # Check if reactive features are used in this response to enable unsafe-eval only when needed
+        needs_eval = False
+        if request:
+            needs_eval = getattr(request, "_asok_directives_done", False) or \
+                         getattr(request, "_asok_reactive_done", False) or \
+                         getattr(request, "_asok_alive_done", False)
+
+        # Default CSP directives
+        csp_directives = {
+            "default-src": ["'self'"],
+            "style-src": ["'self'", "'unsafe-inline'"],
+            "connect-src": ["'self'"],
+            "object-src": ["'none'"],
+            "base-uri": ["'none'"],
+        }
+
+        # Add host-specific connect-src if possible
+        if request and hasattr(request, "host"):
+            host = request.host.split(":")[0]
+            csp_directives["connect-src"].extend([
+                f"ws://{host}:{ws_port}",
+                f"wss://{host}",
+                f"ws://{request.host}",
+                f"wss://{request.host}"
+            ])
         else:
-            csp += "; script-src 'self' 'unsafe-eval' 'unsafe-inline';"
+            csp_directives["connect-src"].extend([
+                f"ws://127.0.0.1:{ws_port}",
+                f"ws://localhost:{ws_port}",
+                f"ws://0.0.0.0:{ws_port}"
+            ])
+
+        # Add script-src based on nonce and reactive needs
+        script_src = ["'self'"]
+        if nonce:
+            script_src.extend([f"'nonce-{nonce}'", "'strict-dynamic'"])
+
+        if needs_eval:
+            script_src.append("'unsafe-eval'")
+
+        csp_directives["script-src"] = script_src
+
+        # Allow users to extend or override CSP directives via config
+        user_csp = self.config.get("CSP", {})
+        if isinstance(user_csp, dict):
+            for directive, values in user_csp.items():
+                if isinstance(values, str):
+                    values = [values]
+                if directive in csp_directives:
+                    # Extend existing directive
+                    csp_directives[directive].extend(values)
+                else:
+                    # Add new directive
+                    csp_directives[directive] = values if isinstance(values, list) else [values]
+
+        # Build CSP string from directives
+        csp_parts = []
+        for directive, values in csp_directives.items():
+            csp_parts.append(f"{directive} {' '.join(values)}")
+
+        # SECURITY: Add report-uri for CSP violation monitoring if configured
+        # This allows developers to track and respond to policy violations
+        csp_report_uri = self.config.get("CSP_REPORT_URI")
+        if csp_report_uri:
+            csp_parts.append(f"report-uri {csp_report_uri}")
+
+        csp = "; ".join(csp_parts) + ";"
 
         base["Content-Security-Policy"] = csp
 
@@ -1640,11 +1779,26 @@ class Asok:
         ):
             try:
                 content_str = admin.dispatch(request)
+            except AbortException as abort:
+                request.status = Request._STATUS_MAP.get(
+                    abort.status, f"{abort.status} Unknown"
+                )
+                content_str = self._render_error_page(
+                    request, abort.status, message=abort.message
+                )
             except RedirectException as redir:
                 headers = [("Location", redir.url)]
                 headers += self._cookie_headers(request, environ)
                 start_response("302 Found", headers)
                 return [b""]
+            except Exception as e:
+                import traceback
+                logger.error("Admin Dispatch Exception: %s\n%s", str(e), traceback.format_exc())
+                if self.config.get("DEBUG"):
+                    start_response("500 Internal Server Error", [("Content-Type", "text/plain")])
+                    return [f"ADMIN ERROR: {str(e)}\n\n{traceback.format_exc()}".encode()]
+                request.status = "500 Internal Server Error"
+                content_str = self._render_error_page(request, 500)
             if "asok.binary_response" in environ:
                 output = environ["asok.binary_response"]
                 headers = [("Content-Type", request.content_type)]
@@ -1760,33 +1914,10 @@ class Asok:
             "PATCH",
             "DELETE",
         ):
-            token = request.form.get("csrf_token") or environ.get("HTTP_X_CSRF_TOKEN")
-
-            # 1. Signature validation
-            is_valid = token and secrets.compare_digest(
-                str(token), str(request.csrf_token_value)
-            )
-
-            # 2. Origin validation (Defense-in-depth)
-            origin = environ.get("HTTP_ORIGIN") or environ.get("HTTP_REFERER")
-            if is_valid and origin:
-                try:
-                    parsed = urlparse(origin)
-                except Exception:
-                    parsed = None
-                expected_base = f"{request.scheme}://{request.host}"
-                if (
-                    not parsed
-                    or parsed.scheme != request.scheme
-                    or parsed.netloc != request.host
-                ):
-                    # Potential CSRF or Cross-Origin form submission
-                    is_valid = False
-                    logger.warning(
-                        "CSRF Origin mismatch: %s vs %s", origin, expected_base
-                    )
-
-            if not is_valid:
+            # 1. Global CSRF verification
+            try:
+                request.verify_csrf()
+            except Exception:
                 logger.warning(
                     "CSRF validation failed: %s %s from %s",
                     request.method,
@@ -1798,14 +1929,16 @@ class Asok:
                     "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
                 )
                 return [body.encode("utf-8")]
-            # Rotate CSRF token after successful validation
+
+            # Security: Rotate CSRF token for the NEXT request after successful validation
+            # We do it early so both the template and the headers get the NEW token.
             request.csrf_token_value = secrets.token_hex(32)
 
         # Execution
         content_str = ""
         try:
             module = None
-            if page_file.endswith(".py"):
+            if page_file.endswith(".py") or page_file.endswith(".pyc"):
                 module = self._load_module(page_file)
 
             tpl_root = self._tpl_root
@@ -1853,6 +1986,10 @@ class Asok:
                         if action_name:
                             action_func = getattr(module, f"action_{action_name}", None)
                             if callable(action_func):
+                                # Security: Mandatory CSRF verification for all actions.
+                                # Actions are intended for UI-driven state changes.
+                                # For public APIs/Webhooks, use a standard post() method instead.
+                                req.verify_csrf()
                                 res = action_func(req)
                                 if res is None:
                                     req.abort(
@@ -2002,7 +2139,7 @@ class Asok:
         if inspect.isgenerator(content_str):
             headers = [("Content-Type", request.content_type)]
             headers += self._cookie_headers(request, environ)
-            headers += self._security_headers(nonce=getattr(request, "nonce", None))
+            headers += self._security_headers(request=request, nonce=getattr(request, "nonce", None))
 
             # Check for Gzip
             use_gzip = (
@@ -2032,14 +2169,15 @@ class Asok:
 
         # Response headers
         headers = [("Content-Type", request.content_type)]
+
         headers += self._cookie_headers(request, environ)
-        headers += self._security_headers(nonce=getattr(request, "nonce", None))
+        headers += self._security_headers(request=request, nonce=getattr(request, "nonce", None))
         headers += environ.get("asok.extra_headers", [])
         headers += request.response_headers
-        # Expose new CSRF token for JS block swap after rotation
-        if environ.get("HTTP_X_BLOCK"):
-            headers.append(("X-CSRF-Token", request.csrf_token_value))
-            headers.append(("Access-Control-Expose-Headers", "X-CSRF-Token"))
+
+        # Always expose the (potentially new) CSRF token for the JS engine
+        headers.append(("X-CSRF-Token", request.csrf_token_value))
+        headers.append(("Access-Control-Expose-Headers", "X-CSRF-Token"))
 
         # CORS
         cors_origins = self.config.get("CORS_ORIGINS")

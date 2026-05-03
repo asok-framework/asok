@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import logging.handlers
 import os
 import time
 from typing import Any, Callable, Optional
@@ -66,7 +67,14 @@ def get_logger(
     logger.addHandler(console)
 
     if log_file:
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        # SECURITY: Use RotatingFileHandler to prevent log files from growing indefinitely
+        # Max 10MB per file, keep 5 backup files (total ~50MB)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            encoding="utf-8",
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+        )
         file_handler.setFormatter(fmt)
         logger.addHandler(file_handler)
 

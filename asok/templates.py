@@ -16,6 +16,15 @@ from .utils import humanize
 _compiled_cache = {}  # hash(template_string) -> callable
 _dotted_cache = {}  # expr -> resolved expr
 _macro_cache = {}  # file_path -> file content
+_macro_mtimes = {}  # file_path -> modification time
+
+
+def clear_template_caches():
+    """Clear all template caches. Useful in development mode."""
+    _compiled_cache.clear()
+    _dotted_cache.clear()
+    _macro_cache.clear()
+    _macro_mtimes.clear()
 
 # Pre-compiled regex patterns
 _RE_EXTENDS = re.compile(r"{%-?\s*extends\s+[\'\"](.*?)[\'\"]\s*-?%}")
@@ -32,6 +41,15 @@ _RE_FILTER_CHAIN = re.compile(
 _RE_BLOCK_OPEN = re.compile(r"{%-?\s*block\s+(\w+)\s*-?%}")
 _RE_BLOCK_CLOSE = re.compile(r"{%-?\s*endblock(?:\s+\w+)?\s*-?%}")
 _RE_FROM_IMPORT = re.compile(r"{%-?\s*from\s+['\"](.+?)['\"]\s+import\s+(.+?)\s*-?%}")
+_RE_IMPORT_AS = re.compile(r"{%-?\s*import\s+['\"](.+?)['\"]\s+as\s+(\w+)\s*-?%}")
+_RE_FILTER_BLOCK = re.compile(
+    r"{%-?\s*filter\s+(\w+(?:\([^)]*\))?)\s*-?%}(.*?){%-?\s*endfilter\s*-?%}",
+    re.DOTALL,
+)
+_RE_AUTOESCAPE_BLOCK = re.compile(
+    r"{%-?\s*autoescape\s+(true|false)\s*-?%}(.*?){%-?\s*endautoescape\s*-?%}",
+    re.DOTALL,
+)
 _RE_MACRO = re.compile(
     r"{%-?\s*macro\s+(\w+)\s*\((.*?)\)\s*-?%}(.*?){%-?\s*endmacro\s*-?%}", re.DOTALL
 )
@@ -146,6 +164,28 @@ TEMPLATE_FILTERS = {
     "duration": humanize.duration,
 }
 
+# --- TEMPLATE TESTS ---
+TEMPLATE_TESTS = {
+    "defined": lambda v: v is not None and v != "",
+    "undefined": lambda v: v is None or v == "",
+    "none": lambda v: v is None,
+    "true": lambda v: v is True,
+    "false": lambda v: v is False,
+    "even": lambda v: isinstance(v, (int, float)) and int(v) % 2 == 0,
+    "odd": lambda v: isinstance(v, (int, float)) and int(v) % 2 != 0,
+    "string": lambda v: isinstance(v, str),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "sequence": lambda v: isinstance(v, (list, tuple)),
+    "mapping": lambda v: isinstance(v, dict),
+    "iterable": lambda v: hasattr(v, "__iter__") and not isinstance(v, (str, bytes)),
+    "lower": lambda v: isinstance(v, str) and v.islower(),
+    "upper": lambda v: isinstance(v, str) and v.isupper(),
+    "boolean": lambda v: isinstance(v, bool),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "float": lambda v: isinstance(v, float),
+    # Note: divisibleby and sameas need special handling with parameters
+}
+
 
 # Whitelist of single-underscore attributes that templates may legitimately access.
 # Everything else starting with "_" is blocked to prevent sandbox escape
@@ -161,6 +201,34 @@ _TEMPLATE_SAFE_ATTRS = frozenset(
     }
 )
 
+# SECURITY: Dangerous attribute patterns that should never be accessible in templates.
+# These can be used for sandbox escape via Python object introspection.
+_DANGEROUS_ATTRS = frozenset(
+    {
+        "__class__",
+        "__bases__",
+        "__subclasses__",
+        "__mro__",
+        "__globals__",
+        "__builtins__",
+        "__code__",
+        "__dict__",
+        "__import__",
+        "__loader__",
+        "__spec__",
+        "__package__",
+        "__closure__",
+        "__func__",
+        "__self__",
+        "func_globals",
+        "func_code",
+        "gi_code",
+        "gi_frame",
+        "cr_frame",
+        "ag_frame",
+    }
+)
+
 
 def _get(obj: Any, key: Union[str, int]) -> Any:
     """Access an attribute or dictionary/list key, favoring attributes for strings.
@@ -168,15 +236,25 @@ def _get(obj: Any, key: Union[str, int]) -> Any:
     Returns an empty string if the key/attribute is not found or the object is not subscriptsable.
     """
     if isinstance(key, str):
+        # SECURITY: Block access to dangerous attributes that enable sandbox escape
+        if key in _DANGEROUS_ATTRS:
+            return ""
         # SECURITY: Block access to dunder attributes entirely
-        if key.startswith("__"):
+        if key.startswith("__") and key.endswith("__"):
             return ""
         # SECURITY: Block single-underscore attributes unless whitelisted.
         # This prevents template sandbox escape to ORM/framework internals.
         if key.startswith("_") and key not in _TEMPLATE_SAFE_ATTRS:
             return ""
+        # SECURITY: Block access to potentially dangerous methods
+        if key in ("eval", "exec", "compile", "open", "__import__"):
+            return ""
         try:
-            return getattr(obj, key)
+            result = getattr(obj, key)
+            # SECURITY: Block access to methods that could lead to code execution
+            if callable(result) and key in ("eval", "exec", "compile", "execfile"):
+                return ""
+            return result
         except (AttributeError, TypeError):
             pass
 
@@ -187,11 +265,42 @@ def _get(obj: Any, key: Union[str, int]) -> Any:
 
 
 def _resolve_name(context, name, is_debug=False):
-    """Safely resolve a non-dotted name from context or builtins."""
+    """Safely resolve a non-dotted name from context or builtins.
+
+    SECURITY: Only explicitly whitelisted builtins are allowed.
+    Dangerous functions (eval, exec, compile, __import__, open, type, etc.) are blocked
+    when attempting to access them as builtins, but user-defined variables with these
+    names in the context are allowed.
+    """
+    # Check context first - user-defined variables take precedence
     if name in context:
         return context[name]
 
-    # Explicitly allowed builtins
+    # SECURITY: Block dangerous builtin names explicitly
+    # Only checked for builtins - not for user variables in context
+    if name in (
+        "eval",
+        "exec",
+        "compile",
+        "execfile",
+        "__import__",
+        "open",
+        "type",
+        "vars",
+        "dir",
+        "globals",
+        "locals",
+        "getattr",
+        "setattr",
+        "delattr",
+        "hasattr",
+        "__builtins__",
+    ):
+        if is_debug:
+            raise NameError(f"Access to builtin '{name}' is forbidden in templates for security reasons.")
+        return ""
+
+    # SECURITY: Explicitly allowed builtins only - minimal safe set for templates
     if name in (
         "range",
         "len",
@@ -202,10 +311,24 @@ def _resolve_name(context, name, is_debug=False):
         "list",
         "enumerate",
         "bool",
+        "abs",
+        "min",
+        "max",
+        "sum",
+        "sorted",
+        "reversed",
     ):
         import builtins
 
         return getattr(builtins, name)
+
+    # ALIASES for common lowercase constants (Jinja2-like)
+    if name == "true":
+        return True
+    if name == "false":
+        return False
+    if name == "none":
+        return None
 
     if is_debug:
         raise NameError(f"Variable '{name}' is not defined in template context.")
@@ -335,7 +458,7 @@ def _resolve_dotted(expr, locals_set: Optional[set[str]] = None, _debug: bool = 
         accessors = re.findall(r"(\.([A-Za-z_]\w*))|(\[([^\]]+)\])", suffix)
 
         result = current
-        for dot_full, dot_name, bracket_full, bracket_content in accessors:
+        for dot_full, dot_name, _bracket_full, bracket_content in accessors:
             if dot_full:
                 result = f'_get({result}, "{dot_name}")'
             else:
@@ -376,14 +499,43 @@ def _safe_resolve(base, requested):
     return full
 
 
+def _get_all_macro_names(file_path):
+    """Get all macro names from a file without loading them."""
+    content = _macro_cache.get(file_path)
+    if content is None:
+        if os.path.exists(file_path):
+            current_mtime = os.path.getmtime(file_path)
+            _macro_mtimes[file_path] = current_mtime
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            _macro_cache[file_path] = content
+        else:
+            return []
+
+    return [m.group(1) for m in _RE_MACRO.finditer(content)]
+
+
 def _extract_macros(file_path, names, parent_ctx=None):
     """Parse a macro file and return callables for the requested macro names.
 
     All macros in the file are made available to each other (sibling calls),
     so a macro can reference another macro defined in the same file.
+
+    In development mode (when file exists), checks file modification time
+    and reloads if changed.
     """
+    # Check if file has been modified since last cache
+    reload_needed = False
+    if os.path.exists(file_path):
+        current_mtime = os.path.getmtime(file_path)
+        cached_mtime = _macro_mtimes.get(file_path)
+
+        if cached_mtime is None or current_mtime > cached_mtime:
+            reload_needed = True
+            _macro_mtimes[file_path] = current_mtime
+
     content = _macro_cache.get(file_path)
-    if content is None:
+    if content is None or reload_needed:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
         _macro_cache[file_path] = content
@@ -449,6 +601,10 @@ def _extract_macros(file_path, names, parent_ctx=None):
                 remaining = {k: v for k, v in kwargs.items() if k not in m_params}
                 local_ctx[m_varkw] = remaining
 
+            # 4. Always pass caller if provided (for {% call macro() %})
+            if "caller" in kwargs and "caller" not in used_kwargs:
+                local_ctx["caller"] = kwargs["caller"]
+
             return SafeString(render_template_string(m_body, local_ctx))
 
         return macro_fn
@@ -473,8 +629,12 @@ def _date_filter(v, f="%d/%m/%Y"):
     return v
 
 
-def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True):
+def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True, inject_markers=False):
     """Resolve inheritance, includes, macros, and strip comments.
+
+    Args:
+        inject_markers: If True, replaces block tags with HTML comment markers
+                       for data-block targeting without IDs
 
     Returns the fully pre-processed template string (still contains
     {% block %} tags so callers can extract individual blocks).
@@ -623,8 +783,48 @@ def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True)
 
     template_string = handle_inheritance(template_string)
 
-    # 1.5. Optional block tag stripping
-    if strip_blocks:
+    # 1.5. Optional block tag stripping or marker injection
+    if inject_markers:
+        # Replace block tags with HTML comment markers for data-block targeting
+        # Use nesting-aware replacement to match opening and closing tags
+        replacements = []
+        for open_match in _RE_BLOCK_OPEN.finditer(template_string):
+            block_name = open_match.group(1)
+            start_pos = open_match.start()
+            end_pos = open_match.end()
+
+            # Find the matching endblock (nesting-aware)
+            depth = 1
+            pos = end_pos
+            close_start = None
+            close_end = None
+            while depth > 0:
+                next_open = _RE_BLOCK_OPEN.search(template_string, pos)
+                next_close = _RE_BLOCK_CLOSE.search(template_string, pos)
+                if next_close is None:
+                    break
+                if next_open and next_open.start() < next_close.start():
+                    depth += 1
+                    pos = next_open.end()
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        close_start = next_close.start()
+                        close_end = next_close.end()
+                    pos = next_close.end()
+
+            if close_start is not None:
+                # Inject markers BEFORE the opening tag and AFTER the closing tag
+                # to keep the block tags intact for the Jinja-like renderer.
+                replacements.append((start_pos, start_pos, f"<!-- block:{block_name}:start -->"))
+                replacements.append((close_end, close_end, f"<!-- block:{block_name}:end -->"))
+
+        # Apply replacements in reverse order to preserve positions
+        for start, end, replacement in reversed(replacements):
+            # We use end:end for insertion if start==end, but here we want to keep the original content
+            # so we use template_string[start:end] which is the original tag.
+            template_string = template_string[:start] + replacement + template_string[start:]
+    elif strip_blocks:
         template_string = _RE_BLOCK_OPEN.sub("", template_string)
         template_string = _RE_BLOCK_CLOSE.sub("", template_string)
 
@@ -685,6 +885,53 @@ def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True)
             context.update(imported)
     template_string = _RE_FROM_IMPORT.sub("", template_string)
 
+    # 3b. Handle full imports: {% import "file" as namespace %}
+    for m in _RE_IMPORT_AS.finditer(template_string):
+        macro_file = m.group(1)
+        namespace_name = m.group(2)
+        try:
+            full_path = _safe_resolve(root_dir or os.getcwd(), macro_file)
+        except ValueError:
+            continue
+        if os.path.exists(full_path):
+            # Get all macros from the file
+            all_macro_names = _get_all_macro_names(full_path)
+            imported = _extract_macros(full_path, all_macro_names, parent_ctx=context)
+            # Create a namespace object
+            context[namespace_name] = type('Namespace', (), imported)()
+    template_string = _RE_IMPORT_AS.sub("", template_string)
+
+    # 3c. Handle filter blocks: {% filter upper %}content{% endfilter %}
+    def replace_filter_block(m):
+        filter_chain = m.group(1)
+        content = m.group(2)
+        # Escape content for safe inclusion and apply filter
+        safe_content = content.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        return f'{{{{ "{safe_content}"|{filter_chain} }}}}'
+
+    template_string = _RE_FILTER_BLOCK.sub(replace_filter_block, template_string)
+
+    # 3d. Handle autoescape blocks: {% autoescape false %}...{% endautoescape %}
+    def replace_autoescape_block(m):
+        enabled = m.group(1) == "true"
+        content = m.group(2)
+
+        if not enabled:
+            # When autoescape is false, mark all {{ }} as safe
+            # Replace {{ expr }} with {{ expr|safe }}
+            def add_safe_filter(var_match):
+                expr = var_match.group(0)[2:-2].strip()
+                # Don't add |safe if already has it
+                if "|safe" in expr or expr.endswith("|safe"):
+                    return var_match.group(0)
+                return f"{{{{ {expr}|safe }}}}"
+
+            content = re.sub(r"\{\{[^}]+\}\}", add_safe_filter, content)
+
+        return content
+
+    template_string = _RE_AUTOESCAPE_BLOCK.sub(replace_autoescape_block, template_string)
+
     # 4. Strip comments {# ... #}
     template_string = _RE_COMMENT.sub("", template_string)
 
@@ -694,6 +941,80 @@ def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True)
         return content.replace("{{", "&#123;&#123;").replace("{%", "&#123;&#37;")
 
     template_string = _RE_RAW.sub(_neutralize_raw, template_string)
+
+    # 6. Extract inline macros and add them to context
+    if context is not None:
+        for match in _RE_MACRO.finditer(template_string):
+            macro_name = match.group(1)
+            raw_params = match.group(2).strip()
+            body = match.group(3)
+
+            param_names = []
+            param_defaults = {}
+            varargs = None
+            varkw = None
+
+            if raw_params:
+                for param in raw_params.split(","):
+                    param = param.strip()
+                    if not param:
+                        continue
+                    if param.startswith("**"):
+                        varkw = param[2:]
+                    elif param.startswith("*"):
+                        varargs = param[1:]
+                    elif "=" in param:
+                        pname, pdefault = param.split("=", 1)
+                        pname = pname.strip()
+                        param_names.append(pname)
+                        param_defaults[pname] = pdefault.strip()
+                    else:
+                        param_names.append(param)
+
+            # Create the macro function
+            def _make_inline_macro(m_body, m_params, m_defaults, m_varargs, m_varkw, m_context):
+                def macro_fn(*args, **kwargs):
+                    local_ctx = dict(m_context or {})
+
+                    # Map positional args to named params
+                    used_kwargs = set()
+                    for i, pname in enumerate(m_params):
+                        if i < len(args):
+                            local_ctx[pname] = args[i]
+                        elif pname in kwargs:
+                            local_ctx[pname] = kwargs[pname]
+                            used_kwargs.add(pname)
+                        elif pname in m_defaults:
+                            try:
+                                local_ctx[pname] = ast.literal_eval(m_defaults[pname])
+                            except (ValueError, SyntaxError):
+                                local_ctx[pname] = m_defaults[pname]
+                        else:
+                            local_ctx[pname] = ""
+
+                    # Collect *varargs
+                    if m_varargs:
+                        local_ctx[m_varargs] = args[len(m_params) :]
+
+                    # Collect **varkw
+                    if m_varkw:
+                        remaining = {k: v for k, v in kwargs.items() if k not in m_params}
+                        local_ctx[m_varkw] = remaining
+
+                    # Always pass caller if provided (for {% call macro() %})
+                    if "caller" in kwargs and "caller" not in used_kwargs:
+                        local_ctx["caller"] = kwargs["caller"]
+
+                    return SafeString(render_template_string(m_body, local_ctx))
+
+                return macro_fn
+
+            context[macro_name] = _make_inline_macro(
+                body, param_names, param_defaults, varargs, varkw, context
+            )
+
+        # Remove macro definitions from template
+        template_string = _RE_MACRO.sub("", template_string)
 
     return template_string
 
@@ -772,10 +1093,72 @@ def _apply_filters(
 
 
 def _resolve_expr(expr, locals_set: Optional[set[str]] = None, _debug: bool = False):
-    """Resolve dotted access + filter piping. Works in {{ }} and {% if/for %}.
+    """Resolve dotted access + filter piping + is tests. Works in {{ }} and {% if/for %}.
 
     Handles chains like a.b|upper|truncate(10) anywhere in the expression.
+    Also handles 'is' tests like: variable is defined, number is even.
     """
+
+    # Handle "is not" and "is" tests
+    # Pattern: value is [not] test_name
+    def replace_is_test(m):
+        value_expr = m.group(1).strip()
+        negated = m.group(2) is not None  # "not" present
+        test_name = m.group(3).strip().lower()  # Normalize to lowercase
+
+        resolved_value = _resolve_dotted(value_expr, locals_set, _debug)
+
+        # Use conditional expression to avoid lambda that would be transformed
+        test_call = f"(_get(__tests, '{test_name}')({resolved_value}) if '{test_name}' in __tests else False)"
+
+        if negated:
+            return f"(not {test_call})"
+        else:
+            return test_call
+
+    # SECURITY FIX: Only apply "is test" pattern outside of string literals
+    # to prevent strings like '2FA is Enabled' from being incorrectly parsed
+    def apply_is_test_outside_strings(text):
+        """Apply is test pattern only to parts outside string literals."""
+        result_parts = []
+        i = 0
+        while i < len(text):
+            # Check if we're at the start of a string literal
+            if text[i] in ('"', "'"):
+                quote_char = text[i]
+                # Find the end of the string literal
+                string_start = i
+                i += 1
+                while i < len(text):
+                    if text[i] == '\\' and i + 1 < len(text):
+                        # Skip escaped character
+                        i += 2
+                    elif text[i] == quote_char:
+                        # End of string
+                        i += 1
+                        break
+                    else:
+                        i += 1
+                # Add the entire string literal unchanged
+                result_parts.append(text[string_start:i])
+            else:
+                # Find the next string literal or end of text
+                next_quote = len(text)
+                for j in range(i, len(text)):
+                    if text[j] in ('"', "'"):
+                        next_quote = j
+                        break
+                # Apply is test pattern to this non-string segment
+                segment = text[i:next_quote]
+                is_test_pattern = re.compile(
+                    r'([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*|\[[^\]]+\])*)\s+is\s+(not\s+)?(\w+)'
+                )
+                segment = is_test_pattern.sub(replace_is_test, segment)
+                result_parts.append(segment)
+                i = next_quote
+        return ''.join(result_parts)
+
+    expr = apply_is_test_outside_strings(expr)
 
     def replace_filter(m):
         base = _resolve_dotted(m.group(1), locals_set, _debug)
@@ -836,13 +1219,13 @@ def _compile_and_run(template_string, context, is_debug: bool = False):
     if run_fn is None:
         tokens = _RE_TOKENS.split(template_string)
         code = [
-            "def __run_template(context, __filters, _get, _res, _debug):",
+            "def __run_template(context, __filters, __tests, _get, _res, _debug):",
             "    pass",
         ]
         indent = 4
         # track defined local variables per level (stack)
         local_scope_stack: list[set[str]] = [
-            {"context", "__filters", "_get", "_res", "_debug"}
+            {"context", "__filters", "__tests", "_get", "_res", "_debug"}
         ]
         block_stack = []
 
@@ -852,32 +1235,111 @@ def _compile_and_run(template_string, context, is_debug: bool = False):
                 s.update(stack_level)
             return s
 
+        def _get_capture_var():
+            """Get the capture variable if we're in a set or call block."""
+            for block_type, block_data in reversed(block_stack):
+                if block_type == "set":
+                    return block_data[1]  # (var_name, capture_var)
+                elif block_type == "call":
+                    return block_data[2]  # (macro_name, args_part, capture_var, caller_var)
+            return None
+
         for token in tokens:
             if token.startswith("{{"):
                 expr = token[2:-2].strip().lstrip("-").rstrip("-").strip()
+                # Normalize newlines to spaces for valid Python syntax
+                expr = " ".join(expr.split())
                 resolved = _resolve_expr_full(expr, get_all_locals(), is_debug)
-                code.append(" " * indent + f"yield _escape({resolved})")
+                # Check if we're capturing content for a set or call block
+                capture_var = _get_capture_var()
+                if capture_var:
+                    code.append(" " * indent + f"{capture_var}.append(_escape({resolved}))")
+                else:
+                    code.append(" " * indent + f"yield _escape({resolved})")
             elif token.startswith("{%"):
                 stmt = token[2:-2].strip().lstrip("-").rstrip("-").strip()
                 if stmt.startswith("set "):
-                    var_name, expr = stmt[4:].split("=", 1)
-                    var_name = var_name.strip()
-                    local_scope_stack[-1].add(var_name)
-                    code.append(
-                        " " * indent
-                        + f"{var_name} = {_resolve_expr_full(expr.strip(), get_all_locals(), is_debug)}"
-                    )
-                elif stmt.startswith("with "):
-                    # {% with x = expr %}
-                    var_part = stmt[5:]
-                    if "=" in var_part:
-                        var_name, expr = var_part.split("=", 1)
+                    rest = stmt[4:].strip()
+                    # Check if it's a block assignment (no =) or inline (has =)
+                    if "=" in rest:
+                        # Inline: {% set var = value %}
+                        var_name, expr = rest.split("=", 1)
                         var_name = var_name.strip()
                         local_scope_stack[-1].add(var_name)
                         code.append(
                             " " * indent
                             + f"{var_name} = {_resolve_expr_full(expr.strip(), get_all_locals(), is_debug)}"
                         )
+                    else:
+                        # Block: {% set varname %}...{% endset %}
+                        var_name = rest.strip()
+                        local_scope_stack[-1].add(var_name)
+                        capture_var = f"__set_capture_{secrets.token_hex(4)}"
+                        block_stack.append(("set", (var_name, capture_var)))
+                        # Start capturing by appending to a list
+                        code.append(f"{' ' * indent}{capture_var} = []")
+                        code.append(f"{' ' * indent}if True:  # set block scope")
+                        indent += 4
+                        local_scope_stack.append({capture_var})
+                elif stmt.startswith("do "):
+                    # {% do expr %} - execute expression without outputting
+                    expr = stmt[3:].strip()
+                    resolved = _resolve_expr_full(expr, get_all_locals(), is_debug)
+                    code.append(" " * indent + f"{resolved}")
+                elif stmt == "break":
+                    # {% break %} - break out of loop
+                    code.append(" " * indent + "break")
+                elif stmt == "continue":
+                    # {% continue %} - continue to next iteration
+                    code.append(" " * indent + "continue")
+                elif stmt.startswith("call "):
+                    # {% call macro_expr %}...{% endcall %}
+                    # Captures block content and passes it as caller() to the macro
+                    macro_call = stmt[5:].strip()
+
+                    # Parse macro_call to extract name and arguments
+                    # E.g., "card('Test')" -> name="card", args="'Test'"
+                    if "(" in macro_call:
+                        macro_name, args_part = macro_call.split("(", 1)
+                        macro_name = macro_name.strip()
+                        args_part = args_part.rstrip(")")
+                    else:
+                        macro_name = macro_call
+                        args_part = ""
+
+                    # Resolve the macro name
+                    resolved_name = _resolve_expr_full(macro_name, get_all_locals(), is_debug)
+
+                    # Create a capture variable for the block content
+                    capture_var = f"__capture_{secrets.token_hex(4)}"
+                    caller_var = f"__caller_{secrets.token_hex(4)}"
+                    block_stack.append(("call", (resolved_name, args_part, capture_var, caller_var)))
+                    code.append(f"{' ' * indent}{capture_var} = []")
+                    code.append(f"{' ' * indent}if True:  # call block scope")
+                    indent += 4
+                    local_scope_stack.append({capture_var, caller_var})
+                elif stmt.startswith("with "):
+                    # {% with x = expr %} or {% with x=1, y=2, z=3 %}
+                    var_part = stmt[5:].strip()
+                    if "=" in var_part:
+                        # Create a new scope for with block
+                        block_stack.append(("with", None))
+                        new_scope = set()
+                        # Support multiple assignments: x=1, y=2, z=3
+                        assignments = [a.strip() for a in var_part.split(",")]
+                        for assignment in assignments:
+                            if "=" in assignment:
+                                var_name, expr = assignment.split("=", 1)
+                                var_name = var_name.strip()
+                                new_scope.add(var_name)
+                                code.append(
+                                    " " * indent
+                                    + f"{var_name} = {_resolve_expr_full(expr.strip(), get_all_locals(), is_debug)}"
+                                )
+                        # Create a dummy if block to maintain scope
+                        code.append(f"{' ' * indent}if True:")
+                        indent += 4
+                        local_scope_stack.append(new_scope)
                 elif (
                     stmt.startswith("for ")
                     or stmt.startswith("if ")
@@ -885,9 +1347,12 @@ def _compile_and_run(template_string, context, is_debug: bool = False):
                     or stmt.startswith("else")
                 ):
                     if stmt.startswith("elif ") or stmt.startswith("else"):
-                        indent -= 4
-                        local_scope_stack.pop()
-                        local_scope_stack.append(set())
+                        if block_stack and block_stack[-1][0] in ("if", "for"):
+                            indent -= 4
+                            local_scope_stack.pop()
+                            local_scope_stack.append(set())
+                        elif is_debug:
+                            code.append(f"{' ' * indent}# Warning: {stmt} outside of block")
 
                     if stmt.startswith("for "):
                         try:
@@ -954,15 +1419,51 @@ def _compile_and_run(template_string, context, is_debug: bool = False):
                             + ":"
                         )
                         indent += 4
-                elif stmt in ["endif", "endfor"]:
+                elif stmt in ["endif", "endfor", "endset", "endwith", "endcall"]:
                     if block_stack:
-                        block_stack.pop()
-                    indent -= 4
-                    local_scope_stack.pop()
+                        block_type, block_data = block_stack.pop()
+
+                        # Special handling for set blocks
+                        if block_type == "set" and stmt == "endset":
+                            indent -= 4
+                            local_scope_stack.pop()
+                            var_name, capture_var = block_data
+                            # The content was captured to capture_var list
+                            # Join and assign to the variable
+                            code.append(f"{' ' * indent}{var_name} = ''.join({capture_var})")
+                        elif block_type == "call" and stmt == "endcall":
+                            # Handle call block ending
+                            indent -= 4
+                            local_scope_stack.pop()
+                            # Call block data contains the macro name, args, and capture var
+                            macro_name, args_part, capture_var, caller_var = block_data
+                            # Join captured content and create caller function
+                            code.append(f"{' ' * indent}__caller_content = ''.join({capture_var})")
+                            code.append(f"{' ' * indent}def {caller_var}():")
+                            code.append(f"{' ' * (indent + 4)}return __caller_content")
+                            # Call the macro with arguments and caller parameter
+                            if args_part:
+                                code.append(f"{' ' * indent}yield {macro_name}({args_part}, caller={caller_var})")
+                            else:
+                                code.append(f"{' ' * indent}yield {macro_name}(caller={caller_var})")
+                        else:
+                            # Regular block (if, for, with)
+                            indent -= 4
+                            local_scope_stack.pop()
+                    else:
+                        # Unbalanced end tag: log a warning or just ignore to prevent
+                        # breaking function indentation (yield outside function error).
+                        if is_debug:
+                            code.append(f"{' ' * indent}# Warning: Unbalanced {stmt} ignored")
             else:
                 if token:
                     safe_token = repr(token)
-                    code.append(" " * indent + f"yield {safe_token}")
+                    # Check if we're capturing content for a set or call block
+                    capture_var = _get_capture_var()
+                    if capture_var:
+                        code.append(" " * indent + f"{capture_var}.append({safe_token})")
+                    else:
+                        code.append(" " * indent + f"yield {safe_token}")
 
         compiled_code = "\n".join(code)
         # SECURITY: Restrict the exec namespace. Setting __builtins__ to an
@@ -982,13 +1483,19 @@ def _compile_and_run(template_string, context, is_debug: bool = False):
         run_fn = env["__run_template"]
         _compiled_cache[cache_key] = run_fn
 
-    return run_fn(context, TEMPLATE_FILTERS, _get, _resolve_name, is_debug)
+    return run_fn(context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug)
 
 
 def render_template_string(
-    template_string: str, context: dict[str, Any], root_dir: Optional[str] = None
+    template_string: str, context: dict[str, Any], root_dir: Optional[str] = None,
+    inject_block_markers: bool = False
 ) -> str:
-    """Compile and render a template string with the provided context."""
+    """Compile and render a template string with the provided context.
+
+    Args:
+        inject_block_markers: If True, injects HTML comment markers around blocks
+                            for data-block targeting without IDs
+    """
     is_debug = False
     req = context.get("request")
     if req:
@@ -996,14 +1503,28 @@ def render_template_string(
         if app:
             is_debug = app.config.get("DEBUG", False)
 
-    template_string = _preprocess(template_string, context, root_dir)
+    template_string = _preprocess(
+        template_string, context, root_dir,
+        strip_blocks=not inject_block_markers,
+        inject_markers=inject_block_markers
+    )
     res = _compile_and_run(template_string, context, is_debug)
     return "".join(res) if res is not None else ""
 
 
 def stream_template_string(
-    template_string: str, context: dict[str, Any], root_dir: Optional[str] = None
+    template_string: str, context: dict[str, Any], root_dir: Optional[str] = None,
+    inject_block_markers: bool = False
 ) -> Iterator[str]:
-    """Compile and stream a template string, yielding results as they are generated."""
-    template_string = _preprocess(template_string, context, root_dir)
+    """Compile and stream a template string, yielding results as they are generated.
+
+    Args:
+        inject_block_markers: If True, injects HTML comment markers around blocks
+                            for data-block targeting without IDs
+    """
+    template_string = _preprocess(
+        template_string, context, root_dir,
+        strip_blocks=not inject_block_markers,
+        inject_markers=inject_block_markers
+    )
     return _compile_and_run(template_string, context)

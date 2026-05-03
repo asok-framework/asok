@@ -72,6 +72,16 @@ class FormField:
         else:
             self.messages: dict[str, str] = messages or {}
         self.choices: Optional[list[tuple[Any, str]]] = choices
+
+        # Dropdown specific data
+        self.items = attrs.pop("items", None)
+        self.item_meta = {
+            "title": attrs.pop("title", "name"),
+            "subtitle": attrs.pop("subtitle", None),
+            "image": attrs.pop("image", None),
+            "searchable": attrs.pop("searchable", True)
+        }
+
         attrs = dict(attrs)  # never mutate the schema dict (shared in templates)
         self.readonly: bool = attrs.pop("readonly", False)
         self.attrs: dict[str, Any] = attrs
@@ -195,6 +205,75 @@ class FormField:
                 html += f"<label><input{_render_attrs(radio_attrs)}> {esc(str(opt_label))}</label>"
             return html
 
+        if self.type == "dropdown":
+            render_items = []
+            current_label = "Select..."
+            items_to_process = self.items or []
+            if not items_to_process and self.choices:
+                items_to_process = [{"id": v, "name": lbl} for v, lbl in self.choices]
+
+            def get_val(obj, key):
+                if not key:
+                    return None
+                if isinstance(obj, dict):
+                    return obj.get(key)
+                return getattr(obj, key, None)
+
+            for item in items_to_process:
+                if isinstance(item, (str, int, float)):
+                    tid = item
+                    title = item
+                    subtitle = None
+                    image = None
+                else:
+                    tid = get_val(item, "id")
+                    if tid is None:
+                        tid = get_val(item, "pk")
+
+                    title = get_val(item, self.item_meta["title"])
+                    if title is None:
+                        title = str(item)
+
+                    subtitle = get_val(item, self.item_meta["subtitle"])
+                    image = get_val(item, self.item_meta["image"])
+
+                if str(tid) == str(self.value):
+                    current_label = title
+                render_items.append({"id": tid, "title": title, "subtitle": subtitle, "image": image})
+
+            container_attrs = _merge_attrs({"class": "asok-dropdown"}, overrides)
+            trigger_class = overrides.get("trigger_class", self.attrs.get("trigger_class", ""))
+            menu_class = overrides.get("menu_class", self.attrs.get("menu_class", ""))
+            item_class = overrides.get("item_class", self.attrs.get("item_class", ""))
+            searchable = self.item_meta["searchable"]
+
+            html = f'<div{_render_attrs(container_attrs)} asok-state="{{ open: false, search: \'\', label: \'{esc(str(current_label))}\' }}">'
+            html += f'  <button type="button" class="asok-dropdown-trigger {esc(trigger_class)}" asok-on:click="open = !open">'
+            html += f'    <span asok-text="label">{esc(str(current_label))}</span>'
+            html += '    <svg class="asok-dropdown-arrow" width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
+            html += '  </button>'
+            html += f'  <div class="asok-dropdown-menu {esc(menu_class)}" asok-show="open" asok-on:click.outside="open = false" asok-cloak>'
+            if searchable:
+                html += '    <div class="asok-dropdown-search"><input type="text" asok-model="search" placeholder="Search..." asok-on:keydown.escape="open = false"></div>'
+            html += '    <div class="asok-dropdown-items">'
+            for ri in render_items:
+                s_cond = f"!search || '{esc(str(ri['title'])).lower()}'.includes(search.toLowerCase())"
+                click = f"label = '{esc(str(ri['title']))}'; open = false; $refs.input_{self.name}.value = '{esc(str(ri['id']))}'; $refs.input_{self.name}.dispatchEvent(new Event('change'))"
+                html += f'      <div class="asok-dropdown-item {esc(item_class)}" asok-show="{s_cond}" asok-on:click="{click}">'
+                if ri["image"]:
+                    html += f'        <img src="{esc(str(ri["image"]))}" class="asok-dropdown-item-img">'
+                html += '        <div class="asok-dropdown-item-content">'
+                html += f'          <div class="asok-dropdown-item-title">{esc(str(ri["title"]))}</div>'
+                if ri["subtitle"]:
+                    html += f'          <div class="asok-dropdown-item-subtitle">{esc(str(ri["subtitle"]))}</div>'
+                html += '        </div>'
+                html += '      </div>'
+            html += '    </div>'
+            html += '  </div>'
+            html += f'  <input type="hidden" name="{self.name}" id="{self.name}" value="{esc(str(self.value))}" asok-ref="input_{self.name}">'
+            html += '</div>'
+            return html
+
         attrs = {"type": self.type, "id": self.name, "name": self.name, **merged}
         if self.type != "file":
             attrs["value"] = val
@@ -269,7 +348,11 @@ class Form:
                 name, label, field_type, rules, messages, choices, **attrs
             )
             if is_post and not field.readonly:
-                field.value = request.form.get(name, "")
+                # Checkboxes need special handling: unchecked = not in form data
+                if field_type == "checkbox":
+                    field.value = "1" if request.form.get(name) else "0"
+                else:
+                    field.value = request.form.get(name, "")
             self._fields[name] = field
 
     def _bind(self, request: Request) -> Form:
@@ -283,14 +366,22 @@ class Form:
         is_post = request.method == "POST"
         for name, field in self._fields.items():
             if is_post and not field.readonly:
-                field.value = request.form.get(name, "")
+                # Checkboxes need special handling: unchecked = not in form data
+                if field.type == "checkbox":
+                    field.value = "1" if request.form.get(name) else "0"
+                else:
+                    field.value = request.form.get(name, "")
         return self
 
-    def validate(self, request: Optional[Request] = None) -> bool:
+    def validate(self, request: Optional[Request] = None, csrf: bool = True) -> bool:
         """Run validation rules against the submitted request data.
 
         Returns True if all fields are valid, False otherwise.
         If the form is not yet bound to a request, it will attempt to bind using the provided request.
+
+        Args:
+            request: The request object to validate (if not already bound).
+            csrf: If True, automatically performs CSRF verification.
         """
         if request is not None and self._request is None:
             self.bind(request)
@@ -303,6 +394,10 @@ class Form:
 
         if self._request.method != "POST":
             return False
+
+        # 1. CSRF Verification
+        if csrf:
+            self._request.verify_csrf()
 
         schema = {}
         for name, field in self._fields.items():
@@ -346,10 +441,17 @@ class Form:
                 continue
             if is_dict:
                 if name in source:
-                    field.value = source[name] if source[name] is not None else ""
+                    val = source[name]
+                    # Extract .value from Enum objects for form fields
+                    if val is not None and isinstance(val, enum.Enum):
+                        val = val.value
+                    field.value = val if val is not None else ""
             else:
                 if hasattr(source, name):
                     val = getattr(source, name)
+                    # Extract .value from Enum objects for form fields
+                    if val is not None and isinstance(val, enum.Enum):
+                        val = val.value
                     field.value = val if val is not None else ""
         return self
 
@@ -434,7 +536,13 @@ class Form:
                 # We allow 'password' because it's protected but necessary for signups
                 continue
 
-            label = name.replace("_", " ").title()
+            # Use field.label if defined, otherwise generate from field name
+            label = field.label if field.label else name.replace("_", " ").title()
+
+            # Use field.messages if defined for custom error messages
+            messages = field.messages if field.messages else None
+
+            # Build validation rules by combining auto-generated and custom rules
             rules_parts = []
             is_password = getattr(field, "is_password", False)
             if not field.nullable and not is_password:
@@ -445,66 +553,96 @@ class Form:
             if max_length:
                 rules_parts.append(f"max:{max_length}")
 
+            # Add custom rules from field definition
+            if field.rules:
+                rules_parts.append(field.rules)
+
             rules = "|".join(rules_parts)
             attrs = {}
             if max_length:
                 attrs["maxlength"] = max_length
 
             if is_password:
-                schema[name] = cls.password(label, "", **attrs)
+                schema[name] = cls.password(label, "", messages, **attrs)
             elif getattr(field, "is_file", False):
-                schema[name] = cls.file(label, rules, **attrs)
+                schema[name] = cls.file(label, rules, messages, **attrs)
             elif getattr(field, "is_tel", False):
                 rules = f"tel|{rules}".strip("|")
-                schema[name] = cls.tel(label, rules, **attrs)
+                schema[name] = cls.tel(label, rules, messages, **attrs)
             elif getattr(field, "is_url", False):
                 rules = f"url|{rules}".strip("|")
-                schema[name] = cls.url(label, rules, **attrs)
+                schema[name] = cls.url(label, rules, messages, **attrs)
             elif getattr(field, "is_color", False):
-                schema[name] = cls.color(label, rules, **attrs)
+                rules = f"color|{rules}".strip("|")
+                schema[name] = cls.color(label, rules, messages, **attrs)
             elif getattr(field, "is_time", False):
-                schema[name] = cls.time(label, rules, **attrs)
+                schema[name] = cls.time(label, rules, messages, **attrs)
             elif getattr(field, "is_datetime", False):
-                schema[name] = cls.datetime_local(label, rules, **attrs)
+                schema[name] = cls.datetime_local(label, rules, messages, **attrs)
             elif getattr(field, "is_enum", False):
-                schema[name] = cls.enum(label, field.enum_class, rules, **attrs)
+                schema[name] = cls.enum(label, field.enum_class, rules, messages, **attrs)
             elif getattr(field, "is_json", False):
-                schema[name] = cls.json(label, rules, **attrs)
+                schema[name] = cls.json(label, rules, messages, **attrs)
             elif getattr(field, "is_decimal", False):
                 precision = getattr(field, "precision", None)
                 if precision is not None:
                     attrs["step"] = (
                         f"0.{'0' * (precision - 1)}1" if precision > 0 else "1"
                     )
-                schema[name] = cls.number(label, rules, **attrs)
+                schema[name] = cls.number(label, rules, messages, **attrs)
             elif getattr(field, "is_uuid", False):
                 attrs["readonly"] = True
-                schema[name] = cls.text(label, rules, **attrs)
+                schema[name] = cls.text(label, rules, messages, **attrs)
             elif getattr(field, "is_foreign_key", False):
                 target = field.related_model
-                try:
-                    choices = [(o.id, str(o)) for o in target.all()]
-                except Exception:
-                    choices = []
-                choices = [("", "— None —")] + choices
-                schema[name] = cls.select(label, choices, rules, **attrs)
+                if getattr(field, "dropdown", False):
+                    try:
+                        items = target.all()
+                    except Exception:
+                        items = []
+                    schema[name] = cls.dropdown(
+                        label, items,
+                        title=getattr(field, "dropdown_title", "name"),
+                        subtitle=getattr(field, "dropdown_subtitle", None),
+                        image=getattr(field, "dropdown_image", None),
+                        searchable=getattr(field, "dropdown_searchable", True),
+                        rules=rules, messages=messages, **attrs
+                    )
+                else:
+                    try:
+                        choices = [(o.id, str(o)) for o in target.all()]
+                    except Exception:
+                        choices = []
+                    choices = [("", "— None —")] + choices
+                    schema[name] = cls.select(label, choices, rules, messages, **attrs)
+            elif getattr(field, "is_dropdown", False):
+                schema[name] = cls.dropdown(
+                    label, [],
+                    searchable=getattr(field, "dropdown_searchable", True),
+                    choices=field.choices,
+                    rules=rules, messages=messages, **attrs
+                )
             elif getattr(field, "is_boolean", False):
-                schema[name] = cls.checkbox(label, "", **attrs)
+                schema[name] = cls.checkbox(label, "", messages, **attrs)
             elif field.sql_type == "INTEGER":
-                schema[name] = cls.number(label, rules, **attrs)
+                # Treat INTEGER fields starting with "is_" or "has_" as checkboxes
+                if name.startswith("is_") or name.startswith("has_"):
+                    schema[name] = cls.checkbox(label, "", messages, **attrs)
+                else:
+                    schema[name] = cls.number(label, rules, messages, **attrs)
             elif field.sql_type == "REAL":
                 precision = getattr(field, "precision", None)
                 if precision is not None:
                     attrs["step"] = (
                         f"0.{'0' * (precision - 1)}1" if precision > 0 else "1"
                     )
-                schema[name] = cls.number(label, rules, **attrs)
+                schema[name] = cls.number(label, rules, messages, **attrs)
             elif getattr(field, "is_email", False):
-                schema[name] = cls.email(label, rules, **attrs)
+                schema[name] = cls.email(label, rules, messages, **attrs)
             elif getattr(field, "is_text", False):
-                schema[name] = cls.textarea(label, rules, **attrs)
+                schema[name] = cls.textarea(label, rules, messages, **attrs)
             else:
-                schema[name] = cls.text(label, rules, **attrs)
+                schema[name] = cls.text(label, rules, messages, **attrs)
 
         if not schema:
             raise ValueError(
@@ -711,6 +849,26 @@ class Form:
         return ("textarea", label, real_rules, messages, None, attrs)
 
     @staticmethod
+    def dropdown(
+        label: str,
+        items: Any,
+        title: str = "name",
+        subtitle: Optional[str] = None,
+        image: Optional[str] = None,
+        searchable: bool = True,
+        rules: str = "",
+        messages: Optional[dict[str, str]] = None,
+        **attrs: Any,
+    ) -> tuple:
+        """Rich dropdown selection from a list of objects or Query results."""
+        attrs["items"] = items
+        attrs["title"] = title
+        attrs["subtitle"] = subtitle
+        attrs["image"] = image
+        attrs["searchable"] = searchable
+        return ("dropdown", label, rules, messages, None, attrs)
+
+    @staticmethod
     def enum(
         label: str,
         enum_class: type[enum.Enum],
@@ -720,4 +878,11 @@ class Form:
     ) -> tuple:
         """Generate a select field from a Python Enum class."""
         choices = [(e.value, e.name.replace("_", " ").title()) for e in enum_class]
+        # Add automatic validation to ensure value is in the enum
+        valid_values = ",".join(str(e.value) for e in enum_class)
+        in_rule = f"in:{valid_values}"
+        if rules:
+            rules = f"{rules}|{in_rule}"
+        else:
+            rules = in_rule
         return ("select", label, rules, messages, choices, attrs)

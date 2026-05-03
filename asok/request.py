@@ -103,10 +103,21 @@ def _sanitize_filename(filename: str) -> str:
 class UploadedFile:
     """Wrapper for a file uploaded via multipart/form-data."""
 
+    # Magic bytes pour validation MIME
+    _MAGIC_BYTES = {
+        b'\xFF\xD8\xFF': ('image/jpeg', ['.jpg', '.jpeg']),
+        b'\x89PNG\r\n\x1a\n': ('image/png', ['.png']),
+        b'GIF87a': ('image/gif', ['.gif']),
+        b'GIF89a': ('image/gif', ['.gif']),
+        b'%PDF': ('application/pdf', ['.pdf']),
+        b'PK\x03\x04': ('application/zip', ['.zip', '.docx', '.xlsx']),
+    }
+
     def __init__(self, filename: str, content: bytes):
         self.filename: str = _sanitize_filename(filename)
         self.content: bytes = content
         self.size: int = len(content)
+        self._validated: bool = False
 
     def read(self, size: int = -1) -> bytes:
         """Read and return up to *size* bytes of the file content.
@@ -124,15 +135,75 @@ class UploadedFile:
         """Return a file-like BytesIO stream of the content."""
         return io.BytesIO(self.content)
 
-    def save(self, destination: str) -> str:
+    def validate_mime_type(self, allowed_types: Optional[list[str]] = None) -> bool:
+        """Validate the file MIME type using magic bytes.
+
+        Args:
+            allowed_types: List of allowed MIME types (e.g., ['image/jpeg', 'image/png'])
+                          If None, validates against all known types
+
+        Returns:
+            True if valid, False otherwise
+
+        Raises:
+            ValueError: If file type is not allowed or unknown
+        """
+        if not self.content:
+            raise ValueError("Cannot validate empty file")
+
+        # Vérifier les magic bytes
+        detected_mime = None
+        detected_exts = []
+
+        for magic, (mime, exts) in self._MAGIC_BYTES.items():
+            if self.content.startswith(magic):
+                detected_mime = mime
+                detected_exts = exts
+                break
+
+        if not detected_mime:
+            raise ValueError(
+                f"Unknown or unsupported file type. "
+                f"Supported types: {', '.join(set(m for m, _ in self._MAGIC_BYTES.values()))}"
+            )
+
+        # Vérifier contre la liste autorisée
+        if allowed_types and detected_mime not in allowed_types:
+            raise ValueError(
+                f"File type '{detected_mime}' not allowed. "
+                f"Allowed types: {', '.join(allowed_types)}"
+            )
+
+        # Vérifier que l'extension correspond au type détecté
+        import os
+        _, ext = os.path.splitext(self.filename.lower())
+        if ext not in detected_exts:
+            raise ValueError(
+                f"File extension '{ext}' does not match detected type '{detected_mime}'. "
+                f"Expected one of: {', '.join(detected_exts)}"
+            )
+
+        self._validated = True
+        return True
+
+    def save(self, destination: str, validate: bool = True, allowed_types: Optional[list[str]] = None) -> str:
         """Save the uploaded file to disk.
 
         Args:
             destination: Path relative to project root or absolute path.
+            validate: If True, validate MIME type before saving (default: True)
+            allowed_types: List of allowed MIME types for validation
 
         Returns:
             The absolute path where the file was saved.
+
+        Raises:
+            ValueError: If validation fails or path traversal is detected
         """
+        # Validation MIME type AVANT d'écrire sur disque
+        if validate and not self._validated:
+            self.validate_mime_type(allowed_types)
+
         base_dir = os.path.abspath(os.path.join(os.getcwd(), "src/partials/uploads"))
         if not os.path.isabs(destination):
             destination = os.path.join(base_dir, destination)
@@ -318,6 +389,7 @@ class Request:
         self.query_string: str = unquote(environ.get("QUERY_STRING", ""))
 
         self.body: bytes = b""
+        self._csrf_verified = False
         self.args: QueryDict = QueryDict(parse_qsl(self.query_string))
         self.form: dict[str, str] = dict(self.args)
         self.files: dict[str, UploadedFile] = {}
@@ -336,7 +408,11 @@ class Request:
                 pair = pair.strip()
                 if "=" in pair:
                     k, v = pair.split("=", 1)
-                    self.cookies_dict[k.strip()] = v.strip()
+                    val = v.strip()
+                    # Handle optional quotes
+                    if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+                        val = val[1:-1]
+                    self.cookies_dict[k.strip()] = val
 
         self._csrf_cookie_name = "asok_csrf"
         self.csrf_token_value = self.cookies_dict.get(self._csrf_cookie_name)
@@ -631,7 +707,7 @@ class Request:
         # Auto-detect block request (from data-block JS swap)
         block_header = self.environ.get("HTTP_X_BLOCK")
         if block_header:
-            names = [b.strip() for b in block_header.split(",")]
+            names = [b.strip().lstrip('#') for b in block_header.split(",")]
             if len(names) == 1:
                 return self.block(filepath, names[0], **context)
             parts = []
@@ -642,7 +718,8 @@ class Request:
 
         content, tpl_root = self._resolve_template(filepath)
         return render_template_string(
-            content, self._template_context(context), root_dir=tpl_root
+            content, self._template_context(context), root_dir=tpl_root,
+            inject_block_markers=True  # Inject markers for data-block targeting
         )
 
     def stream(self, filepath: str, **context: Any) -> Any:
@@ -656,7 +733,8 @@ class Request:
 
         content, tpl_root = self._resolve_template(filepath)
         return stream_template_string(
-            content, self._template_context(context), root_dir=tpl_root
+            content, self._template_context(context), root_dir=tpl_root,
+            inject_block_markers=True  # Inject markers for data-block targeting
         )
 
     def _stream_blocks(
@@ -667,7 +745,7 @@ class Request:
         Wraps content in <template> tags ONLY for SPA block requests.
         For normal page loads, returns unwrapped content for better SEO and first paint.
         """
-        names = [b.strip() for b in block_header.split(",")]
+        names = [b.strip().lstrip('#') for b in block_header.split(",")]
         content, tpl_root = self._resolve_template(filepath)
 
         # Check if this is a genuine SPA block request (has X-Block header)
@@ -692,13 +770,19 @@ class Request:
     def block(
         self, filepath: str, block_name: Optional[str] = None, **context: Any
     ) -> str:
-        """Render a specific block from an HTML template."""
+        """Render a specific block from an HTML template.
+
+        Returns the block content for data-block updates. The JavaScript will use
+        HTML comment markers to locate and replace the content.
+        """
         if block_name is None:
             block_name = self.environ.get("HTTP_X_BLOCK")
         if not block_name:
             raise ValueError(
                 "block_name is required — pass it explicitly or use data-block on the form"
             )
+        # Remove # prefix if present (from CSS selectors like #main, #content)
+        block_name = block_name.lstrip('#')
         self._current_block = block_name
         content, tpl_root = self._resolve_template(filepath)
         return render_block_string(
@@ -884,9 +968,55 @@ class Request:
     def back(self, default: str = "/") -> None:
         """Abort current request and redirect back to the previous page (Referer).
         If no Referer is present, it redirects to the provided 'default' URL.
+
+        SECURITY: Validates the referrer URL to prevent open redirect attacks.
+        Only allows same-origin URLs or relative paths.
         """
         ref = self.environ.get("HTTP_REFERER", default)
+
+        # SECURITY: Validate redirect URL to prevent open redirect attacks
+        if not self._is_safe_redirect(ref):
+            ref = default
+
         self.redirect(ref)
+
+    def _is_safe_redirect(self, url: str) -> bool:
+        """Validate that a redirect URL is safe (same-origin or relative path).
+
+        SECURITY: Prevents open redirect attacks by ensuring redirects only go to:
+        - Relative paths (e.g., "/dashboard", "users/profile")
+        - Same-origin URLs (same scheme, host, and port as current request)
+
+        Returns:
+            True if the URL is safe to redirect to, False otherwise.
+        """
+        if not url:
+            return False
+
+        # Allow relative paths (no scheme/host)
+        if url.startswith("/") and not url.startswith("//"):
+            return True
+
+        # Parse the URL to check if it's same-origin
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+
+            # If no scheme, it's a relative URL - allow it
+            if not parsed.scheme and not parsed.netloc:
+                return True
+
+            # Get current request's origin
+            current_scheme = self.environ.get("wsgi.url_scheme", "http")
+            current_host = self.environ.get("HTTP_HOST") or self.environ.get("SERVER_NAME", "")
+
+            # Only allow same-origin redirects
+            return parsed.scheme == current_scheme and parsed.netloc == current_host
+
+        except Exception:
+            # If parsing fails, reject the URL to be safe
+            return False
 
     @property
     def code(self) -> int:
@@ -913,13 +1043,16 @@ class Request:
             f'<input type="hidden" name="csrf_token" value="{self.csrf_token_value}" />'
         )
 
-    def verify_csrf(self) -> None:
-        """Verify the CSRF token in the request against the cookie/session token.
+    def verify_csrf(self):
+        """Verify the CSRF token from headers, form data, or JSON body.
 
-        Raises 403 Forbidden if the token is missing or invalid.
+        Aborts with 403 Forbidden if validation fails.
         """
-        # Skip for safe methods
+        if self._csrf_verified:
+            return
+
         if self.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
+            self._csrf_verified = True
             return
 
         # 1. Strict Origin/Referer verification for HTTPS
@@ -944,12 +1077,33 @@ class Request:
                 self.abort(403, "Invalid Origin or Referer format")
 
         # 2. Token verification
-        token = self.form.get("csrf_token") or self.headers.get("X-CSRF-Token")
+        # DEBUG
+        # Priority: 1. Header (most reliable for AJAX/SPA), 2. Form, 3. JSON
+        token = self.environ.get("HTTP_X_CSRF_TOKEN")
+
+        if not token:
+            headers = self.headers
+            token = headers.get("X-CSRF-Token") or headers.get("X-Csrf-Token") or headers.get("X-CSRF-TOKEN")
+
+        if not token:
+            token = self.form.get("csrf_token")
+
+        if not token and self.json_body and isinstance(self.json_body, dict):
+            token = self.json_body.get("csrf_token")
 
         if not token or not hmac.compare_digest(
             str(token), str(self.csrf_token_value or "")
         ):
             self.abort(403, "CSRF validation failed")
+
+        self._csrf_verified = True
+
+        # SECURITY: Rotate CSRF token after successful validation
+        # to prevent token reuse attacks
+        import secrets
+        new_token = secrets.token_hex(32)
+        self.csrf_token_value = new_token
+        # Le nouveau token sera automatiquement envoyé via Set-Cookie et X-CSRF-Token header
 
     @property
     def nonce(self) -> str:

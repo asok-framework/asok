@@ -84,7 +84,7 @@ class TestMinify:
         </div>
         """
         minified = minify_html(html)
-        assert minified == '<div class="container"><h1>Hello</h1><p> World </p></div>'
+        assert minified == '<div class="container"> <h1>Hello</h1> <p> World </p> </div>'
 
     def test_minify_html_removes_comments(self):
         html = "<div><!-- This is a comment -->Content</div>"

@@ -17,10 +17,16 @@ from asok.request import Request
 
 
 def make_request(data=None, method="POST"):
-    """Build a minimal POST Request with form data."""
+    """Build a minimal POST Request with form data and CSRF token."""
     from urllib.parse import urlencode
 
-    body = urlencode(data or {}).encode()
+    data = data.copy() if data else {}
+    csrf_token = "test_csrf_token_12345"
+
+    if method == "POST" and "csrf_token" not in data:
+        data["csrf_token"] = csrf_token
+
+    body = urlencode(data).encode()
     environ = {
         "REQUEST_METHOD": method,
         "PATH_INFO": "/",
@@ -30,6 +36,7 @@ def make_request(data=None, method="POST"):
         "SERVER_NAME": "localhost",
         "SERVER_PORT": "80",
         "HTTP_HOST": "localhost",
+        "HTTP_COOKIE": f"asok_csrf={csrf_token}",
         "wsgi.input": io.BytesIO(body),
         "wsgi.errors": io.BytesIO(),
         "wsgi.url_scheme": "http",

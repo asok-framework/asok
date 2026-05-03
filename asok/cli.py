@@ -21,7 +21,9 @@ from io import BytesIO
 from typing import Optional
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
+from . import __version__
 from .orm import MODELS_REGISTRY, Model
+from .utils.minify import minify_html
 
 TAILWIND_VERSION = "4.2.2"
 IMAGE_VERSION = "1.5.0"
@@ -1117,16 +1119,8 @@ def run_preview(port_arg=None):
 
 
 def _minify_html(html):
-    """Simple regex-based HTML minifier (Zero dependencies)."""
-    import re
-
-    # Remove comments
-    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
-    # Collapse whitespace between tags
-    html = re.sub(r">\s+<", "><", html)
-    # Trim lines
-    html = "\n".join(line.strip() for line in html.splitlines() if line.strip())
-    return html
+    """Minifies HTML content using the central safe minifier."""
+    return minify_html(html)
 
 
 def run_build(root, keep_source=False, output=None):
@@ -1241,7 +1235,7 @@ def run_build(root, keep_source=False, output=None):
                 dst = src + "c"
                 try:
                     # Compile to .pyc
-                    py_compile.compile(src, cfile=dst, optimize=2)
+                    py_compile.compile(src, cfile=dst, optimize=1)
                     if os.path.exists(dst) and os.path.getsize(dst) > 0:
                         success_count += 1
                         # If we don't want sources, remove the .py file
@@ -2027,9 +2021,13 @@ def main() -> None:
     )
     make_parser.add_argument("name")
 
-    # Catch empty args or help request
+    # Catch empty args, help or version request
     if len(sys.argv) == 1 or "-h" in sys.argv or "--help" in sys.argv:
         print_help()
+        return
+
+    if "-v" in sys.argv or "--version" in sys.argv:
+        print(f"Asok Framework v{__version__}")
         return
 
     args = parser.parse_args()
