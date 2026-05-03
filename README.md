@@ -336,7 +336,6 @@ Join our growing community:
 - 💬 **[Discord Server](https://discord.gg/asok)** - Real-time chat, help, and discussions
 - 🐦 **[Twitter/X](https://twitter.com/asok_framework)** - News and updates
 - 📖 **[GitHub Discussions](https://github.com/asok-framework/asok/discussions)** - Q&A, feature requests, show & tell
-- 📧 **[Newsletter](https://asok-framework.com/newsletter)** - Monthly updates and tips
 - 🎥 **[YouTube Channel](https://www.youtube.com/@asok-framework)** - Tutorials and demos
 
 **Need help?**
