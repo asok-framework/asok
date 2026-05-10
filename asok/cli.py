@@ -1734,11 +1734,12 @@ def make_migration(name: str):
     if not os.path.isfile(wsgi_path):
         wsgi_path = os.path.join(root, "wsgi.pyc")
 
+    wsgi_mod = None
     if os.path.isfile(wsgi_path):
         try:
             spec = _ilu.spec_from_file_location("_wsgi_mig", wsgi_path)
-            mod = _ilu.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            wsgi_mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(wsgi_mod)
         except Exception:
             pass
 
@@ -1756,6 +1757,15 @@ def make_migration(name: str):
                     spec.loader.exec_module(mod)
                 except Exception as e:
                     Style.warn(f"Could not load model {f}: {e}")
+
+    # 3. Ensure Admin relations are injected if Admin is present
+    # This is crucial because loading models in step 2 might have overwritten
+    # the classes that Admin (initialized in wsgi.py) already patched.
+    if wsgi_mod and hasattr(wsgi_mod, "app"):
+        app = getattr(wsgi_mod, "app")
+        if hasattr(app, "_admin"):
+            app._admin._inject_user_methods()
+
 
     # Ensure migration dir exists
     mig_dir = os.path.join(root, "src/migrations")
