@@ -1,0 +1,135 @@
+<!-- ASOK DEBUG SUITE -->
+<style nonce="[[nonce]]">[[css]]</style>
+
+<!-- Floating Trigger -->
+<div id="asok-debug-trigger" title="Asok Developer Tools">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56">
+        <defs>
+            <linearGradient id="atgi1" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#818cf8"/>
+                <stop offset="100%" stop-color="#fb923c"/>
+            </linearGradient>
+            <linearGradient id="atgi2" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#a78bfa"/>
+                <stop offset="100%" stop-color="#fdba74"/>
+            </linearGradient>
+        </defs>
+        <polygon points="5,50 28,6 41,50 33,50 28,20 13,50" fill="url(#atgi1)"/>
+        <polygon points="19,50 43,6 51,6 51,11 29,50" fill="url(#atgi2)" opacity="0.88"/>
+    </svg>
+</div>
+
+<!-- Debug Suite Panel -->
+<div id="asok-debug-suite">
+
+    <!-- Nav Header -->
+    <div class="asok-debug-nav">
+        <div class="asok-debug-brand">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56">
+                <defs>
+                    <linearGradient id="atbi1" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#fb923c"/>
+                    </linearGradient>
+                    <linearGradient id="atbi2" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#fdba74"/>
+                    </linearGradient>
+                </defs>
+                <polygon points="5,50 28,6 41,50 33,50 28,20 13,50" fill="url(#atbi1)"/>
+                <polygon points="19,50 43,6 51,6 51,11 29,50" fill="url(#atbi2)" opacity="0.88"/>
+            </svg>
+            <span>ASOK</span>
+        </div>
+
+        <div class="asok-nav-item active" data-tab="sql">
+            Queries <span class="asok-nav-badge">[[sql_count]]</span>
+        </div>
+        <div class="asok-nav-item" data-tab="session">
+            Session <span class="asok-nav-badge">[[session_keys]]</span>
+        </div>
+        <div class="asok-nav-item" data-tab="request">
+            Request
+        </div>
+        <div class="asok-nav-item" data-tab="reactive">
+            Reactive <span class="asok-nav-badge" id="asok-reactive-count">0</span>
+        </div>
+        <div class="asok-nav-item" data-tab="templates">
+            <span id="asok-templates-label">Templates</span>
+            <span class="asok-nav-badge" id="asok-templates-count">0</span>
+        </div>
+
+        <div class="asok-nav-spacer"></div>
+        <div class="asok-nav-version">v[[version]]</div>
+        <div class="asok-close-btn" id="asok-close-btn" title="Close">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+        </div>
+    </div>
+
+    <!-- Body -->
+    <div class="asok-debug-body">
+
+        <!-- SQL TAB — no inner padding, table is full-width -->
+        <div class="asok-debug-tab active" id="tab-sql">
+            <table class="asok-data-table">
+                <thead>
+                    <tr>
+                        <th style="width:44px">#</th>
+                        <th>Query</th>
+                        <th style="width:110px; text-align:right; padding-right:24px">Time</th>
+                    </tr>
+                </thead>
+                <tbody id="asok-sql-rows">
+                    [[sql_rows]]
+                </tbody>
+            </table>
+        </div>
+
+        <!-- SESSION TAB -->
+        <div class="asok-debug-tab" id="tab-session">
+            <div class="asok-tab-inner">
+                <div class="asok-section-header">Session Storage</div>
+                <pre class="asok-code-block">[[session_data]]</pre>
+            </div>
+        </div>
+
+        <!-- REQUEST TAB -->
+        <div class="asok-debug-tab" id="tab-request">
+            <div class="asok-request-meta">
+                <div class="asok-request-meta-item">
+                    <div class="asok-meta-label">Method</div>
+                    <div class="asok-meta-value">[[method]]</div>
+                </div>
+                <div class="asok-request-meta-item" style="flex:1">
+                    <div class="asok-meta-label">Path</div>
+                    <div class="asok-meta-value" style="font-size:13px; color:var(--fg-2);">[[path]]</div>
+                </div>
+            </div>
+            <div class="asok-tab-inner">
+                <div class="asok-section-header">Payload & Environment</div>
+                <pre class="asok-code-block">[[request_data]]</pre>
+                [[redir_info_html]]
+            </div>
+        </div>
+
+        <!-- REACTIVE TAB -->
+        <div class="asok-debug-tab" id="tab-reactive">
+            <div class="asok-tab-inner">
+                <div id="asok-reactive-list"></div>
+            </div>
+        </div>
+
+        <!-- TEMPLATES TAB -->
+        <div class="asok-debug-tab" id="tab-templates">
+            <div class="asok-tab-inner">
+                <div class="asok-section-header">Rendering Pipeline & Blocks</div>
+                <pre id="asok-templates-pre" class="asok-code-block">[[tpl_data]]</pre>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script nonce="[[nonce]]">
+[[js]]
+</script>

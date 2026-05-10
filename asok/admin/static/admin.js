@@ -1,15 +1,15 @@
 /**
- * ASOK Reactive Runtime v0.1.2
+ * ASOK Reactive Runtime v0.1.4
  * - Full implementation of the Asok SPA spec
  * - Event-driven, attribute-based reactivity
  * - Support for OOB swaps, SSE, and complex triggers
  * - Smart Extraction: Prevents Nested Shell bug by extracting target from full HTML
  */
-(function() {
+(function () {
     'use strict';
 
     const X_BLOCK = 'X-Block';
-    const X_CSRF  = 'X-CSRF-Token';
+    const X_CSRF = 'X-CSRF-Token';
 
     /**
      * UTILITY: Custom Premium Modal
@@ -23,12 +23,12 @@
         if (!modal) return confirm(message); // Fallback
 
         const titleEl = document.getElementById('modal-title');
-        const bodyEl  = document.getElementById('modal-body');
+        const bodyEl = document.getElementById('modal-body');
         const confBtn = document.getElementById('modal-confirm');
         const cancBtn = document.getElementById('modal-cancel');
 
         titleEl.textContent = title;
-        bodyEl.textContent  = message;
+        bodyEl.textContent = message;
         confBtn.textContent = confirmText;
         cancBtn.textContent = cancelText;
 
@@ -43,7 +43,7 @@
                 resolve(val);
             };
             const onConfirm = () => cleanup(true);
-            const onCancel  = () => cleanup(false);
+            const onCancel = () => cleanup(false);
             const onOverlay = (e) => { if (e.target === modal) cleanup(false); };
 
             confBtn.addEventListener('click', onConfirm);
@@ -64,7 +64,7 @@
         }, delay);
     }
 
-    window.flash = function(type, message, ttl = 6000) {
+    window.flash = function (type, message, ttl = 6000) {
         const zone = document.getElementById('flash-zone');
         if (!zone) return;
 
@@ -87,9 +87,9 @@
      * CORE: Fetch & Swap
      */
     async function performAction(el, config = {}) {
-        const url      = config.url    || el.getAttribute('data-spa-search') || el.getAttribute('data-url')    || (el.tagName === 'A' ? el.href : (el.tagName === 'FORM' ? el.getAttribute('action') : (el.form ? el.form.getAttribute('action') : location.href)));
-        const method   = config.method || el.getAttribute('data-method') || (el.tagName === 'FORM' ? el.getAttribute('method') : 'GET');
-        const target   = config.target || el.getAttribute('data-target') || el.getAttribute('data-block');
+        const url = config.url || el.getAttribute('data-spa-search') || el.getAttribute('data-url') || (el.tagName === 'A' ? el.href : (el.tagName === 'FORM' ? el.getAttribute('action') : (el.form ? el.form.getAttribute('action') : location.href)));
+        const method = config.method || el.getAttribute('data-method') || (el.tagName === 'FORM' ? el.getAttribute('method') : 'GET');
+        const target = config.target || el.getAttribute('data-target') || el.getAttribute('data-block');
         const swapMode = el.getAttribute('data-swap') || 'innerHTML';
         const confirmMsg = el.getAttribute('data-confirm');
 
@@ -152,7 +152,7 @@
         try {
             const response = await fetch(finalUrl, fetchOptions);
             const html = await response.text();
-            
+
             // If we redirected, ensure we update the URL
             const shouldPush = el.hasAttribute('data-push-url') || el.hasAttribute('data-spa') || (target && target.includes('#page-body'));
 
@@ -177,7 +177,7 @@
         const doc = new DOMParser().parseFromString(html, 'text/html');
         const templates = doc.querySelectorAll('template[data-block]');
         let primaryHandled = false;
-        
+
         // 1. Out-of-band swaps
         if (templates.length > 0) {
             templates.forEach(tpl => {
@@ -186,8 +186,8 @@
 
                 // Only inherit defaultSwap if it's the primary target, otherwise default to innerHTML
                 const isPrimary = (targetSel === defaultTarget);
-                const swapMode  = tpl.getAttribute('data-swap') || (isPrimary ? (defaultSwap || 'innerHTML') : 'innerHTML');
-                
+                const swapMode = tpl.getAttribute('data-swap') || (isPrimary ? (defaultSwap || 'innerHTML') : 'innerHTML');
+
                 applySwap(targetSel, tpl.innerHTML, swapMode);
             });
         }
@@ -196,7 +196,7 @@
         if (!primaryHandled && defaultTarget) {
             let finalContent = html;
             const targetId = defaultTarget.startsWith('#') ? defaultTarget.slice(1) : null;
-            
+
             // If response is a full page, find the target ID within it
             if (targetId && (html.toLowerCase().includes('<body') || html.toLowerCase().includes('<html'))) {
                 const inner = doc.getElementById(targetId);
@@ -204,9 +204,9 @@
                     finalContent = (defaultSwap === 'outerHTML') ? inner.outerHTML : inner.innerHTML;
                 }
             }
-            
+
             applySwap(defaultTarget, finalContent, defaultSwap);
-            if (defaultTarget === '#page-body') window.scrollTo({top: 0, behavior: 'smooth'});
+            if (defaultTarget === '#page-body') window.scrollTo({ top: 0, behavior: 'smooth' });
         } else if (!primaryHandled && !defaultTarget) {
             // 3. Global Fallback: Entire Body
             const body = doc.querySelector('#page-body');
@@ -215,12 +215,17 @@
                 window.scrollTo(0, 0);
             }
         }
-        
+
         // Refresh CSRF meta
         const newToken = doc.querySelector('meta[name="csrf-token"]')?.content;
         if (newToken) {
-           const meta = document.querySelector('meta[name="csrf-token"]');
-           if (meta) meta.content = newToken;
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) meta.content = newToken;
+
+            // Also update all hidden inputs in forms (crucial for persistent banners/modals)
+            document.querySelectorAll('input[name="csrf_token"]').forEach(input => {
+                input.value = newToken;
+            });
         }
 
         // Synchronize Sidebar Active State
@@ -254,14 +259,14 @@
         }
 
         switch (mode) {
-            case 'outerHTML':   target.outerHTML = html; break;
+            case 'outerHTML': target.outerHTML = html; break;
             case 'beforebegin': target.insertAdjacentHTML('beforebegin', html); break;
-            case 'afterbegin':  target.insertAdjacentHTML('afterbegin', html); break;
-            case 'beforeend':   target.insertAdjacentHTML('beforeend', html); break;
-            case 'afterend':    target.insertAdjacentHTML('afterend', html); break;
-            case 'delete':      target.remove(); break;
-            case 'none':        break;
-            default:            target.innerHTML = html; break;
+            case 'afterbegin': target.insertAdjacentHTML('afterbegin', html); break;
+            case 'beforeend': target.insertAdjacentHTML('beforeend', html); break;
+            case 'afterend': target.insertAdjacentHTML('afterend', html); break;
+            case 'delete': target.remove(); break;
+            case 'none': break;
+            default: target.innerHTML = html; break;
         }
     }
 
@@ -278,7 +283,7 @@
 
             const wrap = document.createElement('div');
             wrap.className = 'custom-select-wrap';
-            
+
             const btnId = 'sel-' + Math.random().toString(36).substr(2, 9);
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -287,15 +292,15 @@
             btn.style.padding = '0 12px';
             btn.setAttribute('data-toggle', btnId);
             btn.setAttribute('aria-expanded', 'false');
-            
+
             const label = document.createElement('span');
             label.className = 'custom-select-label';
             const selectedOpt = select.options[select.selectedIndex];
             label.textContent = selectedOpt ? selectedOpt.text : '—';
-            
+
             btn.appendChild(label);
             btn.insertAdjacentHTML('beforeend', `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="muted dd-chevron"><polyline points="6 9 12 15 18 9"/></svg>`);
-            
+
             const menu = document.createElement('div');
             menu.className = 'custom-select-options card';
             menu.id = btnId;
@@ -315,7 +320,7 @@
                 item.className = 'custom-opt' + (opt.selected ? ' is-active' : '');
                 item.style.cursor = 'pointer';
                 item.textContent = opt.text;
-                
+
                 if (opt.selected) {
                     item.insertAdjacentHTML('beforeend', `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:auto"><polyline points="20 6 9 17 4 12"/></svg>`);
                 }
@@ -326,7 +331,7 @@
                     select.value = opt.value;
                     select.dispatchEvent(new Event('change', { bubbles: true }));
                     label.textContent = opt.text;
-                    
+
                     // Update active states
                     menu.querySelectorAll('.custom-opt').forEach(o => {
                         o.classList.remove('is-active');
@@ -335,12 +340,12 @@
                     });
                     item.classList.add('is-active');
                     item.insertAdjacentHTML('beforeend', `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:auto"><polyline points="20 6 9 17 4 12"/></svg>`);
-                    
+
                     // Close menu
                     menu.setAttribute('hidden', '');
                     btn.setAttribute('aria-expanded', 'false');
                 });
-                
+
                 menu.appendChild(item);
             });
 
@@ -450,7 +455,7 @@
                         [{ 'header': [1, 2, 3, false] }],
                         ['bold', 'italic', 'underline', 'strike'],
                         ['link', 'blockquote'],
-                        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                        [{ 'list': 'ordered' }, { 'list': 'bullet' }],
                         ['clean']
                     ]
                 }
@@ -641,7 +646,7 @@
                 }
             });
             if (setter.hasAttribute('data-trigger')) performAction(setter);
-            
+
             // Close the inner dropdown after selection
             const parentDropdown = setter.closest('.custom-select-options');
             if (parentDropdown) {
@@ -649,7 +654,7 @@
                 const parentBtn = document.querySelector(`[data-toggle="${parentDropdown.id}"]`);
                 if (parentBtn) parentBtn.setAttribute('aria-expanded', 'false');
             }
-            
+
             return;
         }
 

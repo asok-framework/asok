@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import email
-import email.policy
 import hashlib
 import hmac
 import io
@@ -204,20 +202,36 @@ class UploadedFile:
         if validate and not self._validated:
             self.validate_mime_type(allowed_types)
 
-        base_dir = os.path.abspath(os.path.join(os.getcwd(), "src/partials/uploads"))
-        if not os.path.isabs(destination):
-            destination = os.path.join(base_dir, destination)
+        # Detect if the user wants to save into a directory
+        is_dir = destination.endswith(("/", "\\"))
 
-        dest = os.path.abspath(destination)
+        # Base directory
+        root = os.getcwd()
+        base_dir = os.path.abspath(os.path.join(root, "src/partials/uploads"))
+
+        # Resolve full path
+        if not os.path.isabs(destination):
+            dest = os.path.abspath(os.path.join(base_dir, destination))
+        else:
+            dest = os.path.abspath(destination)
+
+        # If it's a directory or already exists as one, append filename
+        if is_dir or os.path.isdir(dest):
+            os.makedirs(dest, exist_ok=True)
+            dest = os.path.join(dest, self.filename)
+
+        print(f"  ➜ [ASOK] Saving file to: {dest}")
+
+        # Security check
         try:
             common = os.path.commonpath([dest, base_dir])
-        except ValueError:
-            common = ""
-        if common != base_dir:
-            raise ValueError(f"Path traversal blocked: {destination}")
+            if common != base_dir:
+                raise ValueError(f"Path traversal blocked: {destination}")
+        except Exception:
+             raise ValueError(f"Invalid destination: {destination}")
 
-        dest_dir = os.path.dirname(dest)
-        os.makedirs(dest_dir, exist_ok=True)
+        # Ensure parent directory exists
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
 
         if os.path.exists(dest):
             base, ext = os.path.splitext(dest)
@@ -480,35 +494,49 @@ class Request:
                 except json.JSONDecodeError:
                     pass
             elif "multipart/form-data" in enc_content_type:
-                mime_body = (
-                    b"Content-Type: "
-                    + enc_content_type.encode()
-                    + b"\r\n\r\n"
-                    + self.body
-                )
-                msg = email.message_from_bytes(mime_body, policy=email.policy.default)
-                if msg.is_multipart():
-                    for part in msg.iter_parts():
-                        cdisp = part.get("Content-Disposition")
+                # Extract boundary
+                import re
+                boundary_match = re.search(r'boundary=([^;]+)', enc_content_type)
+                if boundary_match:
+                    boundary = boundary_match.group(1).strip().encode()
+                    # Split body by boundary
+                    parts = self.body.split(b'--' + boundary)
+                    for part in parts:
+                        if not part or part == b'--\r\n' or part == b'--':
+                            continue
+
+                        # Split headers and content
+                        if b'\r\n\r\n' not in part:
+                            continue
+
+                        head, payload = part.split(b'\r\n\r\n', 1)
+                        # Remove trailing \r\n from payload
+                        if payload.endswith(b'\r\n'):
+                            payload = payload[:-2]
+
+                        head_str = head.decode('utf-8', errors='ignore')
+                        cdisp = ""
+                        for line in head_str.split('\r\n'):
+                            if line.lower().startswith('content-disposition:'):
+                                cdisp = line
+                                break
+
                         if cdisp and "name=" in cdisp:
                             name_match = _RE_NAME.search(cdisp)
                             filename_match = _RE_FILENAME.search(cdisp)
                             if name_match:
                                 name = name_match.group(1)
-                                payload = part.get_payload(decode=True)
                                 if filename_match:
                                     raw_filename = filename_match.group(1)
-                                    safe_filename = secure_filename(raw_filename)
-                                    uploaded = UploadedFile(safe_filename, payload)
-                                    self.files[name] = uploaded
-                                    self.all_files.append(uploaded)
-                                    self._files_multi.setdefault(name, []).append(
-                                        (name, uploaded)
-                                    )
+                                    if raw_filename:  # Only if a file was actually selected
+                                        safe_filename = secure_filename(raw_filename)
+                                        uploaded = UploadedFile(safe_filename, payload)
+                                        self.files[name] = uploaded
+                                        self.all_files.append(uploaded)
+                                        self._files_multi.setdefault(name, []).append((name, uploaded))
                                 else:
-                                    self.form[name] = payload.decode(
-                                        "utf-8", errors="ignore"
-                                    )
+                                    # Regular form field
+                                    self.form[name] = payload.decode('utf-8', errors='ignore')
 
     def file(self, name: str) -> Optional[UploadedFile]:
         """Get a single uploaded file by form field name."""
@@ -707,7 +735,13 @@ class Request:
         # Auto-detect block request (from data-block JS swap)
         block_header = self.environ.get("HTTP_X_BLOCK")
         if block_header:
-            names = [b.strip().lstrip('#') for b in block_header.split(",")]
+            names = [b.strip() for b in block_header.split(",")]
+            for name in names:
+                if name.startswith("#"):
+                    raise ValueError(
+                        f"Invalid block name '{name}'. Block names should not include the '#' prefix. "
+                        f"Check your 'data-block' attributes in templates."
+                    )
             if len(names) == 1:
                 return self.block(filepath, names[0], **context)
             parts = []
@@ -717,6 +751,9 @@ class Request:
             return "".join(parts)
 
         content, tpl_root = self._resolve_template(filepath)
+        if not hasattr(self, "_asok_templates"):
+            self._asok_templates = []
+        self._asok_templates.append(filepath)
         return render_template_string(
             content, self._template_context(context), root_dir=tpl_root,
             inject_block_markers=True  # Inject markers for data-block targeting
@@ -745,7 +782,12 @@ class Request:
         Wraps content in <template> tags ONLY for SPA block requests.
         For normal page loads, returns unwrapped content for better SEO and first paint.
         """
-        names = [b.strip().lstrip('#') for b in block_header.split(",")]
+        names = [b.strip() for b in block_header.split(",")]
+        for name in names:
+            if not name:
+                continue
+            if name.startswith("#"):
+                raise ValueError(f"Invalid block name '{name}'. Use the block name directly without the '#' prefix.")
         content, tpl_root = self._resolve_template(filepath)
 
         # Check if this is a genuine SPA block request (has X-Block header)
@@ -781,9 +823,16 @@ class Request:
             raise ValueError(
                 "block_name is required — pass it explicitly or use data-block on the form"
             )
-        # Remove # prefix if present (from CSS selectors like #main, #content)
-        block_name = block_name.lstrip('#')
+        # Enforce strict block naming (no # prefix)
+        if block_name.startswith("#"):
+            raise ValueError(
+                f"Invalid block name '{block_name}'. Block names should not include the '#' prefix. "
+                f"Use '{block_name.lstrip('#')}' instead."
+            )
         self._current_block = block_name
+        if not hasattr(self, "_asok_blocks"):
+            self._asok_blocks = []
+        self._asok_blocks.append(block_name)
         content, tpl_root = self._resolve_template(filepath)
         return render_block_string(
             content, block_name, self._template_context(context), root_dir=tpl_root
@@ -931,7 +980,7 @@ class Request:
 
         If safe=True (default), redirects to external domains are blocked.
         """
-        if safe and not is_safe_url(url):
+        if safe and not is_safe_url(url, allowed_host=self.host):
             raise ValueError(
                 f"Potentially unsafe redirect blocked: {url}. "
                 "Use safe=False for external redirects."
@@ -1198,8 +1247,15 @@ class Request:
     def logout(self) -> None:
         """Clear user session and logout."""
         self.environ["asok.session_cookie"] = self._session_cookie("", 0)
+
+        # Clear server-side session as well
+        try:
+            self.session.clear()
+        except Exception:
+            pass
+
         self._user_instance = None
-        self._auth_resolved = True
+        self._auth_resolved = False
 
     def authenticate(
         self, password_field: str = "password", **credentials: Any
@@ -1256,9 +1312,17 @@ class Request:
             token = auth_header[7:].strip()
             user_id = BearerToken.verify(self, token)
 
-        # 2. Try Session Cookie (Browser)
+        # 2. Try Session (Browser)
         if not user_id:
-            user_id = self._unsign(self.cookies_dict.get("asok_session"))
+            try:
+                # Prioritize server-side session value (crucial for impersonation)
+                user_id = self.session.get("user_id")
+            except Exception:
+                user_id = None
+
+            if not user_id:
+                # Fallback to signed cookie
+                user_id = self._unsign(self.cookies_dict.get("asok_session"))
 
         if user_id:
             try:
@@ -1280,26 +1344,37 @@ class Request:
             as_attachment:  If True, browser downloads; if False, inline display.
         """
         root = self.environ.get("asok.root", os.getcwd())
-        base = os.path.abspath(os.path.join(root, "src/partials/uploads"))
-        if not os.path.isabs(filepath):
-            filepath = os.path.join(base, filepath)
-        filepath = os.path.abspath(filepath)
+        base = os.path.realpath(os.path.abspath(os.path.join(root, "src/partials/uploads")))
 
-        # Block path traversal outside partials directory
-        if not filepath.startswith(base + os.sep):
+        # SECURITY: Force normalization, resolve symlinks, and strip leading slashes
+        clean_path = os.path.normpath(filepath.lstrip("/").lstrip("\\"))
+        full_path = os.path.realpath(os.path.abspath(os.path.join(base, clean_path)))
+
+        # Block path traversal outside partials/uploads directory
+        if not full_path.startswith(base + os.sep) or os.path.islink(full_path):
             self.status = "403 Forbidden"
             return "<h1>403 Forbidden</h1>"
 
-        if not os.path.isfile(filepath):
+        if not os.path.isfile(full_path):
             self.status = "404 Not Found"
             return "<h1>404 Not Found</h1>"
 
-        fname = filename or os.path.basename(filepath)
         mimetype, _ = mimetypes.guess_type(filepath)
-        self.content_type = mimetype or "application/octet-stream"
+
+        # Determine filename and sanitize it for the header
+        from .utils.security import secure_filename
+        fname = secure_filename(filename or os.path.basename(filepath))
 
         disposition = "attachment" if as_attachment else "inline"
-        file_size = os.path.getsize(filepath)
+        file_size = os.path.getsize(full_path)
+
+        # SECURITY: Prevent DoS by limiting max file size (100 MB)
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+        if file_size > MAX_FILE_SIZE:
+            self.status = "413 Payload Too Large"
+            return "<h1>413 Payload Too Large</h1>"
+
+        self.content_type = mimetype or "application/octet-stream"
         self.environ.setdefault("asok.extra_headers", []).extend(
             [
                 ("Content-Disposition", f'{disposition}; filename="{fname}"'),
@@ -1307,11 +1382,11 @@ class Request:
             ]
         )
 
-        # Stream large files (> 1 MB) to avoid loading them entirely into memory
-        if file_size > 1 * 1024 * 1024:
-            self.environ["asok.stream_file"] = filepath
+        # Stream large files (> 5 MB) to avoid loading them entirely into memory
+        if file_size > 5 * 1024 * 1024:
+            self.environ["asok.stream_file"] = full_path
         else:
-            with open(filepath, "rb") as f:
+            with open(full_path, "rb") as f:
                 self.environ["asok.binary_response"] = f.read()
 
         return ""
@@ -1351,18 +1426,52 @@ class Request:
         return self.__dict__["_browser_cache"]
 
     @property
-    def location(self) -> dict[str, Any]:
-        """Get the geographic location of the client based on their IP address.
+    def geo(self) -> dict[str, Any]:
+        """Get comprehensive geographic information for the current request.
 
-        Requires a local database at .asok/geo.csv. If missing, returns 'Unknown' values.
-        Returns a dictionary with 'city', 'country', 'lat', and 'lon'.
+        Combines IP-based location (city, lat, lon) with rich country metadata
+        (flag, currency, timezone, etc.).
         """
-        cache = self.__dict__.setdefault("_location_cache", None)
+        cache = self.__dict__.setdefault("_geo_cache", None)
         if cache:
             return cache
+
+        # 1. Basic IP location (city, country code, lat, lon)
         loc = IPLocation.get_instance().lookup(self.ip)
-        self.__dict__["_location_cache"] = loc
-        return loc
+
+        # 2. Enrich with framework country data
+        from .utils.geo import Countries
+        country_info = Countries.get(loc.get("country", "")) or {
+            "iso": "Unknown",
+            "name": "Unknown",
+            "dial_code": "",
+            "flag": "🌐",
+            "capital": "Unknown",
+            "continent": "Unknown",
+            "currency": "Unknown",
+            "languages": "Unknown"
+        }
+
+        geo_data = {
+            "ip": self.ip,
+            "city": loc.get("city", "Unknown"),
+            "country": loc.get("country", "Unknown"),
+            "lat": loc.get("lat", 0.0),
+            "lon": loc.get("lon", 0.0),
+            **country_info
+        }
+
+        # 3. Add derived info
+        from .utils.geo import Countries as GeoUtils
+        geo_data["timezone"] = GeoUtils.get_timezone(geo_data["iso"])
+
+        self.__dict__["_geo_cache"] = geo_data
+        return geo_data
+
+    @property
+    def location(self) -> dict[str, Any]:
+        """Legacy alias for request.geo (for backward compatibility)."""
+        return self.geo
 
     def require_auth(self, redirect_url: str = "/login") -> None:
         """Ensure the user is authenticated, else redirect to login with a 'next' parameter."""
@@ -1410,7 +1519,6 @@ class Request:
             new_sid = store.regenerate(sess.sid)
             sess.sid = new_sid
             sess.modified = True
-        self.modified = True
 
     @property
     def scheme(self) -> str:

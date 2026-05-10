@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from typing import Optional
 
 _RE_FILENAME = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -36,18 +37,29 @@ def secure_filename(filename: str) -> str:
     return filename
 
 
-def is_safe_url(url: str) -> bool:
-    """Check if a URL is safe for redirection (relative to current host).
+def is_safe_url(url: str, allowed_host: Optional[str] = None) -> bool:
+    """Check if a URL is safe for redirection (relative or matching current host).
 
     Blocks protocol-relative URLs (``//``), backslash tricks (``/\\``),
     and control characters that could confuse browser URL parsers.
     """
     if not url or not isinstance(url, str):
         return False
-    # Block control characters (CR, LF, tab, null) used to bypass URL parsers
+
+    # Block control characters (CR, LF, tab, null)
     if any(c in url for c in ("\r", "\n", "\t", "\x00")):
         return False
-    # Must start with / but NOT with // or /\ (open redirect vectors)
+
+    # Absolute URL check
+    if "://" in url:
+        if not allowed_host:
+            return False
+        # Ensure it starts with http://host or https://host
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        return parsed.netloc == allowed_host
+
+    # Relative URL check
     return (
         url.startswith("/") and not url.startswith("//") and not url.startswith("/\\")
     )

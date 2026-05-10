@@ -23,8 +23,12 @@ class MagicLink:
     """Provides secure, passwordless authentication via signed email links."""
 
     @staticmethod
-    def create_token(request: Request, email: str, expires_in: int = 3600) -> str:
-        """Create a signed magic link token valid for a specific duration (default 1 hour)."""
+    def create_token(request: Request, email: str, expires_in: Optional[int] = None) -> str:
+        """Create a signed magic link token valid for a specific duration."""
+        if expires_in is None:
+            app = request.environ.get("asok.app")
+            expires_in = app.config.get("MAGIC_LINK_TTL", 3600) if app else 3600
+
         exp = int(time.time()) + expires_in
         payload = f"{email}|{exp}"
         # We use the request helper to sign (uses SECRET_KEY)
@@ -56,17 +60,24 @@ class MagicLink:
         """Generate a magic link and send it to the specified email address."""
         token = MagicLink.create_token(request, email)
 
-        # Build URL — prefer configured APP_URL to prevent Host header injection
+        # Build URL — OBLIGATORY APP_URL in production to prevent Host header injection
         app = request.environ.get("asok.app")
-        app_url = None
-        if app is not None:
-            app_url = app.config.get("APP_URL")
+        app_url = app.config.get("APP_URL") if app else None
+        is_debug = app.config.get("DEBUG", True) if app else True
+
         if app_url:
             base = app_url.rstrip("/")
         else:
+            if not is_debug:
+                raise ValueError(
+                    "SECURITY ERROR: 'APP_URL' is mandatory in production to generate secure Magic Links. "
+                    "Set it in your .env file: APP_URL=https://yourdomain.com"
+                )
+            # Fallback to Host header ONLY in DEBUG mode
             host = request.environ.get("HTTP_HOST", "localhost")
             scheme = request.environ.get("wsgi.url_scheme", "http")
             base = f"{scheme}://{host}"
+
         link = f"{base}/auth/magic/callback?token={token}"
 
         body = f"Click here to log in to your account:\n\n{link}\n\nThis link will expire in 1 hour."

@@ -5,6 +5,7 @@ import json as json_mod
 import re
 from typing import Any, Callable, Optional, Union
 
+from .context import request_var
 from .orm import MODELS_REGISTRY, Field
 
 _RE_EMAIL = re.compile(r"[^@]+@[^@]+\.[^@]+")
@@ -43,6 +44,13 @@ _DEFAULT_MESSAGES = {
     "json": "Invalid JSON format.",
     "tel": "Invalid telephone number.",
     "color": "Invalid color format (use #RRGGBB).",
+    "month": "Invalid month format (use YYYY-MM).",
+    "image": "The file must be a valid image (JPEG, PNG, GIF, WEBP).",
+    "password_strength": "Password must be 8+ chars, with uppercase, number, and special char.",
+    "base64": "Invalid base64 encoded data.",
+    "daterange_order": "End date cannot be before start date.",
+    "daterange_future": "Date range must start in the future.",
+    "daterange_invalid": "Invalid date range format.",
 }
 
 
@@ -392,6 +400,27 @@ class Validator:
                 if val and (len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_TEL.match(val)):
                     self.errors[field] = self._msg("tel", messages, field=field)
 
+            # image
+            if name == "image":
+                f = self.files.get(field)
+                if f:
+                    try:
+                        # Validate that it's one of the supported image types
+                        from .request import UploadedFile
+                        if isinstance(f, UploadedFile):
+                            f.validate_mime_type(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+                    except ValueError:
+                        self.errors[field] = self._msg("image", messages, field=field)
+
+            # password_strength
+            if name == "password_strength":
+                val = str(self.data.get(field, ""))
+                if val:
+                    # 8+ chars, 1 uppercase, 1 number, 1 special char
+                    if len(val) < 8 or not re.search(r"[A-Z]", val) or \
+                       not re.search(r"\d", val) or not re.search(r"[!@#$%^&*(),.?\":{}|<>]", val):
+                        self.errors[field] = self._msg("password_strength", messages, field=field)
+
             # color (hex format #RRGGBB or #RGB)
             if name == "color":
                 val = str(self.data.get(field, ""))
@@ -399,6 +428,41 @@ class Validator:
                     # Accept #RRGGBB or #RGB format
                     if not re.match(r"^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})$", val):
                         self.errors[field] = self._msg("color", messages, field=field)
+
+            # month (YYYY-MM format)
+            if name == "month":
+                val = str(self.data.get(field, ""))
+                if val:
+                    # Validate YYYY-MM format
+                    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", val):
+                        self.errors[field] = self._msg("month", messages, field=field)
+                    else:
+                        # Additional check: validate it's a real month
+                        try:
+                            year, month = val.split("-")
+                            year_int = int(year)
+                            month_int = int(month)
+                            if not (1 <= month_int <= 12) or year_int < 1000 or year_int > 9999:
+                                self.errors[field] = self._msg("month", messages, field=field)
+                        except (ValueError, AttributeError):
+                            self.errors[field] = self._msg("month", messages, field=field)
+
+            # base64 (validates base64 encoded data, especially for images)
+            if name == "base64":
+                val = str(self.data.get(field, ""))
+                if val:
+                    # Check for data URI format (data:mime;base64,content)
+                    # or plain base64 string
+                    if val.startswith("data:"):
+                        # Data URI format
+                        pattern = r"^data:([a-zA-Z0-9]+/[a-zA-Z0-9\-\+\.]+)?;base64,[A-Za-z0-9+/]+=*$"
+                        if not re.match(pattern, val):
+                            self.errors[field] = self._msg("base64", messages, field=field)
+                    else:
+                        # Plain base64 string
+                        pattern = r"^[A-Za-z0-9+/]+=*$"
+                        if not re.match(pattern, val):
+                            self.errors[field] = self._msg("base64", messages, field=field)
 
             # 14. Same as another field (same:other_field)
             if name == "same" and arg:
@@ -415,6 +479,43 @@ class Validator:
                         json_mod.loads(str(val))
                     except (ValueError, TypeError):
                         self.errors[field] = self._msg("json", messages, field=field)
+
+            # daterange validation
+            if name == "daterange":
+                val = self.data.get(field)
+                if val:
+                    try:
+                        if isinstance(val, str):
+                            d = json_mod.loads(val)
+                        else:
+                            d = val
+                        start = d.get("start")
+                        end = d.get("end")
+                        if start and end:
+                            ds = datetime.date.fromisoformat(start)
+                            de = datetime.date.fromisoformat(end)
+                            if de < ds:
+                                self.errors[field] = self._msg(
+                                    "daterange_order", messages, field=field
+                                )
+                            if arg == "future" and ds < datetime.date.today():
+                                self.errors[field] = self._msg(
+                                    "daterange_future", messages, field=field
+                                )
+                        elif (start or end) and name == "required":
+                            # If only one is present but it's required (handled by required but good to be safe)
+                            self.errors[field] = self._msg(
+                                "daterange_invalid", messages, field=field
+                            )
+                    except (
+                        ValueError,
+                        json_mod.JSONDecodeError,
+                        TypeError,
+                        AttributeError,
+                    ):
+                        self.errors[field] = self._msg(
+                            "daterange_invalid", messages, field=field
+                        )
 
             # Custom registered rule
             if name in _CUSTOM_RULES:
@@ -458,13 +559,23 @@ class SchemaMeta(type):
 class Schema(metaclass=SchemaMeta):
     """Base class for defining structured data schemas for serialization and deserialization."""
 
-    def __init__(self, many: bool = False):
+    def __init__(self, many: bool = False, request: Optional[Any] = None):
         """Initialize the schema.
 
         Args:
             many: If True, the schema expects a list of objects/dicts.
+            request: Optional request context for generating absolute URLs.
+                     If not provided, it will attempt to fetch from global context.
         """
         self.many = many
+        self._request = request
+
+    @property
+    def request(self) -> Optional[Any]:
+        """Return the current request context."""
+        if self._request:
+            return self._request
+        return request_var.get()
 
     def dump(
         self, obj: Union[Any, list[Any]]

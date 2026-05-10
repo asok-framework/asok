@@ -15,7 +15,7 @@ def test_default_csp():
 
     # Check default directives
     assert "default-src 'self'" in csp
-    assert "style-src 'self' 'unsafe-inline'" in csp  # unsafe-inline OK pour styles
+    assert "style-src 'self' 'unsafe-inline'" in csp
     # SECURITY: unsafe-eval et unsafe-inline ont été retirés de script-src pour sécurité
     assert "script-src 'self'" in csp
     # Vérifier que script-src ne contient PAS unsafe-eval ou unsafe-inline
@@ -73,7 +73,8 @@ def test_csp_single_string_value():
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
 
-    assert "img-src https://example.com" in csp
+    # img-src now has default values ('self', 'data:' and 'blob:' for image previews)
+    assert "img-src 'self' data: blob: https://example.com" in csp
 
 
 def test_csp_multiple_custom_directives():
@@ -82,14 +83,14 @@ def test_csp_multiple_custom_directives():
     app.config["CSP"] = {
         "style-src": ["https://fonts.googleapis.com"],
         "font-src": ["'self'", "https://fonts.gstatic.com"],
-        "img-src": ["'self'", "data:", "https://example.com"]
+        "img-src": ["'self'", "data:", "blob:", "https://example.com"]
     }
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
 
     assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com" in csp
     assert "font-src 'self' https://fonts.gstatic.com" in csp
-    assert "img-src 'self' data: https://example.com" in csp
+    assert "img-src 'self' data: blob: https://example.com" in csp
 
 
 def test_csp_with_nonce():
@@ -103,8 +104,9 @@ def test_csp_with_nonce():
 
     # Should have nonce in script-src
     assert "'nonce-abc123'" in csp
-    # Should still have custom style-src
-    assert "https://fonts.googleapis.com" in csp
+    # Should NOT have nonce in style-src (to keep unsafe-inline working for attributes)
+    assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com" in csp
+    assert "'nonce-abc123'" not in csp.split("style-src")[1].split(";")[0]
 
 
 def test_security_headers_disabled():

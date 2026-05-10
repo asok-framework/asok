@@ -1,7 +1,7 @@
 import os
 import sys
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 # Disable bytecode generation (__pycache__) by default to keep the file-system based routing clean.
 # Can be overridden by setting ASOK_WRITE_BYTECODE=true in the environment.
@@ -35,6 +35,7 @@ from .table import Table as Table
 from .table import TableColumn as TableColumn
 from .templates import render_template_string as render_template_string
 from .testing import TestClient as TestClient
+from .utils.geo import Countries as Countries
 from .utils.security import internal_only as internal_only
 from .validation import Schema as Schema
 from .validation import Validator as Validator

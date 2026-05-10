@@ -22,7 +22,7 @@ from typing import Optional
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from . import __version__
-from .orm import MODELS_REGISTRY, Model
+from .orm import MODELS_REGISTRY, Model, slugify
 from .utils.minify import minify_html
 
 TAILWIND_VERSION = "4.2.2"
@@ -105,6 +105,19 @@ class Style:
             return default
 
 
+def _ensure_init_py(directory: str) -> None:
+    """Create an empty __init__.py if it doesn't exist in the directory."""
+    if not os.path.isdir(directory):
+        return
+    init_file = os.path.join(directory, "__init__.py")
+    if not os.path.exists(init_file):
+        try:
+            with open(init_file, "w"):
+                pass
+        except Exception:
+            pass
+
+
 def scaffold(
     app_name: str,
     tailwind: Optional[bool] = None,
@@ -131,6 +144,7 @@ def scaffold(
     )
 
     for d in [
+        "src",
         "src/components",
         "src/locales",
         "src/middlewares",
@@ -141,8 +155,12 @@ def scaffold(
         "src/partials/images",
         "src/partials/js",
         "src/partials/uploads",
+        "src/migrations",
     ]:
-        os.makedirs(os.path.join(root, d), exist_ok=True)
+        dir_path = os.path.join(root, d)
+        os.makedirs(dir_path, exist_ok=True)
+        if d in ("src", "src/components", "src/middlewares", "src/models", "src/pages", "src/migrations"):
+            _ensure_init_py(dir_path)
 
     def write(path, content):
         with open(os.path.join(root, path), "w", encoding="utf-8") as f:
@@ -569,18 +587,22 @@ def admin_enable(root):
             f.write("""from asok import Field, Model
 
 class User(Model):
+    id = Field.Integer()
     email = Field.String(unique=True, nullable=False)
     password = Field.Password()
     name = Field.String()
     is_admin = Field.Boolean(default=False)
+    totp_secret = Field.String(nullable=True, hidden=True)
+    totp_enabled = Field.Boolean(default=False)
     created_at = Field.CreatedAt()
 """)
         Style.success("Created default User model in src/models/user.py")
 
     Style.info("Next steps:")
-    print("  1. Run 'asok migrate' to create the user table")
-    print("  2. Run 'asok createsuperuser' to create your first account")
-    print("  3. Visit /admin in your browser\n")
+    print("  1. Run 'asok make migration add_admin' to detect new tables")
+    print("  2. Run 'asok migrate' to apply them")
+    print("  3. Run 'asok createsuperuser' to create your first account")
+    print("  4. Visit /admin in your browser\n")
 
 
 def _image_binary_path(root):
@@ -885,7 +907,7 @@ def _has_py_changed(since_mtime):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith(".")]
 
         for f in files:
-            if f.endswith(".py") or f == ".env":
+            if f.endswith((".py", ".json")) or f in (".env", "wsgi.py"):
                 try:
                     if os.stat(os.path.join(root, f)).st_mtime > since_mtime:
                         return True
@@ -987,6 +1009,7 @@ def _kill_child(pid):
 
 
 def run_dev(port_arg=None):
+    os.environ.pop("ASOK_CLI", None)
     sys.path.insert(0, os.getcwd())
     last_mtime = get_last_mtime()
 
@@ -1052,6 +1075,7 @@ def run_dev(port_arg=None):
 
 def run_preview(port_arg=None):
     """Run the app in production mode locally (no reload, no debug)."""
+    os.environ.pop("ASOK_CLI", None)
     sys.path.insert(0, os.getcwd())
 
     env_path = os.path.join(os.getcwd(), ".env")
@@ -1471,121 +1495,141 @@ echo "--------------------------------------------------------"
     )
 
 
-def run_migrate():
-    """Auto-migrate: detect new columns in models and ALTER TABLE to add them."""
-    sys.path.insert(0, os.getcwd())
-
-    # Load .env
-    env_path = os.path.join(os.getcwd(), ".env")
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ[k.strip()] = v.strip()
-
-    Style.heading("MIGRATIONS")
-    model_dir = os.path.join(os.getcwd(), "src/models")
-    if not os.path.isdir(model_dir):
-        Style.error("No src/models/ directory found.")
+def run_migrate(rollback=False, status=False, fake=False):
+    """Apply or rollback versioned database migrations."""
+    root = _find_project_root()
+    if not root:
+        Style.error("Not inside an Asok project.")
         return
+    os.chdir(root)
+    if "src" not in sys.path:
+        sys.path.insert(0, os.path.join(root, "src"))
 
-    for filename in sorted(os.listdir(model_dir)):
-        if filename.endswith(".py") and not filename.startswith("__"):
-            filepath = os.path.join(model_dir, filename)
-            spec = _ilu.spec_from_file_location(f"model_{filename}", filepath)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    if "src" not in sys.path:
+        sys.path.insert(0, os.path.join(root, "src"))
+
+    # Load models to ensure DB path is initialized
+    Style.info("Loading models...")
+    wsgi_path = os.path.join(root, "wsgi.py")
+    if os.path.isfile(wsgi_path):
+        try:
+            spec = _ilu.spec_from_file_location("_wsgi_mig", wsgi_path)
             mod = _ilu.module_from_spec(spec)
             spec.loader.exec_module(mod)
+        except Exception:
+            pass
 
-    db_path = Model._db_path
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    # Collect all changes grouped by table
-    all_changes = {}
-
-    for name, model_cls in MODELS_REGISTRY.items():
-        model_cls.create_table()
-        table = model_cls._table
-
-        existing_cols = [
-            row["name"]
-            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        ]
-        existing = set(existing_cols)
-        model_fields = set(model_cls._fields.keys())
-
-        table_changes = {"added": [], "removed": [], "failed": []}
-
-        # Add new columns
-        for field_name, field_obj in model_cls._fields.items():
-            if field_name not in existing:
-                default = ""
-                if field_obj.default is not None:
-                    if isinstance(field_obj.default, bool):
-                        default = f" DEFAULT {str(field_obj.default).lower()}"
-                    elif isinstance(field_obj.default, (int, float)):
-                        default = f" DEFAULT {field_obj.default}"
-                    else:
-                        default = f" DEFAULT '{field_obj.default}'"
-                sql = f"ALTER TABLE {table} ADD COLUMN {field_name} {field_obj.sql_type}{default}"
+    model_dir = os.path.join(root, "src/models")
+    if os.path.isdir(model_dir):
+        for f in sorted(os.listdir(model_dir)):
+            if (f.endswith(".py") or f.endswith(".pyc")) and not f.startswith("__"):
+                filepath = os.path.join(model_dir, f)
+                ext_len = 4 if f.endswith(".pyc") else 3
+                mod_name = f"_mig_model_{f[:-ext_len]}"
                 try:
-                    conn.execute(sql)
-                    table_changes["added"].append((field_name, field_obj.sql_type))
-                except sqlite3.OperationalError as e:
-                    table_changes["failed"].append((field_name, str(e)))
+                    spec = _ilu.spec_from_file_location(mod_name, filepath)
+                    mod = _ilu.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    pass
 
-        # Drop removed columns (SQLite 3.35+ supports DROP COLUMN)
-        removed = [c for c in existing_cols if c != "id" and c not in model_fields]
-        for col in removed:
-            try:
-                conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
-                table_changes["removed"].append(col)
-            except sqlite3.OperationalError:
-                # Silently skip if DROP COLUMN not supported
-                pass
+    from .orm import MODELS_REGISTRY, Migrations, Model
+    Migrations.ensure_table()
 
-        # Only track tables with actual changes
-        if (
-            table_changes["added"]
-            or table_changes["removed"]
-            or table_changes["failed"]
-        ):
-            all_changes[table] = table_changes
-
-    conn.commit()
-    conn.close()
-
-    # Display changes grouped by table
-    total_changes = 0
-    for table in sorted(all_changes.keys()):
-        changes = all_changes[table]
-        if changes["added"] or changes["removed"] or changes["failed"]:
-            print(f"\n  {Style.BOLD}{table}{Style.RESET}")
-
-            for field_name, sql_type in changes["added"]:
-                print(
-                    f"    {Style.GREEN}+{Style.RESET} {field_name} {Style.DIM}({sql_type}){Style.RESET}"
-                )
-                total_changes += 1
-
-            for col in changes["removed"]:
-                print(f"    {Style.RED}−{Style.RESET} {col}")
-                total_changes += 1
-
-            for field_name, error in changes["failed"]:
-                print(
-                    f"    {Style.YELLOW}!{Style.RESET} {field_name} {Style.DIM}(failed: {error}){Style.RESET}"
-                )
-
-    print()  # Empty line before summary
-    if total_changes:
-        Style.success(
-            f"Applied {total_changes} change(s) across {len(all_changes)} table(s)."
-        )
+    if MODELS_REGISTRY:
+        Style.info(f"Registered models: {', '.join(MODELS_REGISTRY.keys())}")
     else:
-        Style.info("Database schema is up to date.")
+        Style.warn("No models found in MODELS_REGISTRY.")
+
+    mig_dir = os.path.join(root, "src/migrations")
+    if not os.path.isdir(mig_dir):
+        Style.error("No src/migrations/ directory found.")
+        return
+
+    # Load all migration files
+    mig_files = sorted([f for f in os.listdir(mig_dir) if f.endswith(".py") and f[:4].isdigit()])
+    applied = Migrations.get_applied()
+
+    if status:
+        Style.heading("MIGRATION STATUS")
+        if not mig_files:
+            print("  No migrations found.")
+            return
+        for f in mig_files:
+            name = f[:-3]
+            is_applied = name in applied
+            mark = f"{Style.GREEN}[X]{Style.RESET}" if is_applied else f"{Style.YELLOW}[ ]{Style.RESET}"
+            print(f"  {mark} {name}")
+        return
+
+    if rollback:
+        last_batch_names = Migrations.get_last_batch()
+        if not last_batch_names:
+            Style.info("Nothing to rollback.")
+            return
+
+        Style.heading(f"ROLLBACK (Batch {Migrations.get_last_batch_number()})")
+        conn = sqlite3.connect(Model._db_path)
+        try:
+            for name in last_batch_names:
+                filename = f"{name}.py"
+                filepath = os.path.join(mig_dir, filename)
+                if not os.path.exists(filepath):
+                    Style.error(f"Migration file {filename} missing! Cannot rollback.")
+                    continue
+
+                print(f"  Rolling back: {Style.BOLD}{name}{Style.RESET}...")
+                spec = _ilu.spec_from_file_location(name, filepath)
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+
+                if hasattr(mod, "down"):
+                    if not fake:
+                        mod.down(conn)
+                        conn.commit()
+                    Migrations.remove(name)
+                    Style.success(f"Rolled back {name}")
+                else:
+                    Style.warn(f"Migration {name} has no down() method.")
+        finally:
+            conn.close()
+        return
+
+    # Forward migration
+    pending = [f[:-3] for f in mig_files if f[:-3] not in applied]
+    if not pending:
+        Style.success("Database is up to date.")
+        return
+
+    Style.heading("RUNNING MIGRATIONS")
+    batch = Migrations.get_last_batch_number() + 1
+    conn = sqlite3.connect(Model._db_path)
+
+    try:
+        for name in pending:
+            filename = f"{name}.py"
+            filepath = os.path.join(mig_dir, filename)
+            print(f"  Applying: {Style.BOLD}{name}{Style.RESET}...")
+
+            spec = _ilu.spec_from_file_location(name, filepath)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "up"):
+                if not fake:
+                    mod.up(conn)
+                    conn.commit()
+                Migrations.log(name, batch)
+                Style.success(f"Applied {name}")
+            else:
+                Style.warn(f"Migration {name} has no up() method.")
+    except Exception as e:
+        Style.error(f"Migration failed: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        conn.close()
 
 
 def run_seed():
@@ -1611,7 +1655,8 @@ def run_seed():
                         and issubclass(attr, Model)
                         and attr is not Model
                     ):
-                        attr.create_table()
+                        # Automatic table creation removed in favor of migrations
+                        pass
 
     spec = _ilu.spec_from_file_location("seeds", seed_path)
     mod = _ilu.module_from_spec(spec)
@@ -1627,6 +1672,7 @@ def run_seed():
 def make_model(name):
     """Generate a model file in src/models/."""
     os.makedirs("src/models", exist_ok=True)
+    _ensure_init_py("src/models")
     filename = f"src/models/{name.lower()}.py"
     if os.path.exists(filename):
         print(f"  {filename} already exists.")
@@ -1647,6 +1693,7 @@ class {name.capitalize()}(Model):
 def make_middleware(name):
     """Generate a middleware file in src/middlewares/."""
     os.makedirs("src/middlewares", exist_ok=True)
+    _ensure_init_py("src/middlewares")
     filename = f"src/middlewares/{name.lower()}.py"
     if os.path.exists(filename):
         print(f"  {filename} already exists.")
@@ -1663,10 +1710,237 @@ def handle(request, next):
     Style.success(f"File created: {Style.BOLD}{filename}{Style.RESET}")
 
 
+def make_migration(name: str):
+    """Detect model changes and generate a new migration file."""
+    root = _find_project_root()
+    if not root:
+        Style.error("Not inside an Asok project.")
+        return
+    os.chdir(root)
+    if "src" not in sys.path:
+        sys.path.insert(0, os.path.join(root, "src"))
+
+    # Add project to sys.path
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    if "src" not in sys.path:
+        sys.path.insert(0, os.path.join(root, "src"))
+
+    # Load models. Priority: wsgi.py, then src/models/
+    Style.info("Analyzing project models...")
+
+    # 1. Load wsgi.py/c (often imports all models)
+    wsgi_path = os.path.join(root, "wsgi.py")
+    if not os.path.isfile(wsgi_path):
+        wsgi_path = os.path.join(root, "wsgi.pyc")
+
+    if os.path.isfile(wsgi_path):
+        try:
+            spec = _ilu.spec_from_file_location("_wsgi_mig", wsgi_path)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except Exception:
+            pass
+
+    # 2. Scan src/models/ for any missed models
+    model_dir = os.path.join(root, "src/models")
+    if os.path.isdir(model_dir):
+        for f in sorted(os.listdir(model_dir)):
+            if (f.endswith(".py") or f.endswith(".pyc")) and not f.startswith("__"):
+                filepath = os.path.join(model_dir, f)
+                ext_len = 4 if f.endswith(".pyc") else 3
+                mod_name = f"_mig_model_{f[:-ext_len]}"
+                try:
+                    spec = _ilu.spec_from_file_location(mod_name, filepath)
+                    mod = _ilu.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                except Exception as e:
+                    Style.warn(f"Could not load model {f}: {e}")
+
+    # Ensure migration dir exists
+    mig_dir = os.path.join(root, "src/migrations")
+    os.makedirs(mig_dir, exist_ok=True)
+    _ensure_init_py(mig_dir)
+
+    # Database connection
+    from .orm import MODELS_REGISTRY, Model
+
+    if MODELS_REGISTRY:
+        Style.info(f"Detected models: {', '.join(MODELS_REGISTRY.keys())}")
+    else:
+        Style.warn("No models registered. Check your model definitions.")
+    db_path = Model._db_path
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # Analysis
+    up_sql = []
+    down_sql = []
+
+    for model_name, model_cls in MODELS_REGISTRY.items():
+        table = model_cls._table
+
+        # Check if table exists
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+
+        if not exists:
+            Style.info(f"  + New table detected: {table}")
+            # Generate CREATE TABLE
+            fields = []
+
+            # Ensure 'id' is always the first column if not explicitly defined
+            if "id" not in model_cls._fields:
+                fields.append("id INTEGER PRIMARY KEY AUTOINCREMENT")
+
+            for f_name, f_obj in model_cls._fields.items():
+                if f_name == "id":
+                    col = "id INTEGER PRIMARY KEY AUTOINCREMENT"
+                else:
+                    col = f"{f_name} {f_obj.sql_type}"
+                    if f_obj.unique:
+                        col += " UNIQUE"
+                    if not f_obj.nullable:
+                        col += " NOT NULL"
+                    if f_obj.default is not None:
+                        if isinstance(f_obj.default, (int, float)):
+                            col += f" DEFAULT {f_obj.default}"
+                        elif isinstance(f_obj.default, bool):
+                            col += f" DEFAULT {str(f_obj.default).lower()}"
+                        else:
+                            col += f" DEFAULT '{f_obj.default}'"
+                fields.append(col)
+            sql_create = f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(fields)})"
+            up_sql.append(f"conn.execute({repr(sql_create)})")
+            down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {table}')})")
+        else:
+            # Check for new columns
+            existing_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for f_name, f_obj in model_cls._fields.items():
+                if f_name not in existing_cols:
+                    Style.info(f"    + New column detected: {table}.{f_name}")
+                    col_sql = f"{f_name} {f_obj.sql_type}"
+                    if f_obj.default is not None:
+                        if isinstance(f_obj.default, (int, float)):
+                            col_sql += f" DEFAULT {f_obj.default}"
+                        elif isinstance(f_obj.default, bool):
+                            col_sql += f" DEFAULT {str(f_obj.default).lower()}"
+                        else:
+                            col_sql += f" DEFAULT '{f_obj.default}'"
+
+                    sql_alter = f"ALTER TABLE {table} ADD COLUMN {col_sql}"
+                    up_sql.append(f"conn.execute({repr(sql_alter)})")
+                    # SQLite doesn't support DROP COLUMN on all versions, so we just log it or do nothing in down
+                    down_sql.append(f'# SQLite limited: cannot easily drop column {f_name} from {table}')
+
+        # Check for BelongsToMany pivot tables
+        processed_pivots = set()
+        for rel_name, rel in model_cls._relations.items():
+            if rel.type == "BelongsToMany":
+                # Logic from Model._pivot_info
+                a = model_name.lower()
+                b = rel.target_model_name.lower()
+                pivot = rel.pivot_table or "_".join(sorted([a, b]))
+                if pivot in processed_pivots:
+                    continue
+                processed_pivots.add(pivot)
+
+                exists = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (pivot,)
+                ).fetchone()
+
+                if not exists:
+                    Style.info(f"    + New pivot table detected: {pivot}")
+                    pfk = rel.pivot_fk or f"{a}_id"
+                    pofk = rel.pivot_other_fk or f"{b}_id"
+                    sql_pivot = (
+                        f"CREATE TABLE IF NOT EXISTS {pivot} ("
+                        f"{pfk} INTEGER NOT NULL, "
+                        f"{pofk} INTEGER NOT NULL, "
+                        f"PRIMARY KEY ({pfk}, {pofk}))"
+                    )
+                    up_sql.append(f"conn.execute({repr(sql_pivot)})")
+                    down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {pivot}')})")
+
+        # Check for FTS tables and triggers
+        if model_cls._search_fields:
+            fts_table = f"{table}_fts"
+            fts_exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (fts_table,)
+            ).fetchone()
+            if not fts_exists:
+                Style.info(f"    + New FTS table detected: {fts_table}")
+                f_names = ", ".join(model_cls._search_fields)
+                sql_fts = f"CREATE VIRTUAL TABLE IF NOT EXISTS {fts_table} USING fts5({f_names}, content='{table}', content_rowid='id')"
+                up_sql.append(f"conn.execute({repr(sql_fts)})")
+
+                sql_rebuild = f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')"
+                up_sql.append(f"conn.execute({repr(sql_rebuild)})")
+
+                # Triggers to keep FTS in sync
+                f_quoted = ", ".join([f'"{n}"' for n in model_cls._search_fields])
+                f_new = ", ".join([f'new."{n}"' for n in model_cls._search_fields])
+                f_old = ", ".join([f'old."{n}"' for n in model_cls._search_fields])
+
+                ai = f"CREATE TRIGGER IF NOT EXISTS \"{table}_ai\" AFTER INSERT ON \"{table}\" BEGIN INSERT INTO \"{fts_table}\"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;"
+                ad = f"CREATE TRIGGER IF NOT EXISTS \"{table}_ad\" AFTER DELETE ON \"{table}\" BEGIN INSERT INTO \"{fts_table}\"(\"{fts_table}\", rowid, {f_quoted}) VALUES('delete', old.id, {f_old}); END;"
+                au = f"CREATE TRIGGER IF NOT EXISTS \"{table}_au\" AFTER UPDATE ON \"{table}\" BEGIN INSERT INTO \"{fts_table}\"(\"{fts_table}\", rowid, {f_quoted}) VALUES('delete', old.id, {f_old}); INSERT INTO \"{fts_table}\"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;"
+
+                up_sql.append(f"conn.execute({repr(ai)})")
+                up_sql.append(f"conn.execute({repr(ad)})")
+                up_sql.append(f"conn.execute({repr(au)})")
+
+                sql_drop_fts = f'DROP TABLE IF EXISTS "{fts_table}"'
+                down_sql.append(f"conn.execute({repr(sql_drop_fts)})")
+
+                sql_ai = f'DROP TRIGGER IF EXISTS "{table}_ai"'
+                sql_ad = f'DROP TRIGGER IF EXISTS "{table}_ad"'
+                sql_au = f'DROP TRIGGER IF EXISTS "{table}_au"'
+
+                down_sql.append(f"conn.execute({repr(sql_ai)})")
+                down_sql.append(f"conn.execute({repr(sql_ad)})")
+                down_sql.append(f"conn.execute({repr(sql_au)})")
+
+    conn.close()
+
+    if not up_sql:
+        Style.info("No changes detected in models.")
+        return
+
+    # Generate file
+    existing = [f for f in os.listdir(mig_dir) if f.endswith(".py") and f[:4].isdigit()]
+    next_num = max([int(f[:4]) for f in existing] + [0]) + 1
+    filename = f"{next_num:04d}_{slugify(name)}.py"
+    filepath = os.path.join(mig_dir, filename)
+
+    up_joined = "\n    ".join(up_sql)
+    down_joined = "\n    ".join(reversed(down_sql))
+    content = f'''"""
+Asok Migration: {name}
+Generated at: {time.strftime("%Y-%m-%d %H:%M:%S")}
+"""
+
+def up(conn):
+    """Apply changes."""
+    {up_joined}
+
+def down(conn):
+    """Revert changes."""
+    {down_joined}
+'''
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    Style.success(f"Created migration: {Style.BOLD}{filename}{Style.RESET}")
+
+
 def make_page(name):
     """Generate a page directory with page.py and page.html."""
     page_dir = f"src/pages/{name}"
     os.makedirs(page_dir, exist_ok=True)
+    _ensure_init_py("src/pages")
+    _ensure_init_py(page_dir)
 
     py_path = os.path.join(page_dir, "page.py")
     if not os.path.exists(py_path):
@@ -1700,6 +1974,7 @@ def render(request: Request):
 def make_component(name: str) -> None:
     """Generate a high-level UI component in src/components/."""
     os.makedirs("src/components", exist_ok=True)
+    _ensure_init_py("src/components")
     filename = f"src/components/{name.lower()}.py"
     if os.path.exists(filename):
         print(f"  {filename} already exists.")
@@ -1879,13 +2154,6 @@ def run_createsuperuser(email=None, password=None):
     Role = MODELS_REGISTRY.get("Role")
     if Role:
         try:
-            with User._get_conn() as conn:
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS role_user ("
-                    "role_id INTEGER NOT NULL, "
-                    "user_id INTEGER NOT NULL, "
-                    "PRIMARY KEY (role_id, user_id))"
-                )
             admin_role = Role.find(name="admin")
             if not admin_role:
                 admin_role = Role.create(
@@ -1904,7 +2172,7 @@ def run_createsuperuser(email=None, password=None):
 def print_help():
     """Custom professional help display for Asok."""
     print(
-        f"\n{Style.BOLD}{Style.CYAN}ASOK FRAMEWORK{Style.RESET} {Style.DIM}v1.0.0{Style.RESET}"
+        f"\n{Style.BOLD}{Style.CYAN}ASOK FRAMEWORK{Style.RESET} {Style.DIM}v{__version__}{Style.RESET}"
     )
     print("Minimalist Python Web Framework (Zero Dependencies)\n")
 
@@ -1917,6 +2185,7 @@ def print_help():
             ("make page", "Create a new page (py + html)"),
             ("make component", "Create a new reusable UI component"),
             ("make model", "Create a new database model"),
+            ("make migration", "Create a new database migration"),
             ("make middleware", "Create a new middleware"),
         ],
         "Development": [
@@ -1927,7 +2196,7 @@ def print_help():
             ("test", "Run the project's test suite"),
         ],
         "Database": [
-            ("migrate", "Apply pending database migrations"),
+            ("migrate", "Apply pending migrations (--rollback, --status)"),
             ("seed", "Run database seeders"),
             ("createsuperuser", "Create or update an administrative user"),
         ],
@@ -1954,11 +2223,27 @@ def print_help():
 
 
 def main() -> None:
-    """Terminal entry point for the 'asok' CLI.
+    """Terminal entry point for the 'asok' CLI."""
+    # Load .env early so that all components (like ORM) see the environment
+    root = _find_project_root()
+    if root:
+        env_path = os.path.join(root, ".env")
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        parts = line.split("=", 1)
+                        if len(parts) == 2:
+                            k, v = parts
+                            os.environ[k.strip()] = v.strip()
 
-    Dispatches commands to their respective handlers, manages project scaffolding,
-    Tailwind setup, migrations, and development server execution.
-    """
+        # Sync ORM DB path if DATABASE_URL is set in .env
+        if "DATABASE_URL" in os.environ:
+            from .orm import Model
+            Model._db_path = os.environ["DATABASE_URL"]
+
+    os.environ["ASOK_CLI"] = "true"
     parser = argparse.ArgumentParser(description="Asok Framework CLI", add_help=False)
     parser.add_argument("-h", "--help", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
@@ -2005,11 +2290,17 @@ def main() -> None:
         "--output", "-o", default=None, help="Output directory name"
     )
 
-    subparsers.add_parser("dev").add_argument("-p", "--port", type=int, default=None)
-    subparsers.add_parser("preview").add_argument(
-        "-p", "--port", type=int, default=None
-    )
-    subparsers.add_parser("migrate")
+    dev_parser = subparsers.add_parser("dev")
+    dev_parser.add_argument("--port", type=int, default=8000)
+
+    preview_parser = subparsers.add_parser("preview")
+    preview_parser.add_argument("--port", type=int, default=8000)
+
+    migrate_parser = subparsers.add_parser("migrate")
+    migrate_parser.add_argument("--rollback", action="store_true")
+    migrate_parser.add_argument("--status", action="store_true")
+    migrate_parser.add_argument("--fake", action="store_true")
+
     subparsers.add_parser("seed")
     subparsers.add_parser("routes")
     subparsers.add_parser("shell")
@@ -2017,9 +2308,9 @@ def main() -> None:
 
     make_parser = subparsers.add_parser("make")
     make_parser.add_argument(
-        "type", choices=["model", "middleware", "page", "component"]
+        "type", choices=["model", "middleware", "page", "component", "migration"]
     )
-    make_parser.add_argument("name")
+    make_parser.add_argument("name", nargs="?", default=None)
 
     # Catch empty args, help or version request
     if len(sys.argv) == 1 or "-h" in sys.argv or "--help" in sys.argv:
@@ -2108,7 +2399,7 @@ def main() -> None:
     elif args.command == "preview":
         run_preview(args.port)
     elif args.command == "migrate":
-        run_migrate()
+        run_migrate(rollback=args.rollback, status=args.status, fake=args.fake)
     elif args.command == "seed":
         run_seed()
     elif args.command == "routes":
@@ -2118,7 +2409,12 @@ def main() -> None:
     elif args.command == "test":
         run_test(args.path)
     elif args.command == "make":
-        if args.type == "model":
+        if args.type == "migration":
+            make_migration(args.name or "auto_migration")
+        elif not args.name:
+            Style.error(f"Please provide a name for the {args.type}.")
+            sys.exit(1)
+        elif args.type == "model":
             make_model(args.name)
         elif args.type == "middleware":
             make_middleware(args.name)

@@ -18,6 +18,7 @@ import traceback
 from typing import Any, Callable, Iterator, Optional, Union
 from urllib.parse import quote
 
+from .context import request_context, request_var
 from .exceptions import AbortException, RedirectException
 from .orm import Model
 from .request import Request
@@ -94,10 +95,54 @@ class SmartStreamer:
                 )
 
 
+
 class Asok:
     """The central application class for the Asok framework.
 
     Manages configuration, routing, middleware, and request lifecycle.
+    Acts as the main entry point for your web application.
+
+    Basic Usage:
+        from asok import Asok
+        from asok.admin import Admin
+
+        app = Asok()
+        Admin(app)
+
+    Initialization:
+        The app automatically discovers your project structure by scanning
+        the current working directory for a `src/` folder. It loads models,
+        middlewares, components, and locales automatically during `setup()`.
+
+    Configuration:
+        Values are populated from your `.env` file and accessible via `app.config`.
+        Key settings include:
+        - DEBUG: Enable hot-reloading and detailed error pages.
+        - SECRET_KEY: Used for signing sessions, cookies, and tokens.
+        - INDEX: The default filename for directory-based routing (default: "page").
+
+    Middleware:
+        Register custom middleware to intercept requests and responses:
+        @app.use
+        def my_middleware(request, next_handler):
+            # Pre-processing
+            response = next_handler(request)
+            # Post-processing
+            return response
+
+    Lifecycle Hooks:
+        Execute code when the server starts or stops:
+        @app.on_startup
+        def init_external_service():
+            pass
+
+        @app.on_shutdown
+        def cleanup():
+            pass
+
+    Shared Variables:
+        Make data available globally across all templates:
+        app.share(site_name="My Awesome App", version="1.0.0")
     """
 
     def __init__(self, root_dir: Optional[str] = None):
@@ -126,7 +171,7 @@ class Asok:
             "INDEX": "page",
             "LOCALE": "en",
             "CSRF": True,
-            "DEBUG": True,
+            "DEBUG": False,
             "AUTH_MODEL": "User",
             "SESSION_MAX_AGE": 86400 * 30,
             "CORS_ORIGINS": None,
@@ -163,6 +208,15 @@ class Asok:
         if src_path not in sys.path:
             sys.path.insert(0, src_path)
 
+        # Ensure core directories are Python packages to avoid import errors
+        self._ensure_package_dirs(
+            self.dirs["MODELS"],
+            self.dirs["COMPONENTS"],
+            self.dirs["MIDDLEWARES"],
+            "src/pages",
+            "src/routes"
+        )
+
         # 1. Load .env if exists to populate os.environ early
         env_path = os.path.join(self.root_dir, ".env")
         if os.path.exists(env_path):
@@ -190,6 +244,13 @@ class Asok:
             # Default to DEBUG mode if not explicitly set
             self.config["DOCS"] = self.config.get("DEBUG", True)
 
+        # 2.6 Determine TOOLBAR mode
+        toolbar_val = os.environ.get("ASOK_TOOLBAR", os.environ.get("TOOLBAR", "")).lower()
+        if toolbar_val == "false":
+            self.config["TOOLBAR"] = False
+        elif toolbar_val == "true":
+            self.config["TOOLBAR"] = True
+
         # 3. Security Key (respects DEBUG mode determined above)
         sec_key = os.getenv("SECRET_KEY")
         if not sec_key:
@@ -209,9 +270,34 @@ class Asok:
                     "Set it in your .env file or environment: SECRET_KEY=your-secret-key"
                 )
 
+        # Validate key length for production
+        if not self.config.get("DEBUG") and (not sec_key or len(sec_key) < 32):
+            raise ValueError(
+                "SECURITY ERROR: SECRET_KEY must be at least 32 characters long in production. "
+                "Current key is too weak. Please generate a strong key using 'secrets.token_hex(32)'."
+            )
+
         self.config["SECRET_KEY"] = sec_key
         os.environ["SECRET_KEY"] = sec_key
         self.config.setdefault("WS_PORT", 8001)
+
+        # 4. Global Config Overrides from Environment
+        # This allows overriding any default config value via .env or shell environment
+        for key in list(self.config.keys()):
+            # Check both direct name (e.g. MAX_CONTENT_LENGTH) and prefixed (ASOK_MAX_CONTENT_LENGTH)
+            env_val = os.environ.get(f"ASOK_{key}", os.environ.get(key))
+            if env_val is not None:
+                # Attempt to preserve the type of the default value
+                current_val = self.config[key]
+                if isinstance(current_val, bool):
+                    self.config[key] = env_val.lower() in ("true", "1", "yes", "on")
+                elif isinstance(current_val, int):
+                    try:
+                        self.config[key] = int(env_val)
+                    except ValueError:
+                        pass
+                else:
+                    self.config[key] = env_val
 
         # Load Middlewares
         mw_dir = os.path.join(self.root_dir, self.dirs["MIDDLEWARES"])
@@ -245,10 +331,9 @@ class Asok:
                             and issubclass(attr, Model)
                             and attr is not Model
                         ):
-                            attr.create_table()
                             self.models.append(attr)
 
-        # Load Components
+        # 4. Load Components
         comp_dir = os.path.join(self.root_dir, self.dirs["COMPONENTS"])
         if os.path.exists(comp_dir):
             import sys as _sys
@@ -294,6 +379,19 @@ class Asok:
         )
         # Auto-cleanup expired sessions every hour
         self._session_store.start_cleanup_timer(interval=3600)
+
+    def _ensure_package_dirs(self, *dirs: str) -> None:
+        """Create empty __init__.py in directories if they exist but are not Python packages."""
+        for d in dirs:
+            path = os.path.join(self.root_dir, d)
+            if os.path.isdir(path):
+                init_file = os.path.join(path, "__init__.py")
+                if not os.path.exists(init_file):
+                    try:
+                        with open(init_file, "w"):
+                            pass
+                    except Exception as e:
+                        logger.warning(f"Could not create __init__.py in {d}: {e}")
 
     def _sign(self, value: Union[str, int]) -> str:
         """Sign a value using the application's secret key."""
@@ -414,9 +512,21 @@ class Asok:
             return self._mtime_cache
 
         max_mtime = 0
+
+        # Watch root files (.env, wsgi.py)
+        for f in [".env", "wsgi.py", "wsgi.pyc"]:
+            p = os.path.join(self.root_dir, f)
+            if os.path.isfile(p):
+                try:
+                    m = os.stat(p).st_mtime
+                    if m > max_mtime:
+                        max_mtime = m
+                except OSError:
+                    pass
+
         src_dir = os.path.join(self.root_dir, "src")
         if not os.path.isdir(src_dir):
-            return 0
+            return max_mtime
         for root, dirs, files in os.walk(src_dir):
             dirs[:] = [d for d in dirs if d not in self._WATCH_IGNORE_DIRS]
             for f in files:
@@ -1031,7 +1141,7 @@ class Asok:
                 f'<script id="asok-transition-engine" nonce="{nonce}">'
                 "(function(){"
                 "window.Asok=window.Asok||{};"
-                "window.Asok.swap=function(t,h,mode){"
+                "window.Asok.swap=function(t,h,mode,callback){"
                 "const raw=function(t,h,mode){"
                 "mode=mode||'innerHTML';"
                 "if(mode==='delete'){t.remove();return}"
@@ -1045,11 +1155,11 @@ class Asok:
                 "const tr=t.getAttribute('asok-transition')||'fade',parts=tr.split(' '),type=parts[0],dur=parseInt(parts[1])||300;"
                 "t.classList.add('asok-'+type+'-out');"
                 "requestAnimationFrame(()=>{t.classList.add('is-leaving')});"
-                "setTimeout(()=>{raw(t,h,mode);t.classList.remove('asok-'+type+'-out','is-leaving');"
+                "setTimeout(()=>{raw(t,h,mode);if(callback)callback();t.classList.remove('asok-'+type+'-out','is-leaving');"
                 "t.classList.add('asok-'+type+'-in');"
                 "requestAnimationFrame(()=>{t.classList.add('is-entering');"
                 "setTimeout(()=>{t.classList.remove('asok-'+type+'-in','is-entering')},dur)});"
-                "},dur)}else{raw(t,h,mode)}"
+                "},dur)}else{raw(t,h,mode);if(callback)callback()}"
                 "};"
                 "})()"
                 "</script>"
@@ -1075,47 +1185,77 @@ class Asok:
             request._asok_reactive_done = True
             request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
-                "(function(){const ca={};"
-                "window.__asokClearCache=function(){Object.keys(ca).forEach(k=>delete ca[k])};"
+                "(function(){window.Asok=window.Asok||{};"
+                # SECURITY: Limit SPA cache size to prevent memory DoS
+                "const ca={},cak=[],MAX_CACHE=100;"
+                "window.__asokClearCache=function(){Object.keys(ca).forEach(k=>delete ca[k]);cak.length=0};"
+                "function addCache(k,v){if(cak.length>=MAX_CACHE){const old=cak.shift();delete ca[old]}ca[k]=v;cak.push(k)}"
                 "function ct(){const m=document.querySelector('meta[name=csrf-token]');return m?m.content:''}"
                 "function qb(s){if(!s)return null;let t;try{t=document.querySelector(s)}catch(e){}"
                 "if(!t&&/^[a-zA-Z0-9_-]+$/.test(s))t=document.getElementById(s);"
+                "if(!t&&s==='title')t=document.querySelector('title');"
+                "if(!t&&s==='description')t=document.querySelector('meta[name=description]');"
                 "if(!t&&/^[a-zA-Z0-9_-]+$/.test(s)){"
                 "const it=document.createNodeIterator(document.body,NodeFilter.SHOW_COMMENT);"
                 "let c;while(c=it.nextNode()){if(c.textContent.trim()==='block:'+s+':start'){"
                 "t={_isBlockMarker:true,_blockName:s,_startMarker:c};break}}}return t}"
-                "function doSwap(t,h,mode){"
-                "  const raw=function(t,h,mode){"
-                "    if(t._isBlockMarker){"
-                "const start=t._startMarker,name=t._blockName;"
-                "const it=document.createNodeIterator(document.body,NodeFilter.SHOW_COMMENT);"
-                "let c,end=null;while(c=it.nextNode()){if(c===start){while(c=it.nextNode()){"
-                "if(c.textContent.trim()==='block:'+name+':end'){end=c;break}}break}}"
-                "if(!end)return;"
-                "const nodes=[];let n=start.nextSibling;while(n&&n!==end){nodes.push(n);n=n.nextSibling}"
-                "nodes.forEach(function(x){x.remove()});"
-                "const tmp=document.createElement('div');tmp.innerHTML=h;"
-                "Array.from(tmp.childNodes).forEach(function(x){start.parentNode.insertBefore(x,end)})"
-                "    }else{"
-                "    (window.Asok&&window.Asok.swap)?window.Asok.swap(t,h,mode):t.innerHTML=h;"
-                "    }"
-                "  };"
-                "  raw(t,h,mode);"
+                "function doSwap(t,h,mode,pushData){"
                 "  const realTarget=t._isBlockMarker?t._startMarker.parentNode:t;"
-                "  if(window.Asok&&window.Asok.init)window.Asok.init(realTarget);"
-                "  document.dispatchEvent(new CustomEvent('asok:success',{detail:{target:realTarget,mode:mode}}));"
+                # BUGFIX: Cleanup before swap for WebSocket components
+                "  const beforeSwap=function(){"
+                "    realTarget.querySelectorAll('[data-asok-component]').forEach(function(el){"
+                # Clear all init flags so component can be fully reinited after swap
+                "      delete el.__asokWsReady;"
+                "      delete el.__asokIniting;"
+                # Notify server of component removal
+                "      if(window.Asok&&window.Asok.leaveComponent){"
+                "        window.Asok.leaveComponent(el.id.replace('asok-',''));"
+                "      }"
+                "    });"
+                "  };"
+                "  const afterSwap=function(){"
+                "    if(window.AsokDirectives&&window.AsokDirectives.forceInit)window.AsokDirectives.forceInit(realTarget);"
+                "    if(window.Asok&&window.Asok.init)window.Asok.init(realTarget);"
+                "    if(window.lucide&&window.lucide.createIcons)window.lucide.createIcons();"
+                "    if(pushData&&pushData.shouldPush){const ov=document.getElementById('search-overlay');if(ov)ov.classList.remove('open');const mm=document.getElementById('mobile-menu');if(mm)mm.classList.add('hidden');document.body.style.overflow='';if(pushData.src&&pushData.src.dataset&&pushData.src.dataset.pushUrl!==undefined){const pu=pushData.src.dataset.pushUrl||pushData.url;history.pushState({b:pushData.b,sel:pushData.sel,mode:mode,url:pushData.url},'',pu)}}"
+                "    document.dispatchEvent(new CustomEvent('asok:success',{detail:{target:realTarget,mode:mode}}));"
+                "  };"
+                "  if(t._isBlockMarker){"
+                "    beforeSwap();"
+                "    const start=t._startMarker,name=t._blockName;"
+                "    const it=document.createNodeIterator(document.body,NodeFilter.SHOW_COMMENT);"
+                "    let c,end=null;while(c=it.nextNode()){if(c===start){while(c=it.nextNode()){"
+                "    if(c.textContent.trim()==='block:'+name+':end'){end=c;break}}break}}"
+                "    if(!end)return;"
+                "    const nodes=[];let n=start.nextSibling;while(n&&n!==end){nodes.push(n);n=n.nextSibling}"
+                "    nodes.forEach(function(x){x.remove()});"
+                "    const tmp=document.createElement('div');tmp.innerHTML=h;"
+                "    Array.from(tmp.childNodes).forEach(function(x){start.parentNode.insertBefore(x,end)});"
+                "    afterSwap();"
+                "  }else if(t.tagName==='META'){"
+                "    t.content=h;afterSwap();"
+                "  }else{"
+                "    beforeSwap();"
+                "    if(window.Asok&&window.Asok.swap){window.Asok.swap(t,h,mode,afterSwap)}else{t.innerHTML=h;afterSwap()}"
+                "    if(t.tagName==='TITLE')document.title=t.innerText;"
+                "  }"
                 "}"
                 "function sw(url,b,sel,mode,opts,src){"
                 "if(document.dispatchEvent(new CustomEvent('asok:before',{detail:{url:url,block:b}}))===false)return;"
                 "const h=Object.assign({'X-Block':b,'X-CSRF-Token':ct()},opts.headers||{});"
                 "opts.headers=h;opts.credentials='same-origin';"
                 "const key=url+b;const p=ca[key]?Promise.resolve(ca[key]):fetch(url,opts).then(function(r){"
-                "if(!r.ok){document.dispatchEvent(new CustomEvent('asok:error',{detail:{url:url,status:r.status}}));return r.text().then(function(t){throw t})}"
+                "if(!r.ok){return r.text().then(function(t){"
+                "document.dispatchEvent(new CustomEvent('asok:error',{detail:{url:url,status:r.status,message:t}}));"
+                "console.error((r.status===400?'Asok Consistency Error: ':'Asok Error '+r.status+': ')+t);"
+                "throw t})}"
                 "const redir=r.headers.get('X-Asok-Redirect');"
                 "if(redir){window.location.href=redir;return Promise.reject('r')}"
-                "const c=r.headers.get('X-CSRF-Token');"
+                "const c=r.headers.get('X-CSRF-Token'),bks=r.headers.get('X-Asok-Blocks');"
                 "if(c){const m=document.querySelector('meta[name=csrf-token]');if(m)m.content=c;"
                 "document.querySelectorAll('input[name=csrf_token]').forEach(function(i){i.value=c})}"
+                "if(bks)window.Asok.lastBlocks=bks;"
+                "const sqlLog=r.headers.get('X-Asok-SQL-Log');if(sqlLog){window.Asok.lastSqlLog=sqlLog;}else{window.Asok.lastSqlLog=null;}"
                 "return r.text()});"
                 "delete ca[key];"
                 "return p.then(function(h){"
@@ -1125,60 +1265,54 @@ class Asok:
                 "window.location.href=url;return}"
                 "const d=document.createElement('div');d.innerHTML=h;"
                 "const tpls=d.querySelectorAll('template[data-block]');"
+                "const isP=(src&&src.dataset&&src.dataset.pushUrl!==undefined)||(!src&&url);"
+                "const pushData=isP?{shouldPush:true,src:src,url:url,b:b,sel:sel}:null;"
                 "if(tpls.length){"
                 "for(let i=0;i<tpls.length;i++){"
                 "const tpl=tpls[i];"
                 "const t=qb(tpl.dataset.block);"
-                "if(t)doSwap(t,tpl.innerHTML,tpl.dataset.swap||'innerHTML')}"
+                "if(t)doSwap(t,tpl.innerHTML,tpl.dataset.swap||'innerHTML',i===tpls.length-1?pushData:null)}"
                 "}else{"
                 "const t=qb(sel);"
-                "if(t)doSwap(t,h,mode)}"
-                "const isP=(src&&src.dataset&&src.dataset.pushUrl!==undefined)||(!src&&url);"
+                "if(t)doSwap(t,h,mode,pushData)}"
                 "const get=function(s){let e=d.querySelector(s);if(!e){const ts=d.querySelectorAll('template');for(let i=0;i<ts.length;i++){e=ts[i].content.querySelector(s);if(e)break}}return e};"
                 "const scs=get('#asok-scoped-css');const oldCss=document.getElementById('asok-scoped-css');if(scs){if(oldCss)oldCss.remove();document.head.appendChild(scs)}else if(oldCss&&isP){oldCss.remove()}"
                 "const scj=get('#asok-scoped-js');const oldJs=document.getElementById('asok-scoped-js');if(scj){if(oldJs)oldJs.remove();const ns=document.createElement('script');ns.id='asok-scoped-js';if(scj.nonce)ns.nonce=scj.nonce;ns.textContent=scj.textContent;document.body.appendChild(ns)}else if(oldJs&&isP){oldJs.remove()}"
                 "const findPageId=function(){const it=d.createNodeIterator(d.body,NodeFilter.SHOW_COMMENT);let c;while(c=it.nextNode()){const m=c.textContent.match(/^\\s*page-id:(.+)$/);if(m)return m[1].trim()}return null};"
                 "const pid=findPageId();if(pid){document.body.dataset.pageId=pid}else if(isP){delete document.body.dataset.pageId}"
-                "if(isP){"
-                "const ov=document.getElementById('search-overlay');if(ov)ov.classList.remove('open');"
-                "const mm=document.getElementById('mobile-menu');if(mm)mm.classList.add('hidden');"
-                "document.body.style.overflow='';"
-                "if(src&&src.dataset&&src.dataset.pushUrl!==undefined){"
-                "const pu=src.dataset.pushUrl||url;"
-                "history.pushState({b:b,sel:sel,mode:mode,url:url},'',pu)"
-                "}"
-                "}"
                 "},function(){})"
                 "}"
-                "function pf(u,b){if(ca[u+b]||!u||!b)return;fetch(u,{headers:{'X-Block':b,'X-Prefetch':'1'},credentials:'same-origin'}).then(function(r){if(r.ok)r.text().then(function(t){ca[u+b]=t})})}"
+                "function pf(u,b){if(ca[u+b]||!u||!b)return;fetch(u,{headers:{'X-Block':b,'X-Prefetch':'1'},credentials:'same-origin'}).then(function(r){if(r.ok)r.text().then(function(t){addCache(u+b,t)})})}"
                 "function resolve(el){"
-                "const b=el.dataset.block;if(!b)return null;"
+                "const f=el.tagName==='FORM'?el:el.closest('form');"
+                "const b=el.dataset.block||(f?f.dataset.block:null);if(!b)return null;"
                 "const sel=el.dataset.target||b.split(',')[0];"
                 "const swap=el.dataset.swap||'innerHTML';"
                 "let url,method,body=null;"
-                "if(el.tagName==='FORM'){"
-                "url=el.action||location.pathname;"
-                "method=(el.method||'GET').toUpperCase();"
+                "const da=el.dataset.action||(f?f.dataset.action:null);"
+                "if(f && (el===f || el.type==='submit' || el.dataset.action)){"
+                "url=f.action||location.pathname;"
+                "method=(f.method||'POST').toUpperCase();"
+                "const fd=new FormData(f);if(da)fd.append('_action',da);"
+                "if(el.name && el!==f)fd.append(el.name,el.value);"
                 "if(method==='GET'){"
-                "const p=new URLSearchParams(new FormData(el)).toString();"
+                "const p=new URLSearchParams(fd).toString();"
                 "if(p)url+=(url.indexOf('?')<0?'?':'&')+p"
-                "}else body=new FormData(el)"
+                "}else body=fd"
                 "}else if(el.tagName==='A'){"
-                "url=el.href;method='GET'"
+                "url=el.href;method='GET';"
+                "if(da)url+=(url.indexOf('?')<0?'?':'&')+'_action='+da"
                 "}else{"
                 "url=el.dataset.url||location.pathname;"
-                "method=(el.dataset.method||'GET').toUpperCase();"
-                "const f=el.closest('form');"
-                "if(f){"
+                "method=(el.dataset.method||(da?'POST':'GET')).toUpperCase();"
+                "const fd=new FormData();"
+                "if(el.name)fd.append(el.name,el.value||'');"
+                "if(da)fd.append('_action',da);"
                 "if(method==='GET'){"
-                "const p=new URLSearchParams(new FormData(f)).toString();"
+                "const p=new URLSearchParams(fd).toString();"
                 "if(p)url+=(url.indexOf('?')<0?'?':'&')+p"
-                "}else body=new FormData(f)"
-                "}else if(el.name){"
-                "if(method==='GET'){"
-                "url+=(url.indexOf('?')<0?'?':'&')+encodeURIComponent(el.name)+'='+encodeURIComponent(el.value||'')"
-                "}else{const fd=new FormData();fd.append(el.name,el.value||'');body=fd}"
-                "}}"
+                "}else body=fd"
+                "}"
                 "const inc=el.dataset.include;"
                 "if(inc){"
                 "const extras=document.querySelectorAll(inc);"
@@ -1237,6 +1371,8 @@ class Asok:
                 "if(a&&a.tagName==='A'&&a.dataset.url!=='none'&&((a.dataset.trigger||'click').split(/\\s+/)[0]==='click'))pf(a.href,a.dataset.block);"
                 "});"
                 "document.addEventListener('click',function(e){"
+                # CRITICAL: Ignore clicks inside WebSocket components (they handle their own events)
+                "if(e.target.closest('[data-asok-component]'))return;"
                 "const a=e.target.closest('[data-block]');if(!a||a.tagName==='FORM')return;"
                 "const tr=(a.dataset.trigger||'click').split(/\\s+/)[0];"
                 "if(tr!=='click')return;"
@@ -1285,6 +1421,179 @@ class Asok:
                 "</script>"
             )
 
+        # 3. Asok Directives (asok-state, asok-on:*, asok-text, etc.)
+        # Check for directives in content (including HTML-encoded variants)
+        has_directives = any(
+            attr in content
+            for attr in ["asok-state", "asok-on:", "asok-text", "asok-html", "asok-show", "asok-if"]
+        )
+
+        # DEBUG: Log detection
+        if self.config.get("DEBUG") and has_directives:
+            logger.debug(f"[AsokDirectives] Detected directives in content, is_block={is_block}")
+
+        needs_directives = (
+            has_directives
+            and not is_block
+            and not getattr(request, "_asok_directives_done", False)
+        )
+        if (
+            stream
+            and only_scripts
+            and not is_block
+            and not getattr(request, "_asok_directives_done", False)
+        ):
+            needs_directives = True
+
+        if needs_directives:
+            request._asok_directives_done = True
+            request._asok_pending_scripts += (
+                f'<script nonce="{nonce}">'
+                "(function(){"
+                "'use strict';"
+                "window.AsokDirectives=window.AsokDirectives||{};"
+                "const states=new WeakMap();"
+                "const elements=[];"  # Track elements for iteration
+                # Safe evaluator that creates a closure with state properties
+                "function safeEval(expr,state,$el,$event){"
+                "try{"
+                # SECURITY: Block access to dangerous global objects and constructor chain
+                "if(/\\b(window|document|location|eval|Function|constructor)\\b|\\.constructor\\b/i.test(expr)){"
+                "console.error('Blocked access to restricted object in expression:',expr);return null"
+                "}"
+                # Build context with state properties and special variables
+                "const ctx={};"
+                "if($el)ctx.$el=$el;"
+                "if($event)ctx.$event=$event;"
+                # Add all state properties
+                "Object.keys(state).forEach(function(k){ctx[k]=state[k]});"
+                "const keys=Object.keys(ctx);"
+                "const vals=keys.map(function(k){return ctx[k]});"
+                # Use Function constructor - it will have access to state via closure
+                "const fn=new Function(...keys,'\"use strict\";return('+expr+')');"
+                "return fn(...vals)"
+                "}catch(e){console.error('Asok eval error:',expr,e);return null}"
+                "}"
+                # Execute a statement (not just an expression) to allow counter++, assignments, etc.
+                "function safeExec(expr,state,$el,$event){"
+                "try{"
+                # SECURITY: Block dangerous patterns and constructor chain in expressions
+                "if(/\\b(eval|Function|setTimeout|setInterval|constructor)\\b|\\.constructor\\b/i.test(expr)){"
+                "console.error('Blocked unsafe function in directive:',expr);return"
+                "}"
+                "const ctx={};"
+                "if($el)ctx.$el=$el;"
+                "if($event)ctx.$event=$event;"
+                # Create a wrapper that exposes state properties as mutable variables
+                "let code='\"use strict\";';"
+                # Declare variables for each state property
+                "Object.keys(state).forEach(function(k){"
+                "code+='var '+k+'=__state.'+k+';'"
+                "});"
+                # Execute the expression
+                "code+=expr+';';"
+                # Copy back changed values to state
+                "Object.keys(state).forEach(function(k){"
+                "code+='__state.'+k+'='+k+';'"
+                "});"
+                # Build parameter list
+                "const params=['__state'].concat(Object.keys(ctx));"
+                "const vals=[state].concat(Object.keys(ctx).map(function(k){return ctx[k]}));"
+                "const fn=new Function(...params,code);"
+                "fn(...vals)"
+                "}catch(e){console.error('Asok exec error:',expr,e)}"
+                "}"
+                # Initialize a single element with directives
+                "function initElement(el){"
+                "if(el.nodeType!==1)return;"
+                "const stateAttr=el.getAttribute('asok-state');"
+                "if(stateAttr&&!states.has(el)){"
+                "try{"
+                # SECURITY: Validate state format - try JSON first, fallback to JS object notation
+                "let state;"
+                "try{"
+                # Attempt strict JSON parse first (secure, supports nested objects)
+                "state=JSON.parse(stateAttr);"
+                "}catch(jsonErr){"
+                # Fallback: JS object notation {counter: 0} for convenience
+                # SECURITY: Block dangerous characters before eval
+                "if(/[<>();&|]/.test(stateAttr))throw new Error('Unsafe characters in state');"
+                "if(!/^\\s*\\{[\\s\\S]*\\}\\s*$/.test(stateAttr))throw new Error('Invalid state format');"
+                "state=new Function('return '+stateAttr)();"
+                "}"
+                "const proxy=new Proxy(state,{"
+                "set:function(t,p,v){t[p]=v;updateElement(el,proxy);return true}"
+                "});"
+                "states.set(el,proxy);"
+                "elements.push(el);"  # Track element for later iteration
+                "updateElement(el,proxy)"
+                "}catch(e){console.error('Invalid asok-state:',e)}"
+                "}"
+                "}"
+                # Update all bindings
+                "function updateElement(el,state){"
+                "el.querySelectorAll('[asok-text]').forEach(function(child){"
+                "const expr=child.getAttribute('asok-text');"
+                "const val=safeEval(expr,state);"
+                "if(val!==null&&val!==undefined)child.textContent=val"
+                "});"
+                "el.querySelectorAll('[asok-html]').forEach(function(child){"
+                "const expr=child.getAttribute('asok-html');"
+                "const val=safeEval(expr,state);"
+                "if(val!==null&&val!==undefined)child.innerHTML=val"
+                "});"
+                "el.querySelectorAll('[asok-show]').forEach(function(child){"
+                "const expr=child.getAttribute('asok-show');"
+                "const val=safeEval(expr,state);"
+                "child.style.display=val?'':'none'"
+                "});"
+                "el.querySelectorAll('[asok-if]').forEach(function(child){"
+                "const expr=child.getAttribute('asok-if');"
+                "const val=safeEval(expr,state);"
+                "if(!val&&!child.hasAttribute('data-asok-hidden')){"
+                "child.setAttribute('data-asok-hidden','true');"
+                "child.style.display='none'"
+                "}else if(val&&child.hasAttribute('data-asok-hidden')){"
+                "child.removeAttribute('data-asok-hidden');"
+                "child.style.display=''"
+                "}"
+                "});"
+                # Bind event handlers
+                "el.querySelectorAll('[asok-on\\\\:click],[asok-on\\\\:input],[asok-on\\\\:change],[asok-on\\\\:submit]').forEach(function(child){"
+                "Array.from(child.attributes).forEach(function(attr){"
+                "if(!attr.name.startsWith('asok-on:'))return;"
+                "const event=attr.name.split(':')[1];"
+                "const expr=attr.value;"
+                "if(child.__asokBound&&child.__asokBound[event])return;"
+                "if(!child.__asokBound)child.__asokBound={};"
+                "const handler=function(e){"
+                "if(event==='submit')e.preventDefault();"
+                "safeExec(expr,state,child,e);"
+                "updateElement(el,state)"
+                "};"
+                "child.addEventListener(event,handler);"
+                "child.__asokBound[event]=true"
+                "})"
+                "})"
+                "}"
+                # Initialize all
+                "function initAll(root){"
+                "root=root||document.body;"
+                "root.querySelectorAll('[asok-state]').forEach(initElement);"
+                # Update existing elements (can't iterate WeakMap, use tracked elements)
+                "elements.forEach(function(el){"
+                "if(root.contains(el)){const state=states.get(el);if(state)updateElement(el,state)}"
+                "})"
+                "}"
+                "window.AsokDirectives.init=initAll;"
+                "window.AsokDirectives.forceInit=initAll;"
+                "if(document.readyState==='loading'){"
+                "document.addEventListener('DOMContentLoaded',function(){initAll()})"
+                "}else{initAll()}"
+                "})()"
+                "</script>"
+            )
+
         needs_alive = (
             ("data-asok-component" in content or "ws-" in content)
             and not is_block
@@ -1315,28 +1624,79 @@ class Asok:
             request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">'
                 "(function(){"
-                "let ws;const timers={};function connect(){"
+                # SECURITY FIX: Prevent duplicate connections
+                "let ws;const timers={};let connecting=false;function connect(){"
+                "if(connecting||ws&&ws.readyState===0)return;"
+                "connecting=true;"
+                "if(ws&&ws.readyState===1)ws.close();"
                 "ws=window.asokWS('/asok/live');"
-                "ws.onopen=function(){document.querySelectorAll('[data-asok-component]').forEach(init)};"
+                "ws.onopen=function(){"
+                "connecting=false;"
+                "if(window._asokPendingInits&&window._asokPendingInits.length){"
+                "const pending=window._asokPendingInits.slice();"
+                "window._asokPendingInits=[];"
+                "pending.forEach(function(el){"
+                "if(document.body.contains(el)){"
+                "delete el.__asokIniting;"
+                "delete el.__asokWsReady;"
+                "window.Asok._wsInit(el)"
+                "}"
+                "});"
+                "}"
+                # Use wrapped versions to avoid duplicate init
+                "document.querySelectorAll('[data-asok-component]').forEach(window.Asok._wsInit);"
+                "document.querySelectorAll('[data-subscribe]').forEach(window.Asok._wsSub);"
+                "};"
                 "ws.onmessage=function(e){"
-                "const d=JSON.parse(e.data);if(d.op==='render'){"
+                "const d=JSON.parse(e.data);"
+                "if(d.op==='render'){"
                 "if(d.invalidate_cache&&window.__asokClearCache)window.__asokClearCache();"
                 "const el=document.getElementById('asok-'+d.cid);"
                 "if(el){const a=document.activeElement,aid=a?a.id:null,sel=a?a.selectionStart:null;"
-                "if(window.Asok&&window.Asok.swap){window.Asok.swap(el,d.html,'outerHTML')}"
-                "else{const newEl=new DOMParser().parseFromString(d.html,'text/html').body.firstElementChild;el.replaceWith(newEl);}"
+                "const wasReady=el.__asokWsReady;"
+                "el.querySelectorAll('.asok-loading').forEach(function(n){n.classList.remove('asok-loading')});"
+                # Use replaceWith for clean replacement
+                "const newEl=new DOMParser().parseFromString(d.html,'text/html').body.firstElementChild;"
+                "el.replaceWith(newEl);"
                 "if(aid){const r=document.getElementById(aid);if(r){r.focus();if(sel!==null)r.setSelectionRange(sel,sel)}}"
-                "const updated=document.getElementById('asok-'+d.cid);if(updated)init(updated)}}};"
-                "ws.onclose=function(){setTimeout(connect,1000)};"
+                # Always re-init handlers on new element, but skip JOIN if already connected
+                "const updated=document.getElementById('asok-'+d.cid);"
+                "if(updated){"
+                "init(updated,wasReady);"  # Pass skipJoin flag
+                "document.dispatchEvent(new CustomEvent('asok:ws-update',{detail:{cid:d.cid,name:d.name,state:d.state}}))"
+                "}}}"
+                "else if(d.op==='model_event'){"
+                "document.querySelectorAll('[data-subscribe]').forEach(function(el){"
+                "const room=el.dataset.subscribe;if(room==='model:'+d.model||room==='model:'+d.model+':'+d.id){"
+                "if(window.Asok&&window.Asok.refresh)window.Asok.refresh(el);else if(typeof fire==='function')fire(el);"
+                "}})}"
+                "};"
+                "ws.onclose=function(){connecting=false;setTimeout(connect,1000)};"
+                "ws.onerror=function(){connecting=false};"
                 "}"
                 "function send(msg,el){"
                 "if(ws.readyState!==1)return;"
                 "if(el)el.classList.add('asok-loading');"
                 "ws.send(JSON.stringify(msg));"
                 "}"
-                "function init(el){"
+                "function initSub(el){"
+                "if(el.__asokSubReady)return;"
+                "el.__asokSubReady=true;"
+                "send({op:'join_room',room:el.dataset.subscribe});"
+                "}"
+                "function init(el,skipJoin){"
+                "if(el.__asokIniting)return;"
+                "el.__asokIniting=true;"
                 "const cid=el.id.replace('asok-',''),base=el.dataset.asokComponent,st=el.dataset.asokState;"
+                "if(!ws||ws.readyState!==1){"
+                "if(!window._asokPendingInits)window._asokPendingInits=[];"
+                "window._asokPendingInits.push(el);"
+                "delete el.__asokIniting;"
+                "return"
+                "}"
+                "if(!skipJoin){"
                 "send({op:'join',cid:cid,name:base,state:st});"
+                "}"
                 "['click','input','change','submit','keyup','keydown'].forEach(function(ev){"
                 "el.querySelectorAll('[ws-'+ev+']').forEach(function(n){"
                 "const attr=n.getAttribute('ws-'+ev),parts=attr.split('.'),meth=parts[0],mods=parts.slice(1);"
@@ -1355,8 +1715,36 @@ class Asok:
                 "const prop=n.getAttribute('ws-model');"
                 "n.oninput=function(){send({op:'sync',cid:cid,prop:prop,val:n.value},n)};"
                 "});"
+                "el.__asokWsReady=true;"  # Mark as ready
+                "delete el.__asokIniting;"
                 "}"
-                "window.Asok=window.Asok||{};window.Asok.init=function(el){if(!el)return;if(el.dataset.asokComponent)init(el);el.querySelectorAll('[data-asok-component]').forEach(init)};"
+                "window.Asok=window.Asok||{};"
+                # Wrap init to check if already initialized
+                "const _init=init;"
+                "const _initSub=initSub;"
+                "window.Asok._wsInit=function(el){"
+                "if(!el||el.__asokWsReady)return;"
+                "_init(el);"
+                "};"
+                "window.Asok._wsSub=function(el){"
+                "if(!el||el.__asokSubReady)return;"
+                "_initSub(el);"
+                "};"
+                "window.Asok.leaveComponent=function(cid){"
+                "if(ws&&ws.readyState===1){"
+                "try{ws.send(JSON.stringify({op:'leave',cid:cid}))}catch(e){}"
+                "}"
+                "if(window.__asokClearCache)window.__asokClearCache();"
+                "};"
+                "const oldInit=window.Asok.init;"
+                "window.Asok.init=function(el){"
+                "if(oldInit)oldInit(el);"
+                "if(!el)return;"
+                # Use wrapped versions that check __asokWsReady
+                "if(el.dataset.asokComponent)window.Asok._wsInit(el);"
+                "if(el.dataset.subscribe)window.Asok._wsSub(el);"
+                "el.querySelectorAll('[data-asok-component]').forEach(window.Asok._wsInit);"
+                "el.querySelectorAll('[data-subscribe]').forEach(window.Asok._wsSub)};"
                 "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',connect);else connect();"
                 "})();"
                 "</script>"
@@ -1469,13 +1857,13 @@ class Asok:
                 "if(a.name.startsWith('asok-bind:')){const n=a.name.substring(10),v=se(a.value,st,el);if(v!==undefined&&v!==null&&v!==false)el.setAttribute(n,String(v));else el.removeAttribute(n)}"
                 "})};"
                 "const uif=(el,st)=>{let c=el,ok=0;while(c&&(c.hasAttribute('asok-if')||c.hasAttribute('asok-elif')||c.hasAttribute('asok-else'))){c._ai=1;let v=c.hasAttribute('asok-else')?!ok:se(c.getAttribute(c.hasAttribute('asok-if')?'asok-if':'asok-elif'),st,c);if(v&&!ok){if(!c._n){const n=c.content.cloneNode(true);c._n=n.firstElementChild;c.parentNode.insertBefore(n,c.nextSibling);w.set(c._n,w.get(el)||{state:st,refs:{}});init(c._n)}ok=1}else if(c._n){c._n.remove();c._n=null}c=c.nextElementSibling}}; "
-                "const ufo=(el,st)=>{el._ai=1;const at=el.getAttribute('asok-for'),[v,l]=at.split(' in '),items=se(l,st,el)||[];if(!el._m){el._m=document.createComment('for');el.parentNode.insertBefore(el._m,el.nextSibling)} (el._ns||[]).forEach(n=>n.remove());el._ns=[];items.forEach((it,i)=>{const n=el.content.cloneNode(true),child=n.firstElementChild,sub=rpx({[v]:it,index:i},()=>us(fss(el)),st);w.set(child,{state:sub,refs:{},cleanup:[]});el.parentNode.insertBefore(n,el._m);el._ns.push(child);init(child)})};"
-                "const us=(sc,rt=1)=>{const c=w.get(sc);if(!c)return;cs=sc;ub(sc,c.state);sc.querySelectorAll('*').forEach(el=>{if(el._uv)el._uv();if(el.tagName==='TEMPLATE'){if(el.hasAttribute('asok-if'))uif(el,c.state);if(el.hasAttribute('asok-for'))ufo(el,c.state);return} let p=el.parentElement;while(p&&p!==sc){if(p&&p.hasAttribute('asok-state'))return;p=p.parentElement}ub(el,c.state)});cs=null;if(rt&&(c._ts||[]).forEach(t=>us(t,0)))return};"
+                "const ufo=(el,st)=>{el._ai=1;const at=el.getAttribute('asok-for'),[v,l]=at.split(' in '),items=se(l,st,el)||[];const s=JSON.stringify(items);if(el._ls===s)return;el._ls=s;let vn=v.trim(),id='index';if(vn.startsWith('(')&&vn.endsWith(')')){const p=vn.slice(1,-1).split(',').map(s=>s.trim());vn=p[0];if(p.length>1)id=p[1]}if(!el._m){el._m=document.createComment('for');el.parentNode.insertBefore(el._m,el.nextSibling)}(el._ns||[]).forEach(n=>n.remove());el._ns=[];items.forEach((it,i)=>{const n=el.content.cloneNode(true),child=n.firstElementChild,sub=rpx({[vn]:it,[id]:i},()=>us(fss(el)),st);w.set(child,{state:sub,refs:{},cleanup:[]});el.parentNode.insertBefore(n,el._m);el._ns.push(child);init(child)})};"
+                "const us=(sc,rt=1)=>{const c=w.get(sc);if(!c)return;cs=sc;ub(sc,c.state);sc.querySelectorAll('*').forEach(el=>{if(el._uv)el._uv();if(el.tagName==='TEMPLATE'){const src=fss(el),s=src?w.get(src).state:c.state;if(el.hasAttribute('asok-if'))uif(el,s);if(el.hasAttribute('asok-for'))ufo(el,s);return}let p=el.parentElement;while(p&&p!==sc){if(p&&p.hasAttribute('asok-state'))return;p=p.parentElement}const src=fss(el);if(src)ub(el,w.get(src).state)});cs=null;if(rt&&(c._ts||[]).forEach(t=>us(t,0)))return};"
                 "const rpx=(obj,cb,st)=>{if(!obj||typeof obj!=='object'||obj._isProxy)return obj;return new Proxy(obj,{get(t,p){if(p==='_isProxy')return true;const v=(p in t)?t[p]:(st?st[p]:undefined);if(typeof v==='function'){if(['push','pop','splice','shift','unshift','reverse','sort'].includes(p))return(...args)=>{const r=v.apply(t,args);cb();return r};return v.bind(t)}return rpx(v,cb,st)},has(t,p){return p in t||(st&&p in st)},set(t,p,v){if(p in t){if(t[p]===v)return true;t[p]=v;cb();return true}if(st&&p in st){st[p]=v;return true}t[p]=v;cb();return true}})};"
                 "const is=(el)=>{if(el._ai)return;const a=el.getAttribute('asok-state');try{const s=rpx(se(a||'{}',{},el)||{},()=>us(el));w.set(el,{state:s,cleanup:[],refs:{},_ts:[]});el._ai=1;if(el.hasAttribute('asok-init'))es(el.getAttribute('asok-init'),s,null,el);us(el)}catch(e){}};"
                 "const im=(el)=>{if(el._ami)return;const m=el.getAttribute('asok-model'),sc=fss(el);if(!m||!sc)return;const s=w.get(sc).state;el._ami=1;"
-                "el._uv=()=>{const v=s[m]||'';if(el.value!==String(v)&&document.activeElement!==el){if(el.type==='checkbox')el.checked=!!v;else if(el.type==='radio')el.checked=el.value===v;else el.value=v}};"
-                "el._uv();const h=()=>{if(el.type==='checkbox')s[m]=el.checked;else if(el.type==='radio'){if(el.checked)s[m]=el.value}else s[m]=el.value};"
+                "el._uv=()=>{const v=se(m,s,el),dv=(v!==undefined&&v!==null)?v:'';if(el.value!==String(dv)&&document.activeElement!==el){if(el.type==='checkbox')el.checked=!!dv;else if(el.type==='radio')el.checked=el.value===dv;else el.value=dv}};"
+                "el._uv();const h=()=>{if(el.type==='checkbox')es(m+'=$el.checked',s,null,el);else if(el.type==='radio'){if(el.checked)es(m+'=$el.value',s,null,el)}else es(m+'=$el.value',s,null,el)};"
                 "el.addEventListener('input',h);el.addEventListener('change',h);w.get(sc).cleanup.push(()=>{el.removeEventListener('input',h);el.removeEventListener('change',h)})};"
                 "const ie=(el)=>{if(el._aei)return;const sc=fss(el);if(!sc)return;const s=w.get(sc).state;el._aei=1;Array.from(el.attributes).forEach(a=>{if(!a.name.startsWith('asok-on:'))return;"
                 "const en=a.name.substring(8),sm=a.value,[ev,...mods]=en.split('.'),h=(e)=>{if(mods.includes('prevent'))e.preventDefault();if(mods.includes('stop'))e.stopPropagation();"
@@ -1489,11 +1877,14 @@ class Asok:
                 "const ifa=(el)=>{if(el._afea)return;const expr=el.getAttribute('asok-fetch-async'),on=el.getAttribute('asok-fetch-on')||'click',sc=fss(el);if(!expr||!sc)return;const s=w.get(sc).state;el._afea=1;"
                 "const doAsync=async()=>{try{s.loading=true;s.error=null;await es(expr,s,null,el);s.loading=false}catch(e){s.error=e.message;s.loading=false}};"
                 "const h=()=>doAsync();el.addEventListener(on,h);w.get(sc).cleanup.push(()=>el.removeEventListener(on,h))};"
+                "const cleanupOld=(r)=>{if(!r)return;const els=[r,...r.querySelectorAll('*')];els.forEach(el=>{const ctx=w.get(el);if(ctx&&ctx.cleanup){ctx.cleanup.forEach(fn=>{try{fn()}catch(e){}});ctx.cleanup=[]}})};"
+                "const resetFlags=(r)=>{if(!r)return;const els=[r,...r.querySelectorAll('*')];els.forEach(el=>{delete el._ai;delete el._ami;delete el._aei;delete el._ari;delete el._ati;delete el._afe;delete el._afea;delete el._uv;delete el._ac})};"
+                "const forceInit=(r)=>{if(!r)return;resetFlags(r);init(r)};"
                 "const init=(r=document)=>{const els=r===document?document.querySelectorAll('*'):[r,...r.querySelectorAll('*')];els.forEach(el=>{if(el.hasAttribute('asok-state'))is(el);if(el.hasAttribute('asok-ref')&&!el._ari){const sc=fss(el);if(sc){w.get(sc).refs[el.getAttribute('asok-ref')]=el;el._ari=1}}"
                 "if(el.hasAttribute('asok-teleport')&&!el._ati){const t=el.getAttribute('asok-teleport'),tg=document.querySelector(t),sc=fss(el);if(tg&&sc){const ctx=w.get(sc),n=el.content.cloneNode(true),child=n.firstElementChild;w.set(child,{state:ctx.state,refs:ctx.refs,cleanup:[],_ts:[]});ctx._ts.push(child);tg.appendChild(n);init(child);el._ati=1;el.style.display='none'}} if(el.tagName==='TEMPLATE' && !el._ai){const sc=fss(el);if(sc){const s=w.get(sc).state;if(el.hasAttribute('asok-if'))uif(el,s);if(el.hasAttribute('asok-for'))ufo(el,s)}}});els.forEach(el=>{const sc=fss(el);if(sc)ub(el,w.get(sc).state);if(el.hasAttribute('asok-model'))im(el);if(el.hasAttribute('asok-fetch'))ifetch(el);if(el.hasAttribute('asok-fetch-async'))ifa(el);if(Array.from(el.attributes).some(a=>a.name.startsWith('asok-on:')))ie(el)});if(r===document)document.querySelectorAll('[asok-cloak]').forEach(e=>e.removeAttribute('asok-cloak'))};"
                 "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>init());else init();"
                 "if(window.Asok){const oi=window.Asok.init;window.Asok.init=(el)=>{if(oi)oi(el);init(el)}}"
-                "document.addEventListener('asok:success',e=>{if(e.detail&&e.detail.target)init(e.detail.target)});window.Asok=window.Asok||{};window.AsokDirectives={init,version:'1.0.0'};window.Asok.store=st;})()"
+                "document.addEventListener('asok:success',e=>{if(e.detail&&e.detail.target)init(e.detail.target)});window.Asok=window.Asok||{};window.AsokDirectives={init,forceInit,cleanupOld,resetFlags,version:'1.0.0',w};window.Asok.store=st;})()"
                 "</script>"
             )
 
@@ -1523,44 +1914,63 @@ class Asok:
                 def inject_scripts(m):
                     return scripts + m.group(1)
 
-                return re.sub(
+                content = re.sub(
                     r"(</body>)", inject_scripts, content, flags=re.I, count=1
                 )
 
             # 2. For fragments or final chunks (when stream=False)
-            if not stream:
+            elif not stream:
                 # Check for clear closing tags first
                 is_end = (
                     "</html>" in content.lower() or "</template>" in content.lower()
                 )
-
                 if is_end:
                     request._asok_scripts_done = True
                     request._asok_pending_scripts = ""  # Clear
-                    return content + "\n" + scripts
-
-                # If no clear end tag, check if we are currently inside a tag
-                # (i.e. there is a '<' that hasn't been closed by a '>')
-                stripped = content.strip()
-                inside_tag = re.search(r"<[^>]*$", content)
-
-                # ALSO check if we are a continuation of a tag from a previous chunk
-                # (i.e. we don't start with '<' but we have a '>')
-                is_continuation = (
-                    stripped and not stripped.startswith("<") and ">" in stripped
-                )
-
-                request._asok_scripts_done = True
-                request._asok_pending_scripts = ""  # Clear
-
-                if inside_tag or is_continuation:
-                    # We are in the middle of a tag! Prepend to avoid breaking it.
-                    return scripts + content
+                    content = content + "\n" + scripts
                 else:
-                    # We seem to be between tags. Safe to append.
-                    return content + "\n" + scripts
+                    # If no clear end tag, check if we are currently inside a tag
+                    # (i.e. there is a '<' that hasn't been closed by a '>')
+                    stripped = content.strip()
+                    inside_tag = re.search(r"<[^>]*$", content)
+
+                    # ALSO check if we are a continuation of a tag from a previous chunk
+                    # (i.e. we don't start with '<' but we have a '>')
+                    is_continuation = (
+                        stripped and not stripped.startswith("<") and ">" in stripped
+                    )
+
+                    request._asok_scripts_done = True
+                    request._asok_pending_scripts = ""  # Clear
+
+                    if inside_tag or is_continuation:
+                        # We are in the middle of a tag! Prepend to avoid breaking it.
+                        content = scripts + content
+                    else:
+                        # We seem to be between tags. Safe to append.
+                        content = content + "\n" + scripts
+
+        # Developer Toolbar (Optional)
+        def is_true(val):
+            if isinstance(val, str):
+                return val.lower() in ("true", "yes", "1", "on")
+            return bool(val)
+
+        show_toolbar = is_true(self.config.get("TOOLBAR"))
+        if "TOOLBAR" not in self.config:
+            show_toolbar = is_true(self.config.get("DEBUG"))
+
+        if show_toolbar and not is_block:
+            if "</html>" in content.lower() or "</body>" in content.lower():
+                try:
+                    from .toolbar import DeveloperToolbar
+                    toolbar = DeveloperToolbar(request, self)
+                    content = toolbar.inject(content)
+                except ImportError:
+                    pass
 
         return content
+
 
     # ── Security headers ──────────────────────────────────────
 
@@ -1599,23 +2009,37 @@ class Asok:
             return []
         base = dict(self._DEFAULT_SECURITY_HEADERS)
 
+        # SECURITY: Only send HSTS over HTTPS (browsers ignore it over HTTP anyway)
+        if request and request.scheme != "https":
+            base.pop("Strict-Transport-Security", None)
+
         # Build CSP with configurable directives
         ws_port = self.config.get("WS_PORT", 8001)
 
         # Check if reactive features are used in this response to enable unsafe-eval only when needed
-        needs_eval = False
+        # In DEBUG mode, always enable unsafe-eval for easier development with directives
+        needs_eval = self.config.get("CSP_UNSAFE_EVAL", self.config.get("DEBUG", False))
         if request:
-            needs_eval = getattr(request, "_asok_directives_done", False) or \
+            needs_eval = needs_eval or \
+                         getattr(request, "_asok_directives_done", False) or \
                          getattr(request, "_asok_reactive_done", False) or \
-                         getattr(request, "_asok_alive_done", False)
+                         getattr(request, "_asok_alive_done", False) or \
+                         getattr(request, "uses_directives", False)
+
+        # SECURITY: Log when unsafe-eval is enabled for audit trail
+        if needs_eval and not self.config.get("DEBUG"):
+            logger.warning("CSP 'unsafe-eval' enabled for request (required for reactive directives)")
 
         # Default CSP directives
         csp_directives = {
             "default-src": ["'self'"],
+            "img-src": ["'self'", "data:", "blob:"],  # Allow data and blob URIs for image previews
             "style-src": ["'self'", "'unsafe-inline'"],
             "connect-src": ["'self'"],
             "object-src": ["'none'"],
-            "base-uri": ["'none'"],
+            "base-uri": ["'self'"],
+            "form-action": ["'self'"],
+            "frame-ancestors": ["'none'"],
         }
 
         # Add host-specific connect-src if possible
@@ -1642,7 +2066,10 @@ class Asok:
         if needs_eval:
             script_src.append("'unsafe-eval'")
 
-        csp_directives["script-src"] = script_src
+        if nonce:
+            csp_directives["script-src"] = script_src
+        else:
+            csp_directives["script-src"] = ["'self'"]
 
         # Allow users to extend or override CSP directives via config
         user_csp = self.config.get("CSP", {})
@@ -1651,8 +2078,11 @@ class Asok:
                 if isinstance(values, str):
                     values = [values]
                 if directive in csp_directives:
-                    # Extend existing directive
-                    csp_directives[directive].extend(values)
+                    # Extend existing directive, avoiding duplicates
+                    existing = csp_directives[directive]
+                    for val in values:
+                        if val not in existing:
+                            existing.append(val)
                 else:
                     # Add new directive
                     csp_directives[directive] = values if isinstance(values, list) else [values]
@@ -1700,85 +2130,386 @@ class Asok:
         environ["asok.app"] = self
         environ["asok.secret_key"] = self.config.get("SECRET_KEY")
 
-        # Debug Log
-        with open("asok_debug.log", "a") as f:
-            f.write(
-                f"\n[{environ.get('REQUEST_METHOD')}] {environ.get('PATH_INFO')} (DEBUG={self.config.get('DEBUG')})\n"
-            )
+        # Request Log - Filter out noise (internal, static, and browser noise)
+        path = environ.get('PATH_INFO', '')
+        is_static = any(path.startswith(prefix) for prefix in ['/css/', '/js/', '/images/', '/uploads/'])
+        is_noise = path in ('/__reload', '/favicon.ico') or path.startswith('/.well-known/')
+
+        if not (is_static or is_noise):
+            logger.info("[%s] %s (DEBUG=%s)", environ.get('REQUEST_METHOD'), path, self.config.get('DEBUG'))
 
         request = Request(environ)
-        path_info = request.path
 
-        # Security nonce
-        self.nonce = secrets.token_urlsafe(16)
-        request._nonce = self.nonce
+        # Set request context with automatic cleanup in finally block
+        token = request_var.set(request)
+        try:
+            path_info = request.path
 
-        # Force session loading early (session is lazy-loaded, but we need it before headers)
-        _ = request.session
+            # Security nonce
+            self.nonce = secrets.token_urlsafe(16)
+            request._nonce = self.nonce
 
-        # HEAD support: treat as GET, strip body at the end
-        is_head = request.method == "HEAD"
-        if is_head:
-            request.method = "GET"
+            # Force session loading early (session is lazy-loaded, but we need it before headers)
+            _ = request.session
 
-        # Reject oversized requests early
-        if getattr(request, "_body_rejected", False):
-            start_response("413 Payload Too Large", [("Content-Type", "text/plain")])
-            return [b"Request body too large"]
+            # HEAD support: treat as GET, strip body at the end
+            is_head = request.method == "HEAD"
+            if is_head:
+                request.method = "GET"
 
-        # CORS pre-flight (must be handled before routing/CSRF)
-        cors_origins = self.config.get("CORS_ORIGINS")
-        if request.method == "OPTIONS" and cors_origins:
-            origin = environ.get("HTTP_ORIGIN", "")
-            headers = []
-            if cors_origins == "*" or self._cors_allowed(origin):
-                headers.append(("Access-Control-Allow-Origin", origin or "*"))
-                headers.append(("Access-Control-Allow-Credentials", "true"))
-                headers.append(
-                    (
-                        "Access-Control-Allow-Methods",
-                        "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+            # Reject oversized requests early
+            if getattr(request, "_body_rejected", False):
+                start_response("413 Payload Too Large", [("Content-Type", "text/plain")])
+                return [b"Request body too large"]
+
+            # CORS pre-flight (must be handled before routing/CSRF)
+            cors_origins = self.config.get("CORS_ORIGINS")
+            if request.method == "OPTIONS" and cors_origins:
+                origin = environ.get("HTTP_ORIGIN", "")
+                headers = []
+                if cors_origins == "*" or self._cors_allowed(origin):
+                    headers.append(("Access-Control-Allow-Origin", origin or "*"))
+                    headers.append(("Access-Control-Allow-Credentials", "true"))
+                    headers.append(
+                        (
+                            "Access-Control-Allow-Methods",
+                            "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+                        )
                     )
-                )
-                headers.append(
-                    (
-                        "Access-Control-Allow-Headers",
-                        "Content-Type, X-CSRF-Token, X-Block",
+                    headers.append(
+                        (
+                            "Access-Control-Allow-Headers",
+                            "Content-Type, X-CSRF-Token, X-Block",
+                        )
                     )
+                    headers.append(("Access-Control-Max-Age", "86400"))
+                start_response("204 No Content", headers)
+                return [b""]
+
+            # Health check endpoint
+            if path_info == "/__health":
+                body = b'{"status":"ok"}'
+                start_response(
+                    "200 OK",
+                    [
+                        ("Content-Type", "application/json"),
+                        ("Content-Length", str(len(body))),
+                    ],
                 )
-                headers.append(("Access-Control-Max-Age", "86400"))
-            start_response("204 No Content", headers)
-            return [b""]
+                return [body]
 
-        # Health check endpoint
-        if path_info == "/__health":
-            body = b'{"status":"ok"}'
-            start_response(
-                "200 OK",
-                [
-                    ("Content-Type", "application/json"),
-                    ("Content-Length", str(len(body))),
-                ],
-            )
-            return [body]
+            # Live reload endpoint (DEBUG only)
+            if path_info == "/__reload" and self.config.get("DEBUG"):
+                mtime = self._get_src_mtime()
+                body = str(mtime).encode()
+                start_response(
+                    "200 OK",
+                    [("Content-Type", "text/plain"), ("Cache-Control", "no-cache")],
+                )
+                return [body]
 
-        # Live reload endpoint (DEBUG only)
-        if path_info == "/__reload" and self.config.get("DEBUG"):
-            mtime = self._get_src_mtime()
-            body = str(mtime).encode()
-            start_response(
-                "200 OK",
-                [("Content-Type", "text/plain"), ("Cache-Control", "no-cache")],
-            )
-            return [body]
+            # Admin module dispatch (intercepts /admin/*)
+            admin = getattr(self, "_admin", None)
+            if admin and (
+                path_info == admin.prefix or path_info.startswith(admin.prefix + "/")
+            ):
+                try:
+                    content_str = admin.dispatch(request)
+                except AbortException as abort:
+                    request.status = Request._STATUS_MAP.get(
+                        abort.status, f"{abort.status} Unknown"
+                    )
+                    content_str = self._render_error_page(
+                        request, abort.status, message=abort.message
+                    )
+                except RedirectException as redir:
+                    headers = [("Location", redir.url)]
+                    headers += self._cookie_headers(request, environ)
+                    start_response("302 Found", headers)
+                    return [b""]
+                except Exception as e:
+                    import traceback
+                    logger.error("Admin Dispatch Exception: %s\n%s", str(e), traceback.format_exc())
+                    if self.config.get("DEBUG"):
+                        start_response("500 Internal Server Error", [("Content-Type", "text/plain")])
+                        return [f"ADMIN ERROR: {str(e)}\n\n{traceback.format_exc()}".encode()]
+                    request.status = "500 Internal Server Error"
+                    content_str = self._render_error_page(request, 500)
+                if "asok.binary_response" in environ:
+                    output = environ["asok.binary_response"]
+                    headers = [("Content-Type", request.content_type)]
+                    headers += environ.get("asok.extra_headers", [])
+                    headers += self._cookie_headers(request, environ)
+                    headers.append(("Content-Length", str(len(output))))
+                    start_response(request.status, headers)
+                    return [output]
+                output = str(content_str).encode("utf-8")
+                headers = [("Content-Type", request.content_type)]
+                headers += self._cookie_headers(request, environ)
+                headers.append(("Content-Length", str(len(output))))
+                start_response(request.status, headers)
+                return [output]
 
-        # Admin module dispatch (intercepts /admin/*)
-        admin = getattr(self, "_admin", None)
-        if admin and (
-            path_info == admin.prefix or path_info.startswith(admin.prefix + "/")
-        ):
+            # Native API Documentation
+            if self.config.get("DOCS", False):
+                from .api import handle_docs_request
+
+                res = handle_docs_request(self, request)
+                if res:
+                    if isinstance(res, bytes):
+                        output = res
+                    elif isinstance(res, str):
+                        output = res.encode("utf-8")
+                    else:
+                        output = str(res).encode("utf-8")
+                    headers = [("Content-Type", request.content_type)]
+                    headers += self._cookie_headers(request, environ)
+                    headers.append(("Content-Length", str(len(output))))
+                    start_response(request.status, headers)
+                    return [output]
+
+            # Static Assets in partials/
+            parts = path_info.split("/")
+            # Fast path: strip empty segments, check first real segment
+            parts = [p for p in parts if p]
+            if parts and parts[0] in self._static_dirs:
+                static_path = os.path.abspath(os.path.join(self._partials_path, *parts))
+                if not static_path.startswith(
+                    os.path.abspath(self._partials_path) + os.sep
+                ):
+                    body = self._render_error_page(request, 403)
+                    start_response(
+                        "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
+                    )
+                    return [body.encode("utf-8")]
+                result = self._serve_static(static_path, start_response, environ)
+                if result is not None:
+                    return result
+
+            # Routing (cached in production)
+            page_file, route_params = self._resolve_route(parts)
+            # logger.debug("  Resolved: %s (Params: %s)", page_file, route_params)
+
+            request.params.update(route_params)
+            request._current_page_file = page_file
+
+            # 0. Identify Page and Scoped Assets
+            if page_file:
+                # Derive page_id from relative path (e.g. blog/post -> blog-post)
+                try:
+                    pages_root = os.path.join(self.root_dir, self.dirs["PAGES"])
+                    rel = os.path.relpath(page_file, pages_root)
+                    base_name = os.path.splitext(rel)[0]
+
+                    # Normalize index pages
+                    if base_name == self.config["INDEX"] or base_name.endswith(
+                        os.sep + self.config["INDEX"]
+                    ):
+                        base_name = os.path.dirname(rel) or "index"
+
+                    request.page_id = (
+                        base_name.replace(os.sep, "-").replace(".", "-").strip("-")
+                    )
+                    if not request.page_id:
+                        request.page_id = "index"
+
+
+                    # Look for companion assets
+                    base_path = os.path.splitext(page_file)[0]
+                    for ext in ("css", "js"):
+                        p = f"{base_path}.{ext}"
+                        if os.path.isfile(p):
+                            request.scoped_assets[ext] = p
+                except Exception:
+                    request.page_id = "unknown"
+
+            if not page_file:
+                body = self._render_error_page(request, 404)
+                if inspect.isgenerator(body):
+                    headers = [("Content-Type", "text/html; charset=utf-8")]
+                    headers += self._cookie_headers(request, environ)
+                    start_response("404 Not Found", headers)
+                    return SmartStreamer(body, request, self)
+
+                # Ensure assets and nonces are injected even for error strings
+                body = self._inject_assets(body, request, getattr(request, "nonce", ""))
+
+                headers = [("Content-Type", "text/html; charset=utf-8")]
+                headers += self._cookie_headers(request, environ)
+                start_response("404 Not Found", headers)
+                return [body.encode("utf-8")]
+
+            # CSRF
+            if self.config.get("CSRF") and request.method in (
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+            ):
+                # 1. Global CSRF verification
+                try:
+                    request.verify_csrf()
+                except Exception:
+                    logger.warning(
+                        "CSRF validation failed: %s %s from %s",
+                        request.method,
+                        request.path,
+                        request.ip,
+                    )
+                    body = self._render_error_page(request, 403)
+                    start_response(
+                        "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
+                    )
+                    return [body.encode("utf-8")]
+
+                # Security: Rotate CSRF token for the NEXT request after successful validation
+                # We do it early so both the template and the headers get the NEW token.
+                request.csrf_token_value = secrets.token_hex(32)
+
+            # Execution
+            content_str = ""
             try:
-                content_str = admin.dispatch(request)
+                module = None
+                if page_file.endswith(".py") or page_file.endswith(".pyc"):
+                    module = self._load_module(page_file)
+
+                tpl_root = self._tpl_root
+
+                def core_layer(req):
+                    if module:
+                        # Detect available methods for potential 405
+                        supported = []
+                        # Check for explicit METHODS list
+                        if hasattr(module, "METHODS") and isinstance(
+                            module.METHODS, (list, tuple)
+                        ):
+                            supported.extend([m.upper() for m in module.METHODS])
+                        # Check for method-specific functions
+                        for m in [
+                            "get",
+                            "post",
+                            "put",
+                            "delete",
+                            "patch",
+                            "head",
+                            "options",
+                        ]:
+                            if hasattr(module, m) and callable(getattr(module, m)):
+                                if m.upper() not in supported:
+                                    supported.append(m.upper())
+
+                        # 1. Form Action Dispatcher (POST only)
+                        if req.method == "POST":
+                            action_name = (
+                                req.form.get("_action")
+                                or req.args.get("_action")
+                                or req.args.get("action")
+                            )
+                            if action_name:
+                                # Security: validate action name (alphanumeric + underscore only)
+                                if (
+                                    not action_name.replace("_", "")
+                                    .replace("-", "")
+                                    .isalnum()
+                                ):
+                                    action_name = None
+                                # Security: block private actions (starting with _)
+                                elif action_name.startswith("_"):
+                                    action_name = None
+
+                            # Security: Automatic block validation
+                            # If a block is requested (X-Block), validate its name strictly BEFORE execution
+                            # to prevent data processing (side effects) on invalid targets.
+                            block_header = req.environ.get("HTTP_X_BLOCK")
+                            if block_header:
+                                names = [b.strip() for b in block_header.split(",")]
+                                for bname in names:
+                                    if not bname:
+                                        continue
+                                    if bname.startswith("#") or not (bname.replace("_", "").replace("-", "").isalnum()):
+                                        msg = f"Invalid block name format: '{bname}'. Only alphanumeric characters, underscores and dashes are allowed (no # prefix)."
+                                        logger.warning(f"CONSISTENCY ERROR: {msg} (from {req.ip})")
+                                        req.abort(400, msg)
+
+                            if action_name:
+                                action_func = getattr(module, f"action_{action_name}", None)
+                                if callable(action_func):
+                                    # Security: Mandatory CSRF verification for all actions.
+                                    # Actions are intended for UI-driven state changes.
+                                    # For public APIs/Webhooks, use a standard post() method instead.
+                                    req.verify_csrf()
+                                    res = action_func(req)
+                                    if res is None:
+                                        req.abort(
+                                            500,
+                                            f"Action handler 'action_{action_name}' in {page_file} returned None. "
+                                            "Ensure your action returns request.html(), request.json(), or calls request.redirect().",
+                                        )
+                                    return res
+
+                        # 2. Try method-specific function (get, post, etc.)
+                        method_func = getattr(module, req.method.lower(), None)
+                        if callable(method_func):
+                            res = method_func(req)
+                            if res is None:
+                                req.abort(
+                                    500,
+                                    f"Method function '{req.method.lower()}' in {page_file} returned None.",
+                                )
+                            return res
+
+                        # 3. Fallback to render()
+                        if hasattr(module, "render"):
+                            res = module.render(req)
+                            if res is None:
+                                if supported and req.method not in supported:
+                                    req.method_not_allowed(supported)
+                                req.abort(
+                                    500,
+                                    f"render() in {page_file} returned None. Check your logic.",
+                                )
+                            return res
+
+                        # 4. Fallback to CONTENT constant
+                        if hasattr(module, "CONTENT"):
+                            return module.CONTENT
+
+                        # 5. Method not allowed (no render() and method not in supported)
+                        if supported and req.method not in supported:
+                            req.method_not_allowed(supported)
+                    else:
+                        content_raw = self._read_template(page_file)
+                        tpl_ctx = {
+                            "request": req,
+                            "__": req.__,
+                            "static": req.static,
+                            "get_flashed_messages": req.get_flashed_messages,
+                        }
+                        return render_template_string(
+                            content_raw, tpl_ctx, root_dir=tpl_root
+                        )
+
+                    # If we reach here, no handler matched (and no template file error occurred)
+                    req.status = "404 Not Found"
+                    return "<h1>404 Not Found</h1><p>The requested route does not provide a valid handler.</p>"
+
+                chain = self._get_middleware_chain(core_layer)
+                with request_context(request):
+                    content_str = chain(request)
+
+                # Override default error responses with custom pages if available
+                status_code = request.status.split(" ")[0]
+                is_default_error = False
+                if isinstance(content_str, str) and "<h1>" in content_str:
+                    is_default_error = True
+                elif status_code.startswith(("4", "5")) and not isinstance(
+                    content_str, str
+                ):
+                    # If it's an error and not a string, it might be a missing route generator
+                    is_default_error = True
+
+                if status_code.startswith(("4", "5")) and is_default_error:
+                    content_str = self._render_error_page(request, int(status_code))
             except AbortException as abort:
                 request.status = Request._STATUS_MAP.get(
                     abort.status, f"{abort.status} Unknown"
@@ -1786,19 +2517,96 @@ class Asok:
                 content_str = self._render_error_page(
                     request, abort.status, message=abort.message
                 )
+                # Re-run assets injection and minification on the error page
+                # (The code at the end of __call__ will handle this if we let it fall through,
+                # but AbortException usually implies we stop here).
+                # Actually, just let it fall through would be easier but we are in a 'try' block.
+                # Best is to set content_str and let the rest of the method handle it.
+                pass
             except RedirectException as redir:
+                # Save SQL stats for the toolbar to see across redirect
+                def is_true(val):
+                    if isinstance(val, str):
+                        return val.lower() in ("true", "yes", "1", "on")
+                    return bool(val)
+
+                show_toolbar = is_true(self.config.get("TOOLBAR"))
+                if "TOOLBAR" not in self.config:
+                    show_toolbar = is_true(self.config.get("DEBUG"))
+
+                if show_toolbar and hasattr(request, "_asok_sql_log"):
+                    try:
+                        request.session["_asok_redir_stats"] = {
+                            "path": request.path,
+                            "method": request.method,
+                            "args": dict(request.args),
+                            "form": dict(request.form),
+                            "sql_log": request._asok_sql_log,
+                        }
+                        # Force session save NOW — _cookie_headers may not have
+                        # been called yet and we must persist before the redirect.
+                        sess = request._session
+                        if sess is not None and hasattr(self, "_session_store"):
+                            self._session_store.save(sess.sid, sess)
+                    except Exception:
+                        pass
+
                 headers = [("Location", redir.url)]
                 headers += self._cookie_headers(request, environ)
-                start_response("302 Found", headers)
+                status_map = {
+                    301: "301 Moved Permanently",
+                    302: "302 Found",
+                    303: "303 See Other",
+                    307: "307 Temporary Redirect",
+                }
+                start_response(
+                    status_map.get(redir.status, f"{redir.status} Found"), headers
+                )
                 return [b""]
             except Exception as e:
                 import traceback
-                logger.error("Admin Dispatch Exception: %s\n%s", str(e), traceback.format_exc())
+
+                logger.error("Unhandled Exception: %s\n%s", str(e), traceback.format_exc())
                 if self.config.get("DEBUG"):
-                    start_response("500 Internal Server Error", [("Content-Type", "text/plain")])
-                    return [f"ADMIN ERROR: {str(e)}\n\n{traceback.format_exc()}".encode()]
-                request.status = "500 Internal Server Error"
-                content_str = self._render_error_page(request, 500)
+                    start_response(
+                        "500 Internal Server Error", [("Content-Type", "text/plain")]
+                    )
+                    return [f"ERROR: {str(e)}\n\n{traceback.format_exc()}".encode()]
+                body = self._render_error_page(request, 500)
+                body = self._inject_assets(body, request, getattr(request, "nonce", ""))
+
+                start_response(
+                    "500 Internal Server Error",
+                    [("Content-Type", "text/html; charset=utf-8")],
+                )
+                return [body.encode("utf-8")]
+
+            # Streamed file response (large files)
+            if "asok.stream_file" in environ:
+                stream_path = environ["asok.stream_file"]
+                headers = [("Content-Type", request.content_type)]
+                headers += environ.get("asok.extra_headers", [])
+                headers += self._cookie_headers(request, environ)
+                headers += self._security_headers(request=request)
+                start_response(request.status, headers)
+                if is_head:
+                    return [b""]
+
+                def _file_iter(path, chunk_size=65536):
+                    try:
+                        with open(path, "rb") as f:
+                            while True:
+                                chunk = f.read(chunk_size)
+                                if not chunk:
+                                    break
+                                yield chunk
+                    except (OSError, IOError) as e:
+                        logger.error(f"File streaming error for {path}: {e}")
+                        return
+
+                return _file_iter(stream_path)
+
+            # Binary response (send_file)
             if "asok.binary_response" in environ:
                 output = environ["asok.binary_response"]
                 headers = [("Content-Type", request.content_type)]
@@ -1806,415 +2614,127 @@ class Asok:
                 headers += self._cookie_headers(request, environ)
                 headers.append(("Content-Length", str(len(output))))
                 start_response(request.status, headers)
-                return [output]
-            output = str(content_str).encode("utf-8")
-            headers = [("Content-Type", request.content_type)]
-            headers += self._cookie_headers(request, environ)
-            headers.append(("Content-Length", str(len(output))))
-            start_response(request.status, headers)
-            return [output]
+                return [b""] if is_head else [output]
 
-        # Native API Documentation
-        if self.config.get("DOCS", False):
-            from .api import handle_docs_request
-
-            res = handle_docs_request(self, request)
-            if res:
-                if isinstance(res, bytes):
-                    output = res
-                elif isinstance(res, str):
-                    output = res.encode("utf-8")
-                else:
-                    output = str(res).encode("utf-8")
+            # Handle Generators (Native Streaming)
+            if inspect.isgenerator(content_str):
                 headers = [("Content-Type", request.content_type)]
                 headers += self._cookie_headers(request, environ)
-                headers.append(("Content-Length", str(len(output))))
+                headers += self._security_headers(request=request, nonce=getattr(request, "nonce", None))
+
+                # Check for Gzip
+                use_gzip = (
+                    self.config.get("GZIP", False)
+                    and "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
+                )
+                if use_gzip:
+                    headers.append(("Content-Encoding", "gzip"))
                 start_response(request.status, headers)
-                return [output]
+                return SmartStreamer(content_str, request, self)
 
-        # Static Assets in partials/
-        parts = path_info.split("/")
-        # Fast path: strip empty segments, check first real segment
-        parts = [p for p in parts if p]
-        if parts and parts[0] in self._static_dirs:
-            static_path = os.path.abspath(os.path.join(self._partials_path, *parts))
-            if not static_path.startswith(
-                os.path.abspath(self._partials_path) + os.sep
-            ):
-                body = self._render_error_page(request, 403)
-                start_response(
-                    "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
+            # Standard String Response
+            if "text/html" in request.content_type:
+                content_str = self._inject_assets(
+                    content_str, request, getattr(request, "nonce", None)
                 )
-                return [body.encode("utf-8")]
-            result = self._serve_static(static_path, start_response, environ)
-            if result is not None:
-                return result
 
-        # Routing (cached in production)
-        page_file, route_params = self._resolve_route(parts)
+                # HTML Minification
+                should_minify = self.config.get("HTML_MINIFY")
+                if should_minify is None:
+                    should_minify = not self.config.get("DEBUG")
 
-        with open("asok_debug.log", "a") as f:
-            f.write(f"  Resolved: {page_file} (Params: {route_params})\n")
+                if should_minify:
+                    content_str = minify_html(str(content_str))
 
-        request.params.update(route_params)
-        request._current_page_file = page_file
+            output = str(content_str).encode("utf-8")
 
-        # 0. Identify Page and Scoped Assets
-        if page_file:
-            # Derive page_id from relative path (e.g. blog/post -> blog-post)
-            try:
-                pages_root = os.path.join(self.root_dir, self.dirs["PAGES"])
-                rel = os.path.relpath(page_file, pages_root)
-                base_name = os.path.splitext(rel)[0]
+            # Response headers
+            headers = [("Content-Type", request.content_type)]
 
-                # Normalize index pages
-                if base_name == self.config["INDEX"] or base_name.endswith(
-                    os.sep + self.config["INDEX"]
-                ):
-                    base_name = os.path.dirname(rel) or "index"
-
-                request.page_id = (
-                    base_name.replace(os.sep, "-").replace(".", "-").strip("-")
-                )
-                if not request.page_id:
-                    request.page_id = "index"
-
-                with open("asok_debug.log", "a") as f:
-                    f.write(f"  Page ID: {request.page_id}\n")
-
-                # Look for companion assets
-                base_path = os.path.splitext(page_file)[0]
-                for ext in ("css", "js"):
-                    p = f"{base_path}.{ext}"
-                    if os.path.isfile(p):
-                        request.scoped_assets[ext] = p
-            except Exception:
-                request.page_id = "unknown"
-
-        if not page_file:
-            body = self._render_error_page(request, 404)
-            if inspect.isgenerator(body):
-                headers = [("Content-Type", "text/html; charset=utf-8")]
-                headers += self._cookie_headers(request, environ)
-                start_response("404 Not Found", headers)
-                return SmartStreamer(body, request, self)
-
-            # Ensure assets and nonces are injected even for error strings
-            body = self._inject_assets(body, request, getattr(request, "nonce", ""))
-
-            headers = [("Content-Type", "text/html; charset=utf-8")]
             headers += self._cookie_headers(request, environ)
-            start_response("404 Not Found", headers)
-            return [body.encode("utf-8")]
+            headers += self._security_headers(request=request, nonce=getattr(request, "nonce", None))
+            headers += environ.get("asok.extra_headers", [])
+            headers += request.response_headers
 
-        # CSRF
-        if self.config.get("CSRF") and request.method in (
-            "POST",
-            "PUT",
-            "PATCH",
-            "DELETE",
-        ):
-            # 1. Global CSRF verification
-            try:
-                request.verify_csrf()
-            except Exception:
-                logger.warning(
-                    "CSRF validation failed: %s %s from %s",
-                    request.method,
-                    request.path,
-                    request.ip,
-                )
-                body = self._render_error_page(request, 403)
-                start_response(
-                    "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
-                )
-                return [body.encode("utf-8")]
+            # Always expose the (potentially new) CSRF token for the JS engine
+            headers.append(("X-CSRF-Token", request.csrf_token_value))
+            headers.append(("Access-Control-Expose-Headers", "X-CSRF-Token"))
 
-            # Security: Rotate CSRF token for the NEXT request after successful validation
-            # We do it early so both the template and the headers get the NEW token.
-            request.csrf_token_value = secrets.token_hex(32)
-
-        # Execution
-        content_str = ""
-        try:
-            module = None
-            if page_file.endswith(".py") or page_file.endswith(".pyc"):
-                module = self._load_module(page_file)
-
-            tpl_root = self._tpl_root
-
-            def core_layer(req):
-                if module:
-                    # Detect available methods for potential 405
-                    supported = []
-                    # Check for explicit METHODS list
-                    if hasattr(module, "METHODS") and isinstance(
-                        module.METHODS, (list, tuple)
-                    ):
-                        supported.extend([m.upper() for m in module.METHODS])
-                    # Check for method-specific functions
-                    for m in [
-                        "get",
-                        "post",
-                        "put",
-                        "delete",
-                        "patch",
-                        "head",
-                        "options",
-                    ]:
-                        if hasattr(module, m) and callable(getattr(module, m)):
-                            if m.upper() not in supported:
-                                supported.append(m.upper())
-
-                    # 1. Form Action Dispatcher (POST only)
-                    if req.method == "POST":
-                        action_name = req.form.get("_action") or req.params.get(
-                            "action"
+            # CORS
+            cors_origins = self.config.get("CORS_ORIGINS")
+            if cors_origins:
+                origin = environ.get("HTTP_ORIGIN", "")
+                if cors_origins == "*" or self._cors_allowed(origin):
+                    if origin:
+                        headers.append(("Access-Control-Allow-Origin", origin))
+                        headers.append(("Access-Control-Allow-Credentials", "true"))
+                    else:
+                        headers.append(("Access-Control-Allow-Origin", "*"))
+                    headers.append(
+                        (
+                            "Access-Control-Allow-Methods",
+                            "GET, POST, PUT, DELETE, PATCH, OPTIONS",
                         )
-                        if action_name:
-                            # Security: validate action name (alphanumeric + underscore only)
-                            if (
-                                not action_name.replace("_", "")
-                                .replace("-", "")
-                                .isalnum()
-                            ):
-                                action_name = None
-                            # Security: block private actions (starting with _)
-                            elif action_name.startswith("_"):
-                                action_name = None
-
-                        if action_name:
-                            action_func = getattr(module, f"action_{action_name}", None)
-                            if callable(action_func):
-                                # Security: Mandatory CSRF verification for all actions.
-                                # Actions are intended for UI-driven state changes.
-                                # For public APIs/Webhooks, use a standard post() method instead.
-                                req.verify_csrf()
-                                res = action_func(req)
-                                if res is None:
-                                    req.abort(
-                                        500,
-                                        f"Action handler 'action_{action_name}' in {page_file} returned None. "
-                                        "Ensure your action returns request.html(), request.json(), or calls request.redirect().",
-                                    )
-                                return res
-
-                    # 2. Try method-specific function (get, post, etc.)
-                    method_func = getattr(module, req.method.lower(), None)
-                    if callable(method_func):
-                        res = method_func(req)
-                        if res is None:
-                            req.abort(
-                                500,
-                                f"Method function '{req.method.lower()}' in {page_file} returned None.",
-                            )
-                        return res
-
-                    # 3. Fallback to render()
-                    if hasattr(module, "render"):
-                        res = module.render(req)
-                        if res is None:
-                            if supported and req.method not in supported:
-                                req.method_not_allowed(supported)
-                            req.abort(
-                                500,
-                                f"render() in {page_file} returned None. Check your logic.",
-                            )
-                        return res
-
-                    # 4. Fallback to CONTENT constant
-                    if hasattr(module, "CONTENT"):
-                        return module.CONTENT
-
-                    # 5. Method not allowed (no render() and method not in supported)
-                    if supported and req.method not in supported:
-                        req.method_not_allowed(supported)
-                else:
-                    content_raw = self._read_template(page_file)
-                    tpl_ctx = {
-                        "request": req,
-                        "__": req.__,
-                        "static": req.static,
-                        "get_flashed_messages": req.get_flashed_messages,
-                    }
-                    return render_template_string(
-                        content_raw, tpl_ctx, root_dir=tpl_root
+                    )
+                    headers.append(
+                        (
+                            "Access-Control-Allow-Headers",
+                            "Content-Type, X-CSRF-Token, X-Block",
+                        )
                     )
 
-                # If we reach here, no handler matched (and no template file error occurred)
-                req.status = "404 Not Found"
-                return "<h1>404 Not Found</h1><p>The requested route does not provide a valid handler.</p>"
-
-            chain = self._get_middleware_chain(core_layer)
-            content_str = chain(request)
-
-            # Override default error responses with custom pages if available
-            status_code = request.status.split(" ")[0]
-            is_default_error = False
-            if isinstance(content_str, str) and "<h1>" in content_str:
-                is_default_error = True
-            elif status_code.startswith(("4", "5")) and not isinstance(
-                content_str, str
+            # Gzip compression for standard responses
+            if (
+                self.config.get("GZIP", False)
+                and len(output) > self.config.get("GZIP_MIN_SIZE", 500)
+                and "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
             ):
-                # If it's an error and not a string, it might be a missing route generator
-                is_default_error = True
+                buf = io.BytesIO()
+                with gzip_mod.GzipFile(fileobj=buf, mode="wb") as f:
+                    f.write(output)
+                output = buf.getvalue()
+                headers.append(("Content-Encoding", "gzip"))
+                headers.append(("Vary", "Accept-Encoding"))
 
-            if status_code.startswith(("4", "5")) and is_default_error:
-                content_str = self._render_error_page(request, int(status_code))
-        except AbortException as abort:
-            request.status = Request._STATUS_MAP.get(
-                abort.status, f"{abort.status} Unknown"
-            )
-            content_str = self._render_error_page(
-                request, abort.status, message=abort.message
-            )
-            # Re-run assets injection and minification on the error page
-            # (The code at the end of __call__ will handle this if we let it fall through,
-            # but AbortException usually implies we stop here).
-            # Actually, just let it fall through would be easier but we are in a 'try' block.
-            # Best is to set content_str and let the rest of the method handle it.
-            pass
-        except RedirectException as redir:
-            headers = [("Location", redir.url)]
-            headers += self._cookie_headers(request, environ)
-            status_map = {
-                301: "301 Moved Permanently",
-                302: "302 Found",
-                303: "303 See Other",
-                307: "307 Temporary Redirect",
-            }
-            start_response(
-                status_map.get(redir.status, f"{redir.status} Found"), headers
-            )
-            return [b""]
-        except Exception as e:
-            import traceback
+            if hasattr(request, "_asok_blocks") and request._asok_blocks:
+                blocks_str = ",".join(request._asok_blocks)
+                headers.append(("X-Asok-Blocks", blocks_str))
 
-            logger.error("Unhandled Exception: %s\n%s", str(e), traceback.format_exc())
-            if self.config.get("DEBUG"):
-                start_response(
-                    "500 Internal Server Error", [("Content-Type", "text/plain")]
-                )
-                return [f"ERROR: {str(e)}\n\n{traceback.format_exc()}".encode()]
-            body = self._render_error_page(request, 500)
-            body = self._inject_assets(body, request, getattr(request, "nonce", ""))
+                # Send debug stats via headers for the toolbar to pick up (AJAX)
+                show_toolbar = self.config.get("DEBUG") or self.config.get("TOOLBAR")
+                if show_toolbar and hasattr(request, "_asok_sql_log"):
+                    sql_log = request._asok_sql_log
+                    headers.append(("X-Asok-SQL-Count", str(len(sql_log))))
+                    try:
+                        headers.append(("X-Asok-SQL-Log", json.dumps(sql_log)))
+                    except Exception:
+                        pass
+                    # Also persist in session for the next full page load
+                    # (covers non-AJAX form submissions returning a block)
+                    try:
+                        request.session["_asok_redir_stats"] = {
+                            "path": request.path,
+                            "method": request.method,
+                            "args": dict(request.args),
+                            "form": dict(request.form),
+                            "sql_log": sql_log,
+                        }
+                        sess = request._session
+                        if sess is not None and hasattr(self, "_session_store"):
+                            self._session_store.save(sess.sid, sess)
+                    except Exception:
+                        pass
 
-            start_response(
-                "500 Internal Server Error",
-                [("Content-Type", "text/html; charset=utf-8")],
-            )
-            return [body.encode("utf-8")]
+                # Ensure JS can read these headers
+                exposed = [h[1] for h in headers if h[0] == "Access-Control-Expose-Headers"]
+                if exposed:
+                    headers = [h for h in headers if h[0] != "Access-Control-Expose-Headers"]
+                    headers.append(("Access-Control-Expose-Headers", f"{exposed[0]}, X-Asok-Blocks"))
+                else:
+                    headers.append(("Access-Control-Expose-Headers", "X-Asok-Blocks"))
 
-        # Streamed file response (large files)
-        if "asok.stream_file" in environ:
-            stream_path = environ["asok.stream_file"]
-            headers = [("Content-Type", request.content_type)]
-            headers += environ.get("asok.extra_headers", [])
-            headers += self._cookie_headers(request, environ)
-            start_response(request.status, headers)
-            if is_head:
-                return [b""]
-
-            def _file_iter(path, chunk_size=65536):
-                with open(path, "rb") as f:
-                    while True:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-                        yield chunk
-
-            return _file_iter(stream_path)
-
-        # Binary response (send_file)
-        if "asok.binary_response" in environ:
-            output = environ["asok.binary_response"]
-            headers = [("Content-Type", request.content_type)]
-            headers += environ.get("asok.extra_headers", [])
-            headers += self._cookie_headers(request, environ)
             headers.append(("Content-Length", str(len(output))))
             start_response(request.status, headers)
             return [b""] if is_head else [output]
-
-        # Handle Generators (Native Streaming)
-        if inspect.isgenerator(content_str):
-            headers = [("Content-Type", request.content_type)]
-            headers += self._cookie_headers(request, environ)
-            headers += self._security_headers(request=request, nonce=getattr(request, "nonce", None))
-
-            # Check for Gzip
-            use_gzip = (
-                self.config.get("GZIP", False)
-                and "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
-            )
-            if use_gzip:
-                headers.append(("Content-Encoding", "gzip"))
-            start_response(request.status, headers)
-            return SmartStreamer(content_str, request, self)
-
-        # Standard String Response
-        if "text/html" in request.content_type:
-            content_str = self._inject_assets(
-                content_str, request, getattr(request, "nonce", None)
-            )
-
-            # HTML Minification
-            should_minify = self.config.get("HTML_MINIFY")
-            if should_minify is None:
-                should_minify = not self.config.get("DEBUG")
-
-            if should_minify:
-                content_str = minify_html(str(content_str))
-
-        output = str(content_str).encode("utf-8")
-
-        # Response headers
-        headers = [("Content-Type", request.content_type)]
-
-        headers += self._cookie_headers(request, environ)
-        headers += self._security_headers(request=request, nonce=getattr(request, "nonce", None))
-        headers += environ.get("asok.extra_headers", [])
-        headers += request.response_headers
-
-        # Always expose the (potentially new) CSRF token for the JS engine
-        headers.append(("X-CSRF-Token", request.csrf_token_value))
-        headers.append(("Access-Control-Expose-Headers", "X-CSRF-Token"))
-
-        # CORS
-        cors_origins = self.config.get("CORS_ORIGINS")
-        if cors_origins:
-            origin = environ.get("HTTP_ORIGIN", "")
-            if cors_origins == "*" or self._cors_allowed(origin):
-                if origin:
-                    headers.append(("Access-Control-Allow-Origin", origin))
-                    headers.append(("Access-Control-Allow-Credentials", "true"))
-                else:
-                    headers.append(("Access-Control-Allow-Origin", "*"))
-                headers.append(
-                    (
-                        "Access-Control-Allow-Methods",
-                        "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-                    )
-                )
-                headers.append(
-                    (
-                        "Access-Control-Allow-Headers",
-                        "Content-Type, X-CSRF-Token, X-Block",
-                    )
-                )
-
-        # Gzip compression for standard responses
-        if (
-            self.config.get("GZIP", False)
-            and len(output) > self.config.get("GZIP_MIN_SIZE", 500)
-            and "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
-        ):
-            buf = io.BytesIO()
-            with gzip_mod.GzipFile(fileobj=buf, mode="wb") as f:
-                f.write(output)
-            output = buf.getvalue()
-            headers.append(("Content-Encoding", "gzip"))
-            headers.append(("Vary", "Accept-Encoding"))
-
-        headers.append(("Content-Length", str(len(output))))
-        start_response(request.status, headers)
-        return [b""] if is_head else [output]
+        finally:
+            request_var.reset(token)

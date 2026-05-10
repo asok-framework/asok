@@ -11,6 +11,11 @@ import pytest
 # Make sure the local asok/ source is used (not a stale site-packages)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# SECURITY: Force DEBUG=true for ALL tests to bypass production-only security checks
+# (like mandatory long SECRET_KEY or allowed_origins validation).
+os.environ["DEBUG"] = "true"
+os.environ["ASOK_ENV"] = "development"
+
 from asok.core import Asok
 from asok.testing import TestClient
 

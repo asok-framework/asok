@@ -122,6 +122,35 @@ def _escape(value: Any) -> Union[str, SafeString]:
     return _html.escape(s, quote=True)
 
 
+def _decode_base64_filter(value, **attrs):
+    """Décode une chaîne base64 (signature, image) en balise <img>.
+
+    Filtre de template pour afficher des images base64.
+
+    Usage:
+        {{ user.signature | decode_base64 }}
+        {{ user.signature | decode_base64(class_="w-64 border border-gray-300") }}
+    """
+    if not value:
+        return SafeString('')
+
+    # Construire les attributs HTML
+    attr_parts = []
+    for k, v in attrs.items():
+        # Retirer le underscore final (class_ -> class)
+        key = k.rstrip('_') if k.endswith('_') and k != '_' else k
+        if v is True:
+            attr_parts.append(_html.escape(key))
+        elif v is not False and v is not None:
+            attr_parts.append(f'{_html.escape(key)}="{_html.escape(str(v))}"')
+
+    attr_str = ' '.join(attr_parts)
+    if attr_str:
+        attr_str = ' ' + attr_str
+
+    return SafeString(f'<img src="{_html.escape(value)}"{attr_str} alt="Image">')
+
+
 # --- TEMPLATE FILTERS ---
 TEMPLATE_FILTERS = {
     "upper": lambda v: str(v).upper(),
@@ -162,6 +191,8 @@ TEMPLATE_FILTERS = {
     "filesize": humanize.file_size,
     "intcomma": humanize.intcomma,
     "duration": humanize.duration,
+    # Base64 decoding filter for signatures and images
+    "decode_base64": _decode_base64_filter,
 }
 
 # --- TEMPLATE TESTS ---
@@ -816,8 +847,11 @@ def _preprocess(template_string, context=None, root_dir=None, strip_blocks=True,
             if close_start is not None:
                 # Inject markers BEFORE the opening tag and AFTER the closing tag
                 # to keep the block tags intact for the Jinja-like renderer.
-                replacements.append((start_pos, start_pos, f"<!-- block:{block_name}:start -->"))
-                replacements.append((close_end, close_end, f"<!-- block:{block_name}:end -->"))
+                # SECURITY: Skip markers for specific sensitive blocks that are visible (title)
+                # or where comments break attributes (description).
+                if block_name not in ("title", "description"):
+                    replacements.append((start_pos, start_pos, f"<!-- block:{block_name}:start -->"))
+                    replacements.append((close_end, close_end, f"<!-- block:{block_name}:end -->"))
 
         # Apply replacements in reverse order to preserve positions
         for start, end, replacement in reversed(replacements):

@@ -7,6 +7,7 @@ import enum
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -19,7 +20,23 @@ import uuid
 import warnings
 from typing import Any, Generic, Optional, TypeVar, Union
 
+from .events import events
+
 T = TypeVar("T", bound="Model")
+logger = logging.getLogger(__name__)
+
+
+def convert_sql_to_text(obj: Any) -> str:
+    """Helper to extract the raw SQL from a Query object or a Model.
+    Example: convert_sql_to_text(Product.query().where('id', 1))
+
+    WARNING: For debugging only. Naive interpolation, not secure for execution.
+    """
+    if hasattr(obj, "raw_sql"):
+        return obj.raw_sql()
+    if hasattr(obj, "query") and callable(obj.query):
+        return obj.query().raw_sql()
+    return str(obj)
 
 
 class _Transaction:
@@ -41,14 +58,17 @@ class _Transaction:
 
 
 def _pluralize(word: str) -> str:
-    """Basic English pluralization for table names."""
+    """English pluralization with snake_case conversion for table names."""
     if not word:
         return word
-    word = word.lower()
-    if word.endswith("y") and len(word) > 1 and word[-2] not in "aeiou":
-        return word[:-1] + "ies"
-    if word.endswith(("s", "sh", "ch", "x", "z")):
+    # CamelCase to snake_case
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', word)
+    word = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+    if word.endswith(("s", "x", "z", "ch", "sh")):
         return word + "es"
+    if word.endswith("y") and len(word) > 1:
+        return word[:-1] + "ies"
     return word + "s"
 
 
@@ -132,17 +152,172 @@ class FileRef(str):
         return s
 
 
+def interpolate_sql(sql: str, args: list) -> str:
+    """Return the SQL query with parameters interpolated (for debugging only).
+    WARNING: This is naive and NOT SECURE against SQL injection.
+    Use only for inspection in logs/console; never execute this string.
+    """
+    if not sql:
+        return ""
+    if not args:
+        return sql
+
+    # Naive interpolation for inspection
+    res = sql
+    for arg in args:
+        if isinstance(arg, str):
+            escaped = arg.replace("'", "''")
+            val = f"'{escaped}'"
+        elif arg is None:
+            val = "NULL"
+        elif isinstance(arg, (int, float)):
+            val = str(arg)
+        elif isinstance(arg, bool):
+            val = "1" if arg else "0"
+        else:
+            val = f"'{str(arg)}'"
+        res = res.replace("?", val, 1)
+    return res
+
+
 class ModelList(list):
-    """List subclass that supports .count() without arguments."""
+    """List subclass that supports .count() without arguments and SQL inspection."""
+
+    def __init__(self, iterable=None, sql: str = None, args: list = None):
+        super().__init__(iterable or [])
+        self._sql = sql
+        self._args = args or []
 
     def count(self, value=None):
         if value is not None:
             return super().count(value)
         return len(self)
 
+    def to_sql(self) -> str:
+        """Return the SQL query string with placeholders."""
+        return self._sql or ""
+
+    def raw_sql(self) -> str:
+        """Return the SQL query with parameters interpolated (for debugging only)."""
+        return interpolate_sql(self._sql, self._args)
+
+
+class ConnectionProxy:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def execute(self, sql, parameters=()):
+        from .context import request_var
+
+        req = request_var.get()
+        if not req:
+            return self._conn.execute(sql, parameters)
+
+        if not hasattr(req, "_asok_sql_log"):
+            req._asok_sql_log = []
+        import time
+
+        start = time.time()
+        try:
+            return self._conn.execute(sql, parameters)
+        finally:
+            duration = (time.time() - start) * 1000
+            req._asok_sql_log.append(
+                {"sql": sql, "params": parameters, "duration": duration}
+            )
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._conn.__exit__(exc_type, exc_val, exc_tb)
+
 
 # Registry for all models to enable cross-model relationships
 MODELS_REGISTRY = {}
+
+class Migrations:
+    """Utility to track and manage applied database migrations."""
+
+    @staticmethod
+    def ensure_table():
+        """Ensures the tracking table exists in the database."""
+        conn = sqlite3.connect(Model._db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS _asok_migrations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    batch INTEGER NOT NULL,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_applied() -> list[str]:
+        """Return a list of all applied migration names in chronological order."""
+        Migrations.ensure_table()
+        conn = sqlite3.connect(Model._db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("SELECT name FROM _asok_migrations ORDER BY id ASC").fetchall()
+            return [row["name"] for row in rows]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def log(name: str, batch: int):
+        """Record a new migration as applied."""
+        conn = sqlite3.connect(Model._db_path)
+        try:
+            conn.execute("INSERT INTO _asok_migrations (name, batch) VALUES (?, ?)", (name, batch))
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_last_batch_number() -> int:
+        """Return the current maximum batch number."""
+        Migrations.ensure_table()
+        conn = sqlite3.connect(Model._db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT MAX(batch) as max_batch FROM _asok_migrations").fetchone()
+            return row["max_batch"] or 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_last_batch() -> list[str]:
+        """Return names of migrations belonging to the last executed batch."""
+        last_batch = Migrations.get_last_batch_number()
+        if last_batch == 0:
+            return []
+        conn = sqlite3.connect(Model._db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("SELECT name FROM _asok_migrations WHERE batch = ? ORDER BY id DESC", (last_batch,)).fetchall()
+            return [row["name"] for row in rows]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def remove(name: str):
+        """Remove a migration record from the tracking table."""
+        conn = sqlite3.connect(Model._db_path)
+        try:
+            conn.execute("DELETE FROM _asok_migrations WHERE name = ?", (name,))
+            conn.commit()
+        finally:
+            conn.close()
+
 
 # Thread-local storage for reusing SQLite connections
 _local = threading.local()
@@ -180,6 +355,8 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        index: bool = False,
+        form_type: Optional[str] = None,
     ):
         self.sql_type: str = sql_type
         self.default: Any = default
@@ -190,6 +367,8 @@ class Field:
         self.label: Optional[str] = label
         self.rules: Optional[str] = rules
         self.messages: dict[str, str] = messages or {}
+        self.index: bool = index
+        self.form_type: Optional[str] = form_type
 
     @staticmethod
     def String(
@@ -202,9 +381,12 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        index: bool = False,
+        form_type: Optional[str] = None,
     ) -> Field:
         """Short text, rendered as <input type="text">."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field("TEXT", default=default, unique=unique, nullable=nullable, hidden=hidden,
+                  protected=protected, label=label, rules=rules, messages=messages, index=index, form_type=form_type)
         f.max_length = max_length
         return f
 
@@ -219,9 +401,11 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        index: bool = False,
     ) -> Field:
         """Long text, rendered as <textarea>."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field("TEXT", default=default, unique=unique, nullable=nullable, hidden=hidden,
+                  protected=protected, label=label, rules=rules, messages=messages, index=index)
         f.is_text = True
         f.wysiwyg = wysiwyg
         return f
@@ -294,9 +478,12 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        index: bool = False,
+        form_type: Optional[str] = None,
     ) -> Field:
-        """Integer number."""
-        return Field("INTEGER", default, unique, nullable, hidden, protected, label, rules, messages)
+        """Integer number (or rating if form_type='rating')."""
+        return Field("INTEGER", default=default, unique=unique, nullable=nullable, hidden=hidden,
+                     protected=protected, label=label, rules=rules, messages=messages, index=index, form_type=form_type)
 
     @staticmethod
     def Boolean(
@@ -308,9 +495,12 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        index: bool = False,
+        form_type: Optional[str] = None,
     ) -> Field:
-        """Boolean value, rendered as a checkbox."""
-        f = Field("INTEGER", default, unique, nullable, hidden, protected, label, rules, messages)
+        """Boolean value, rendered as a checkbox (or toggle if form_type='toggle')."""
+        f = Field("INTEGER", default=default, unique=unique, nullable=nullable, hidden=hidden,
+                  protected=protected, label=label, rules=rules, messages=messages, index=index, form_type=form_type)
         f.is_boolean = True
         return f
 
@@ -357,9 +547,11 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        index: bool = False,
     ) -> Field:
         """Date and time."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field("TEXT", default=default, unique=unique, nullable=nullable, hidden=hidden,
+                  protected=protected, label=label, rules=rules, messages=messages, index=index)
         f.is_datetime = True
         return f
 
@@ -684,12 +876,16 @@ class Query(Generic[T]):
 
     def __init__(self, model: type[T], with_trashed: bool = False):
         self.model: type[T] = model
+        self._select: str = "*"
         self._wheres: list[str] = []
         self._args: list[Any] = []
         self._order: Optional[str] = None
         self._limit: Optional[int] = None
         self._offset: Optional[int] = None
+        self._groups: list[str] = []
         self._eager: list[str] = []
+        self._union_queries: list[Query[T]] = []
+        self._intersect_queries: list[Query[T]] = []
         # Auto-filter soft-deleted rows unless explicitly included
         if model._soft_delete_field and not with_trashed:
             self._wheres.append(f"{model._soft_delete_field} IS NULL")
@@ -698,6 +894,85 @@ class Query(Generic[T]):
         """Eager load relationships to avoid N+1 query problems."""
         self._eager.extend(relation_names)
         return self
+
+    def select(self, *columns: str) -> Query[T]:
+        """Set specific columns to select (useful for aggregates or partial loads)."""
+        valid_cols = []
+        for col in columns:
+            col_strip = col.strip()
+            # Allow *
+            if col_strip == "*":
+                valid_cols.append(col_strip)
+                continue
+
+            # Allow simple column names
+            if self.model._valid_column(col_strip):
+                valid_cols.append(col_strip)
+                continue
+
+            # Allow common aggregates e.g. COUNT(*) or SUM(price) as total
+            # Regex to match FUNC(col) [AS alias]
+            match = re.match(r"^(COUNT|SUM|AVG|MIN|MAX)\((.*?)\)(?:\s+AS\s+(\w+))?$", col_strip, re.I)
+            if match:
+                func, inner, alias = match.groups()
+                inner_strip = inner.strip()
+                if inner_strip == "*" or self.model._valid_column(inner_strip):
+                    valid_cols.append(col_strip)
+                    continue
+
+            raise ValueError(f"Invalid column or expression for selection: {col}")
+
+        self._select = ", ".join(valid_cols)
+        return self
+
+    def group_by(self, *columns: str) -> Query[T]:
+        """Add a GROUP BY clause to the query."""
+        for col in columns:
+            if not self.model._valid_column(col):
+                raise ValueError(f"Invalid column for grouping: {col}")
+        self._groups.extend(columns)
+        return self
+
+    def union(self, other: Query[T]) -> Query[T]:
+        """Combine results with another query using UNION (removes duplicates).
+
+        Example:
+            admins = User.where('role', 'admin')
+            mods = User.where('role', 'moderator')
+            staff = admins.union(mods)
+        """
+        if not isinstance(other, Query):
+            raise ValueError("union() requires another Query object")
+        if other.model != self.model:
+            raise ValueError("Cannot union queries from different models")
+        self._union_queries.append(other)
+        return self
+
+    def intersect(self, other: Query[T]) -> Query[T]:
+        """Get only results that appear in both queries using INTERSECT.
+
+        Example:
+            active = User.where('active', 1)
+            premium = User.where('premium', 1)
+            active_premium = active.intersect(premium)
+        """
+        if not isinstance(other, Query):
+            raise ValueError("intersect() requires another Query object")
+        if other.model != self.model:
+            raise ValueError("Cannot intersect queries from different models")
+        self._intersect_queries.append(other)
+        return self
+
+    def __getattr__(self, name: str):
+        """Allow calling scope methods defined on the model (e.g. scope_active)."""
+        scope_method = f"scope_{name}"
+        if hasattr(self.model, scope_method):
+            method = getattr(self.model, scope_method)
+            # Return a wrapper that passes 'self' (the query) as first argument
+            return lambda *args, **kwargs: method(self, *args, **kwargs)
+        raise AttributeError(
+            f"'{self.__class__.__name__}' object or model '{self.model.__name__}' has no attribute '{name}'"
+        )
 
     def where(self, column: str, op_or_val: Any, val: Any = None) -> Query[T]:
         """Add a where clause. (column, val) or (column, operator, val)."""
@@ -713,10 +988,31 @@ class Query(Generic[T]):
         self._args.append(val)
         return self
 
-    def where_in(self, column: str, values: list[Any]) -> Query[T]:
-        """Filter by a list of values."""
+    def where_in(self, column: str, values) -> Query[T]:
+        """Filter by a list of values or a subquery.
+
+        Args:
+            column: The column name to filter
+            values: Either a list of values OR a Query object (subquery)
+
+        Example with list:
+            User.where_in('id', [1, 2, 3])
+
+        Example with subquery:
+            active_user_ids = User.query().where('active', 1).select('id')
+            Post.where_in('user_id', active_user_ids)
+        """
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
+
+        # Check if values is a Query (subquery)
+        if isinstance(values, Query):
+            subquery_sql = values._build()
+            self._wheres.append(f"{column} IN ({subquery_sql})")
+            self._args.extend(values._args)
+            return self
+
+        # Regular list of values
         if not values:
             self._wheres.append("0")
             return self
@@ -835,10 +1131,50 @@ class Query(Generic[T]):
                 where_sql += " AND " + w
         return " WHERE " + where_sql
 
-    def _build(self, select: str = "*") -> str:
+    def to_sql(self) -> str:
+        """Return the SQL query string with placeholders."""
+        return self._build()
+
+    def raw_sql(self) -> str:
+        """Return the SQL query with parameters interpolated (for debugging only).
+        WARNING: This is naive and NOT SECURE against SQL injection.
+        Use only for inspection in logs/console; never execute this string.
+        """
+        all_args = list(self._args)
+        for u in self._union_queries:
+            all_args.extend(u._args)
+        for i in self._intersect_queries:
+            all_args.extend(i._args)
+        return interpolate_sql(self.to_sql(), all_args)
+
+    def __repr__(self) -> str:
+        return f"<Query: {self.to_sql()}>"
+
+    def _build(self, select: Optional[str] = None) -> str:
         """Internal helper to construct the SQL query string."""
-        sql = f"SELECT {select} FROM {self.model._table}"
+        sel = select or self._select
+        sql = f"SELECT {sel} FROM {self.model._table}"
         sql += self._build_where()
+        if self._groups:
+            sql += f" GROUP BY {', '.join(self._groups)}"
+
+        # Add UNION queries
+        for union_query in self._union_queries:
+            union_sql = f"SELECT {union_query._select} FROM {union_query.model._table}"
+            union_sql += union_query._build_where()
+            if union_query._groups:
+                union_sql += f" GROUP BY {', '.join(union_query._groups)}"
+            sql = f"({sql}) UNION ({union_sql})"
+
+        # Add INTERSECT queries
+        for intersect_query in self._intersect_queries:
+            intersect_sql = f"SELECT {intersect_query._select} FROM {intersect_query.model._table}"
+            intersect_sql += intersect_query._build_where()
+            if intersect_query._groups:
+                intersect_sql += f" GROUP BY {', '.join(intersect_query._groups)}"
+            sql = f"({sql}) INTERSECT ({intersect_sql})"
+
+        # ORDER/LIMIT/OFFSET apply to the final result
         if self._order:
             sql += f" ORDER BY {self._order}"
         if self._limit is not None:
@@ -850,9 +1186,21 @@ class Query(Generic[T]):
     def get(self) -> ModelList[T]:
         """Execute the query and return a ModelList of results."""
         sql = self._build()
+
+        # Collect all args from this query and any union/intersect queries
+        all_args = list(self._args)
+        for union_query in self._union_queries:
+            all_args.extend(union_query._args)
+        for intersect_query in self._intersect_queries:
+            all_args.extend(intersect_query._args)
+
         with self.model._get_conn() as conn:
-            rows = conn.execute(sql, self._args).fetchall()
-        results = ModelList(self.model(_trust=True, **dict(row)) for row in rows)
+            rows = conn.execute(sql, all_args).fetchall()
+        results = ModelList(
+            (self.model(_trust=True, **dict(row)) for row in rows),
+            sql=sql,
+            args=all_args,
+        )
         if self._eager and results:
             self._load_eager(results)
         return results
@@ -1114,7 +1462,11 @@ class ModelMeta(type):
                     )
                     with self._get_conn() as conn:
                         rows = conn.execute(sql, (self.id,)).fetchall()
-                    return ModelList(target_model(**dict(row)) for row in rows)
+                    return ModelList(
+                        (target_model(**dict(row)) for row in rows),
+                        sql=sql,
+                        args=[self.id],
+                    )
 
                 attrs[k] = property(get_many_to_many)
 
@@ -1131,7 +1483,7 @@ class ModelMeta(type):
 class Model(metaclass=ModelMeta):
     """Base class for all ORM models."""
 
-    _db_path: str = "db.sqlite3"
+    _db_path: str = os.getenv("DATABASE_URL", "db.sqlite3")
 
     def __init__(self, _trust: bool = False, **kwargs: Any):
         self.id: Optional[int] = kwargs.get("id")
@@ -1196,6 +1548,12 @@ class Model(metaclass=ModelMeta):
 
             setattr(self, name, val)
 
+        # Handle extra fields (e.g. aggregates from GROUP BY)
+        if _trust:
+            for k, v in kwargs.items():
+                if k not in self._fields and k != "id":
+                    setattr(self, k, v)
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} id={self.id}>"
 
@@ -1218,7 +1576,7 @@ class Model(metaclass=ModelMeta):
 
     def _hash_value(self, password):
         salt = secrets.token_hex(16)
-        iterations = 200000
+        iterations = 600000  # OWASP 2023 recommendation
         hash_bytes = hashlib.pbkdf2_hmac(
             "sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations
         )
@@ -1249,7 +1607,15 @@ class Model(metaclass=ModelMeta):
         conn = getattr(_local, attr, None)
         if conn is not None:
             return conn
-        conn = sqlite3.connect(cls._db_path)
+        try:
+            # Use mode=rw to prevent automatic file creation during runtime.
+            # The file should only be created by 'asok migrate' or 'asok make migration'.
+            conn = sqlite3.connect(f"file:{cls._db_path}?mode=rw", uri=True)
+        except sqlite3.OperationalError:
+            # Database file does not exist yet. Return an in-memory connection
+            # to prevent file creation and allow read operations to fail gracefully (no such table).
+            conn = sqlite3.connect(":memory:")
+
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA journal_mode = WAL;")
@@ -1257,6 +1623,9 @@ class Model(metaclass=ModelMeta):
         # ASOK VECTOR EXTENSION
         conn.create_function("cosine_similarity", 2, _asok_cosine_similarity)
         conn.create_function("euclidean_distance", 2, _asok_euclidean_distance)
+
+        # SQL LOGGING FOR DEVELOPER TOOLBAR
+        conn = ConnectionProxy(conn)
 
         setattr(_local, attr, conn)
         # Track for cleanup
@@ -1280,6 +1649,7 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def create_table(cls):
+        """Create the table if it doesn't exist, or migrate it by adding missing columns."""
         f_defs = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
         for name, f in cls._fields.items():
             def_str = f"{name} {f.sql_type}"
@@ -1300,6 +1670,34 @@ class Model(metaclass=ModelMeta):
         sql = f"CREATE TABLE IF NOT EXISTS {cls._table} ({', '.join(f_defs)})"
         with cls._get_conn() as conn:
             conn.execute(sql)
+
+            # ── AUTO-MIGRATION: Add missing columns ──
+            existing_cols = [
+                row[1]
+                for row in conn.execute(f"PRAGMA table_info({cls._table})").fetchall()
+            ]
+            for name, f in cls._fields.items():
+                if name not in existing_cols:
+                    def_str = f"{name} {f.sql_type}"
+                    if f.unique:
+                        def_str += " UNIQUE"
+                    if not f.nullable:
+                        def_str += " NOT NULL"
+                    if f.default is not None:
+                        if isinstance(f.default, bool):
+                            d = str(f.default).lower()
+                        elif isinstance(f.default, (int, float)):
+                            d = str(f.default)
+                        else:
+                            d = "'" + str(f.default).replace("'", "''") + "'"
+                        def_str += f" DEFAULT {d}"
+
+                    logger.info("Migrating %s: Adding column %s", cls._table, name)
+                    try:
+                        conn.execute(f"ALTER TABLE {cls._table} ADD COLUMN {def_str}")
+                    except Exception as e:
+                        logger.error("Failed to migrate %s (adding %s): %s", cls._table, name, e)
+
             if cls._search_fields:
                 # Create FTS5 virtual table
                 f_names = ", ".join(cls._search_fields)
@@ -1320,6 +1718,15 @@ class Model(metaclass=ModelMeta):
                 conn.execute(ai)
                 conn.execute(ad)
                 conn.execute(au)
+
+                # Auto-rebuild if FTS is empty but source has data
+                try:
+                    source_count = conn.execute(f"SELECT COUNT(*) FROM {cls._table}").fetchone()[0]
+                    fts_count = conn.execute(f"SELECT COUNT(*) FROM {cls._table}_fts").fetchone()[0]
+                    if source_count > 0 and fts_count == 0:
+                        conn.execute(f"INSERT INTO {cls._table}_fts({cls._table}_fts) VALUES('rebuild')")
+                except Exception:
+                    pass
 
             # Create pivot tables for BelongsToMany relationships
             if hasattr(cls, "_relations"):
@@ -1343,6 +1750,20 @@ class Model(metaclass=ModelMeta):
                         )
                         """
                         conn.execute(pivot_sql)
+
+            # Create indexes for fields marked with index=True
+            for field_name, field in cls._fields.items():
+                if getattr(field, 'index', False) and not field.unique:
+                    index_name = f"idx_{cls._table}_{field_name}"
+                    index_sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {cls._table}({field_name})"
+                    try:
+                        conn.execute(index_sql)
+                        logger.info("Created index %s on %s.%s", index_name, cls._table, field_name)
+                    except Exception as e:
+                        logger.error("Failed to create index %s on %s.%s: %s", index_name, cls._table, field_name, e)
+
+            # Commit all schema changes (explicit commit like in save())
+            conn.commit()
 
     @classmethod
     def create(cls: type[T], _trust: bool = False, **kwargs: Any) -> T:
@@ -1545,9 +1966,15 @@ class Model(metaclass=ModelMeta):
 
         if is_new:
             self.after_create()
+            events.emit(f"model:{self.__class__.__name__}:created", self)
+            events.emit("model:created", self)
         else:
             self.after_update()
+            events.emit(f"model:{self.__class__.__name__}:{self.id}:updated", self)
+            events.emit(f"model:{self.__class__.__name__}:updated", self)
+            events.emit("model:updated", self)
         self.after_save()
+        events.emit("model:saved", self)
 
     @classmethod
     def transaction(cls):
@@ -1619,7 +2046,9 @@ class Model(metaclass=ModelMeta):
 
         with cls._get_conn() as conn:
             rows = conn.execute(sql, args).fetchall()
-            return ModelList(cls(**dict(row)) for row in rows)
+            return ModelList(
+                (cls(_trust=True, **dict(row)) for row in rows), sql=sql, args=args
+            )
 
     @classmethod
     def count(cls, **kwargs):
@@ -1664,16 +2093,50 @@ class Model(metaclass=ModelMeta):
         if cls._soft_delete_field:
             sd_where = f"AND t.{cls._soft_delete_field} IS NULL"
 
-        sql = f"""
-            SELECT t.* FROM {cls._table} t
-            JOIN {cls._table}_fts f ON t.id = f.rowid
+        # Preparation du terme pour FTS5 (prefix search par defaut sur chaque mot)
+        if term and "*" not in term:
+            term = " ".join([f"{t}*" for t in term.split() if t])
+
+        # Try FTS5 specific query first
+        sql_fts5 = f"""
+            SELECT t.* FROM "{cls._table}" t
+            JOIN "{cls._table}_fts" f ON t.id = f.rowid
             WHERE f.{cls._table}_fts MATCH ? {sd_where}
             ORDER BY rank
             LIMIT ? OFFSET ?
         """
+
+        # Fallback for FTS4 or other issues
+        sql_fallback = f"""
+            SELECT t.* FROM "{cls._table}" t
+            JOIN "{cls._table}_fts" f ON t.id = f.rowid
+            WHERE f.{cls._table}_fts MATCH ? {sd_where}
+            LIMIT ? OFFSET ?
+        """
+
+        sql_used = sql_fts5
         with cls._get_conn() as conn:
-            rows = conn.execute(sql, (term, limit, offset)).fetchall()
-        return ModelList(cls(**dict(row)) for row in rows)
+            try:
+                # Try FTS5
+                rows = conn.execute(sql_fts5, (term, limit, offset)).fetchall()
+            except sqlite3.OperationalError:
+                # If it's just a syntax error in FTS5 or missing rank, try fallback
+                sql_used = sql_fallback
+                try:
+                    rows = conn.execute(sql_fallback, (term, limit, offset)).fetchall()
+                except sqlite3.OperationalError as e2:
+                    logger.error(
+                        "FTS search failed for %s: fallback also failed: %s",
+                        cls._table,
+                        e2,
+                    )
+                    return ModelList()
+
+        return ModelList(
+            (cls(_trust=True, **dict(row)) for row in rows),
+            sql=sql_used,
+            args=[term, limit, offset],
+        )
 
     @classmethod
     def first_or_create(cls, defaults=None, **kwargs):
@@ -1739,7 +2202,9 @@ class Model(metaclass=ModelMeta):
 
         with cls._get_conn() as conn:
             rows = conn.execute(sql, args or []).fetchall()
-        return ModelList(cls(**dict(row)) for row in rows)
+        return ModelList(
+            (cls(_trust=True, **dict(row)) for row in rows), sql=sql, args=args or []
+        )
 
     @classmethod
     def find(cls: type[T], **kwargs: Any) -> Optional[T]:

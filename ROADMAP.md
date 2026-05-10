@@ -6,13 +6,23 @@ This roadmap outlines the planned features and improvements for upcoming Asok re
 
 ## Current Stable Release
 
+### v0.1.4 (Released: May 2026)
+
+**Status**: ✅ Stable
+
+Latest major enhancement focusing on Developer Experience and UI richness. Includes the **Premium Debug Suite**, Zero-Config **Auto-Migrations**, 16+ new Advanced Form Fields, and major ORM performance improvements.
+
+[View Full Changelog](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md)
+
+---
+
+## Previous Stable Releases
+
 ### v0.1.3 (Released: May 2026)
 
 **Status**: ✅ Stable
 
-Latest release with admin error pages, enhanced template engine, comprehensive security audit, and validation improvements.
-
-[View Full Changelog](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md)
+Release with admin error pages, enhanced template engine, comprehensive security audit, and validation improvements.
 
 ---
 
@@ -20,7 +30,7 @@ Latest release with admin error pages, enhanced template engine, comprehensive s
 
 ### v0.2.0 - Enterprise Features (Q2 2026)
 
-**Status**: 🚧 In Planning
+**Status**: 🚧 In Progress
 
 #### Database & ORM
 
@@ -186,7 +196,7 @@ Check [GitHub Discussions](https://github.com/asok-framework/asok/discussions) f
 
 | Version | Target Date | Status | Focus |
 |---------|-------------|--------|-------|
-| v0.1.3 | May 2026 | ✅ Released | Security & Templates |
+| v0.1.4 | May 9, 2026 | ✅ Released | DX & Advanced UI |
 | v0.2.0 | June 2026 | 🚧 In Progress | Enterprise Features |
 | v0.3.0 | September 2026 | 📋 Planned | Modern Stack |
 | v0.4.0 | Q1 2027 | 💭 Conceptual | Advanced Features |
@@ -217,6 +227,6 @@ We maintain backward compatibility within major versions and provide clear upgra
 
 ---
 
-**Last Updated**: May 3, 2026
+**Last Updated**: May 8, 2026
 
 For the most up-to-date information, check the [GitHub Projects board](https://github.com/asok-framework/asok/projects).

@@ -81,7 +81,7 @@
         {% endfor %}
       {% endif %}
 
-      <div class="nav-group">{{ t('Admin') }}</div>
+      <div class="nav-group">{{ user_role_label }}</div>
       <a href="{{ admin_prefix }}/me"
          class="nav-item {% if active == 'me' %}is-active{% endif %}"
          data-spa>
@@ -89,12 +89,14 @@
         <span>{{ t('My Profile') }}</span>
       </a>
 
+      {% if can_view_media %}
       <a href="{{ admin_prefix }}/media"
          class="nav-item {% if active == 'media' %}is-active{% endif %}"
          data-spa>
         {{ icon('folder', 14) }}
         <span>{{ t('Media Manager') }}</span>
       </a>
+      {% endif %}
 
     </nav>
 

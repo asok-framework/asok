@@ -6,6 +6,7 @@ import html
 import json
 import os
 import secrets
+import time
 from typing import Any, Optional
 
 from .templates import SafeString, render_template_string
@@ -35,7 +36,8 @@ class Component(metaclass=ComponentMeta):
 
     def __init__(self, **kwargs: Any):
         """Initialize a component with optional initial state."""
-        self._cid: str = kwargs.pop("_cid", secrets.token_hex(4))
+        # SECURITY: Use 128-bit CID to prevent brute-force attacks (was 32-bit)
+        self._cid: str = kwargs.pop("_cid", secrets.token_hex(16))
         self._session: dict[str, Any] = kwargs.pop("_session", {})
         self._slot: Optional[str] = None
         # Initial state
@@ -104,6 +106,9 @@ class Component(metaclass=ComponentMeta):
     def _sign_state(self, secret_key: str) -> str:
         """Sign the current component state with a secret key for secure transmission."""
         state = self._get_state()
+        # SECURITY: Add timestamp and nonce to prevent replay attacks
+        state["_ts"] = int(time.time())
+        state["_nonce"] = secrets.token_hex(8)
         dump = json.dumps(state, sort_keys=True)
         sig = hmac.new(secret_key.encode(), dump.encode(), hashlib.sha256).hexdigest()
         return f"{dump}.{sig}"
@@ -123,6 +128,19 @@ class Component(metaclass=ComponentMeta):
             if not hmac.compare_digest(sig, expected):
                 return None
             state = json.loads(data_str)
+
+            # SECURITY: Validate timestamp to prevent replay attacks (1 hour max age)
+            ts = state.pop("_ts", 0)
+            if time.time() - ts > 3600:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Expired state signature (age: %d seconds)", time.time() - ts
+                )
+                return None
+
+            # Remove nonce (already validated via signature)
+            state.pop("_nonce", None)
+
             if cid:
                 state["_cid"] = cid
             return cls(**state)

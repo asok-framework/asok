@@ -61,6 +61,7 @@ from typing import Any, Optional, Union
 
 from .component import COMPONENTS_REGISTRY
 from .core import Asok
+from .events import events
 from .orm import MODELS_REGISTRY, Model
 from .session import Session
 
@@ -382,6 +383,28 @@ class WebSocketServer:
         if self.app:
             self.on("/asok/live")(self.on_live_message)
 
+        # Real-time Model Bridge
+        def _relay_model_event(event_name, model_obj):
+            # Broadcast to rooms: model:Name, model:Name:id
+            model_name = model_obj.__class__.__name__
+            msg = json.dumps({
+                "op": "model_event",
+                "event": event_name,
+                "model": model_name,
+                "id": getattr(model_obj, "id", None)
+            })
+            self.broadcast_to(f"model:{model_name}", msg)
+            if hasattr(model_obj, "id") and model_obj.id:
+                self.broadcast_to(f"model:{model_name}:{model_obj.id}", msg)
+
+        events.on("model:created", lambda obj: _relay_model_event("created", obj))
+        events.on("model:updated", lambda obj: _relay_model_event("updated", obj))
+        events.on("model:deleted", lambda obj: _relay_model_event("deleted", obj))
+
+        # Listen for specific instance updates too
+        # Since EventEmitter.emit calls with *args, we can't easily catch all pattern-matched events.
+        # But we can emit a generic "model:change" from ORM too.
+
     # --- handler registration ---
     def _route(self, pattern):
         r = self._routes.get(pattern)
@@ -468,6 +491,8 @@ class WebSocketServer:
 
     # --- lifecycle ---
     def start(self):
+        if os.environ.get("ASOK_CLI") == "true":
+            return self
         if self._running:
             return self
         if self.secret_key is None:
@@ -509,6 +534,15 @@ class WebSocketServer:
     def _is_origin_allowed(self, origin):
         """Check if the given Origin header is allowed to connect."""
         if not self.allowed_origins or self.allowed_origins == "*":
+            # SECURITY: allowed_origins="*" is forbidden in production as it disables CSRF protection.
+            is_prod = os.environ.get("ASOK_ENV") == "production" or os.environ.get("DEBUG") == "false"
+            if is_prod:
+                raise RuntimeError(
+                    "SECURITY ERROR: allowed_origins='*' is forbidden in production for WebSockets. "
+                    "This disables CSRF protection. Please specify your domain (e.g., https://yourdomain.com)."
+                )
+
+            logger.warning("⚠️  DEBUG MODE: WebSocket allowed_origins='*' detected. CSRF protection is DISABLED.")
             return True
         if not origin:
             # Allow non-browser clients (standard behavior)
@@ -594,6 +628,21 @@ class WebSocketServer:
             op = data.get("op")
             cid = data.get("cid")
 
+            # ── JOIN_ROOM: subscribe to a specific broadcast room ──
+            if op == "join_room":
+                room = data.get("room")
+                if room:
+                    conn.join(room)
+                return
+
+            # ── LEAVE: browser tells server a component was removed from DOM ──
+            if op == "leave":
+                if hasattr(conn, "_live_comps") and cid in conn._live_comps:
+                    # Remove component state from connection memory only
+                    # KEEP session state for persistence across SPA navigation
+                    del conn._live_comps[cid]
+                return
+
             # ── JOIN: browser tells server which component instance just connected ──
             if op == "join":
                 comp_name = data.get("name")
@@ -645,12 +694,12 @@ class WebSocketServer:
                     prop = data.get("prop")
                     val = data.get("val")
                     if prop and not prop.startswith("_") and hasattr(comp, prop):
-                        # Security: if the component declares a _bindable whitelist,
-                        # only those properties may be modified via WebSocket sync.
-                        bindable = getattr(comp.__class__, "_bindable", None)
-                        if bindable is not None and prop not in bindable:
+                        # SECURITY: Require explicit _bindable whitelist (opt-in, not opt-out)
+                        # Components must declare _bindable = ["prop1", "prop2"] to allow sync
+                        bindable = getattr(comp.__class__, "_bindable", [])
+                        if prop not in bindable:
                             logger.warning(
-                                "Blocked sync of non-bindable prop '%s' on '%s'",
+                                "Blocked sync of non-bindable prop '%s' on '%s' (not in whitelist)",
                                 prop,
                                 comp.__class__.__name__,
                             )
@@ -677,7 +726,9 @@ class WebSocketServer:
                     {
                         "op": "render",
                         "cid": cid,
+                        "name": comp.__class__.__name__,
                         "html": new_html,
+                        "state": comp._get_state(),
                         "invalidate_cache": True,
                     }
                 )

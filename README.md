@@ -14,7 +14,7 @@
 
 ---
 
-**Asok** is a powerful and elegant "zero-dependency" Python web framework that brings modern development patterns to Python. Built with security-first principles, it combines the simplicity of Flask with the batteries-included approach of Django, while introducing Next.js-style file-based routing.
+**Asok** is a cohesive, full-stack Python web framework designed for developer speed, elegant architecture, and production-grade security. Built with a "zero-dependency" philosophy, it unifies server-side logic and client-side reactivity into a single, high-performance package, offering a streamlined and secure development experience from the first line of code.
 
 🌐 **[Official Website & Documentation](https://asok-framework.com)** | 📖 **[Quick Start Guide](https://asok-framework.com/docs/01-getting-started)** | 💬 **[Join Discord](https://discord.com/invite/aYYkuPT3qR)** | 🎥 **[YouTube Tutorials](https://www.youtube.com/@asok-framework)**
 
@@ -24,7 +24,7 @@
 
 ### Zero Dependencies, Maximum Power
 Unlike other Python frameworks, Asok requires **zero external dependencies** - just Python 3.10+. No Werkzeug, no Jinja2, no SQLAlchemy. Everything is built from the Python standard library, making it:
-- ✅ **Extremely lightweight** (~200KB)
+- ✅ **Extremely lightweight** (~360KB, ~20K lines of code)
 - ✅ **Dead simple to audit** (security teams love it)
 - ✅ **Forever stable** (no dependency hell)
 - ✅ **Fast to install** (< 1 second)
@@ -58,7 +58,7 @@ admin = Admin(app)
 ### Core Framework
 - 🚀 **Zero Dependencies** - Pure Python stdlib, no external packages
 - 💎 **Full Type Hints** - Complete PEP 484 support for IDE autocomplete
-- 📦 **Tiny Footprint** - ~200KB, installs in < 1 second
+- 📦 **Tiny Footprint** - ~360KB, ~20K lines of code
 - ⌨️ **Powerful CLI** - Scaffolding, migrations, dev server, production builds
 - 🛣️ **File-based Routing** - Next.js-style routing (`src/pages/` → URLs)
 - ⛓️ **Dynamic Routes** - Parameters via `[id]`, `[slug:slug]` patterns
@@ -66,7 +66,7 @@ admin = Admin(app)
 ### Database & ORM
 - 🗄️ **Built-in ORM** - SQLite with relations, migrations, soft deletes
 - 🔍 **Full-Text Search** - FTS5 integration for lightning-fast search
-- 🔐 **Auto Password Hashing** - PBKDF2-SHA256 with 100k iterations
+- 🔐 **Auto Password Hashing** - PBKDF2-SHA256 with **600,000 iterations** (OWASP 2023 compliant)
 - 📊 **Query Builder** - Fluent API with eager loading
 
 ### Templates & Frontend
@@ -75,6 +75,13 @@ admin = Admin(app)
 - 🔄 **Live Components** - Server-driven real-time updates via WebSockets
 - 💨 **HTML Streaming** - Chunked responses for instant TTFB
 - 🎭 **Transitions** - Built-in fade/slide/scale animations
+
+### High-Performance APIs
+- 🔌 **Native API Engine** - Build robust REST APIs with minimal code
+- 📑 **Auto-OpenAPI** - Automatic OpenAPI 3.0 (Swagger) generation for every route
+- 🛡️ **Bearer Token Auth** - Built-in secure authentication for stateless clients
+- ⚡ **Optimized JSON** - High-speed serialization for high-throughput services
+- 📑 **Live Documentation** - Interactive API explorer (Swagger UI) included
 
 ### Security (10/10 Score)
 - 🔒 **CSRF Protection** - Auto-rotation, HMAC validation, SameSite=Strict
@@ -92,9 +99,9 @@ admin = Admin(app)
 
 ---
 
-## ⚖️ Asok vs Django vs Flask
+## ⚖️ Philosophy & Positioning
 
-Asok was designed to bring the best of both worlds (the lightweight nature of Flask and the batteries-included approach of Django), while adding modern file-based routing (inspired by Next.js/SvelteKit).
+Asok is built for the modern era of web development, where the boundary between frontend and backend is fluid. While it shares some values with other frameworks, it carves out its own path by providing a unified environment that eliminates the need for a complex "Franken-stack" of multiple tools and dependencies.
 
 | Feature | Asok | Flask | Django |
 |---|---|---|---|
@@ -262,6 +269,31 @@ The admin automatically detects the source of resources:
 Asok is WSGI compatible. You can use Gunicorn or any other WSGI server:
 ```bash
 gunicorn wsgi:app
+```
+
+---
+
+## 🔒 Production Security Checklist
+
+Asok is built to be secure by default, but production environments require specific configurations to enable all protections.
+
+### 1. Mandatory Environment Variables
+In production (`DEBUG=False`), Asok enforces strict security checks:
+- **`SECRET_KEY`**: Must be at least **32 characters** long. Use `secrets.token_hex(32)` to generate one.
+- **`APP_URL`**: Required for Magic Links to prevent Host Header Injection. Example: `https://myapp.com`.
+
+### 2. Secure Defaults
+- **DEBUG**: Default is `False`. You must explicitly set `DEBUG=True` in your `.env` for development.
+- **Password Hashing**: PBKDF2-SHA256 with **600,000 iterations** (OWASP 2023 compliant).
+- **Security Headers**: HSTS (1 year), CSP (with nonces), X-Frame-Options (DENY), and X-Content-Type-Options (nosniff) are enabled by default.
+
+### 3. Recommended .env for Production
+```env
+ASOK_ENV=production
+DEBUG=false
+SECRET_KEY=your-64-character-ultra-secure-key-here
+APP_URL=https://yourdomain.com
+DATABASE_URL=sqlite:///data/prod.db
 ```
 
 ---

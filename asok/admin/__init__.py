@@ -100,6 +100,8 @@ class User(Model):
     password = Field.Password()
     name = Field.String()
     is_admin = Field.Boolean(default=False)
+    totp_secret = Field.String(nullable=True, hidden=True)
+    totp_enabled = Field.Boolean(default=False)
     created_at = Field.CreatedAt()
 """
 
@@ -278,6 +280,39 @@ def _display(obj):
 
 
 class Admin:
+    """A self-contained, Django-style administrative interface for Asok.
+
+    The Admin class provides a ready-to-use dashboard for managing your
+    database models, users, roles, and media assets.
+
+    Basic Usage:
+        from asok import Asok
+        from asok.admin import Admin
+
+        app = Asok()
+        Admin(app, site_name="My Dashboard", url_prefix="/admin")
+
+    Key Features:
+        - RBAC (Role-Based Access Control): Granular permissions (view, add, edit, delete).
+        - Two-Factor Authentication (2FA): TOTP support via Google Authenticator/Authy.
+        - User Impersonation: "Act as" functionality for super-admins with audit logs.
+        - Media Manager: Centralized file management (images, PDFs, uploads).
+        - Audit Logs: Automatic tracking of all admin actions.
+        - Dashboard Widgets: Customizable stat cards and widgets.
+
+    Model Customization:
+        Define an inner `Admin` class in your `Model` to control the dashboard:
+        class Post(Model):
+            class Admin:
+                list_display = ["title", "author", "created_at"]
+                search_fields = ["title", "body"]
+                list_filter = ["is_published"]
+
+    Widgets:
+        @admin.widget("Recent Users", size="medium")
+        def recent_users(request):
+            return "<ul>...</ul>"
+    """
     def __init__(
         self,
         app,
@@ -330,7 +365,7 @@ class Admin:
                 f.write(source)
             print(
                 f"  [admin] Created src/models/{filename} — run "
-                f"`asok migrate` then `asok createsuperuser`."
+                f"`asok make migration add_{class_name.lower()}` then `asok migrate`."
             )
 
         try:
@@ -354,10 +389,8 @@ class Admin:
                 and attr not in self.app.models
             ):
                 self.app.models.append(attr)
-                try:
-                    attr.create_table()
-                except Exception:
-                    pass
+                # Automatic table creation removed in favor of migrations
+                pass
         return MODELS_REGISTRY.get(class_name)
 
     def _ensure_auth_models(self):
@@ -370,45 +403,12 @@ class Admin:
         self._ensure_model_file("admin_log.py", "AdminLog", _DEFAULT_LOG_MODEL_SRC)
 
     def _ensure_role_pivot(self):
-        """Create the role_user pivot table if missing."""
-        User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
-        if not User or "Role" not in MODELS_REGISTRY:
-            return
-        try:
-            with User._get_conn() as conn:
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS role_user ("
-                    "role_id INTEGER NOT NULL, "
-                    "user_id INTEGER NOT NULL, "
-                    "PRIMARY KEY (role_id, user_id))"
-                )
-        except Exception as e:
-            print(f"  [admin] Warning: could not create role_user pivot: {e}")
+        """No longer auto-creates the pivot table. Relies on migrations."""
+        pass
 
     def _ensure_2fa_columns(self):
-        """Add totp_secret + totp_enabled columns to the User table if missing."""
-        User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
-        if not User:
-            return
-        try:
-            with User._get_conn() as conn:
-                cols = {
-                    r[1]
-                    for r in conn.execute(
-                        f"PRAGMA table_info({User._table})"
-                    ).fetchall()
-                }
-                if "totp_secret" not in cols:
-                    conn.execute(
-                        f"ALTER TABLE {User._table} ADD COLUMN totp_secret TEXT"
-                    )
-                if "totp_enabled" not in cols:
-                    conn.execute(
-                        f"ALTER TABLE {User._table} "
-                        f"ADD COLUMN totp_enabled INTEGER DEFAULT 0"
-                    )
-        except Exception as e:
-            print(f"  [admin] Warning: could not add 2FA columns: {e}")
+        """No longer auto-alters the user table. Relies on migrations."""
+        pass
 
     def _get_user_2fa(self, user_id):
         """Return (secret, enabled) for a user via raw SQL."""
@@ -453,8 +453,8 @@ class Admin:
                 "Role", pivot_table="role_user"
             )
         # Idempotent: re-assigning the same functions is harmless
-        User.roles = _user_roles_accessor
-        User.role_ids = _user_role_ids
+        User.roles = property(_user_roles_accessor)
+        User.role_ids = property(_user_role_ids)
         User.can = _user_can
 
     # ── Discovery ────────────────────────────────────────────
@@ -582,6 +582,20 @@ class Admin:
         ]
         ctx["admin_prefix"] = self.prefix
         ctx["admin_site_name"] = self.site_name
+        ctx["can_view_media"] = self._can(request, "assets", "view")
+
+        # Dynamic role label for sidebar
+        role_label = translate(locale, "Admin")
+        if request.user:
+            if getattr(request.user, "is_admin", False):
+                role_label = translate(locale, "Admin")
+            elif hasattr(request.user, "roles") and request.user.roles:
+                role = request.user.roles[0]
+                role_label = (getattr(role, "label", None) or role.name).upper()
+            else:
+                role_label = translate(locale, "User")
+        ctx["user_role_label"] = role_label
+
         ctx["admin_favicon"] = self.favicon
         ctx["is_impersonating"] = request.session.get("impersonator_id") is not None
         ctx.setdefault("active", None)
@@ -808,18 +822,27 @@ class Admin:
             return self._search(request)
 
         if path.startswith("/impersonate/") and method == "POST":
+            # Impersonation is strictly for superusers
+            if not getattr(request.user, "is_admin", False):
+                return self._forbid(request)
             return self._impersonate(request, path[len("/impersonate/") :])
 
         if path == "/stop-impersonate" and method == "POST":
             return self._stop_impersonate(request)
 
         if path == "/media":
+            if not self._can(request, "assets", "view"):
+                return self._forbid(request)
             return self._media_manager(request)
 
         if path == "/media/upload" and method == "POST":
+            if not self._can(request, "assets", "add"):
+                return self._forbid(request)
             return self._media_upload(request)
 
         if path.startswith("/media/delete/") and method == "POST":
+            if not self._can(request, "assets", "delete"):
+                return self._forbid(request)
             return self._delete_media(request, path[len("/media/delete/") :])
 
         parts = [p for p in path.split("/") if p]
