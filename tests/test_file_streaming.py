@@ -5,7 +5,7 @@ from asok.testing import TestClient
 def test_file_streaming(tmp_path):
     # Create a "large" file (> 5 MB)
     file_path = tmp_path / "large_file.txt"
-    content = b"0" * (6 * 1024 * 1024) # 6 MB
+    content = b"0" * (6 * 1024 * 1024)  # 6 MB
     file_path.write_bytes(content)
 
     app = Asok()

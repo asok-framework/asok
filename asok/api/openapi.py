@@ -5,6 +5,8 @@ import re
 
 
 class OpenAPIGenerator:
+    """Engine for automatically generating OpenAPI 3.0 specifications from Asok API routes."""
+
     def __init__(self, app):
         self.app = app
         self.spec = {
@@ -13,7 +15,7 @@ class OpenAPIGenerator:
                 "title": app.config.get(
                     "API_TITLE", app.config.get("PROJECT_NAME", "Asok API")
                 ),
-                "version": app.config.get("VERSION", "0.1.5"),
+                "version": app.config.get("VERSION", "0.1.6"),
                 "description": app.config.get(
                     "API_DESCRIPTION",
                     "A sleek, automatically generated reference for your Asok API endpoints.",
@@ -25,6 +27,7 @@ class OpenAPIGenerator:
         self.rendered_schemas = {}
 
     def generate(self):
+        """Scan the project's pages directory and build the complete OpenAPI specification."""
         pages_dir = os.path.join(self.app.root_dir, self.app.dirs["PAGES"])
         if not os.path.exists(pages_dir):
             return self.spec
@@ -105,6 +108,7 @@ class OpenAPIGenerator:
             self.spec["paths"][clean_path] = path_item
 
     def _register_schema(self, schema_cls):
+        """Translate an Asok Schema class into an OpenAPI component schema."""
         if not inspect.isclass(schema_cls):
             # Might be an instance or a list
             if isinstance(schema_cls, list) and schema_cls:

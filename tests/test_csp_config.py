@@ -26,9 +26,7 @@ def test_default_csp():
 def test_csp_extend_style_src():
     """Test extending style-src to allow Google Fonts."""
     app = Asok()
-    app.config["CSP"] = {
-        "style-src": ["https://fonts.googleapis.com"]
-    }
+    app.config["CSP"] = {"style-src": ["https://fonts.googleapis.com"]}
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
 
@@ -39,9 +37,7 @@ def test_csp_extend_style_src():
 def test_csp_add_font_src():
     """Test adding a new font-src directive."""
     app = Asok()
-    app.config["CSP"] = {
-        "font-src": ["'self'", "https://fonts.gstatic.com"]
-    }
+    app.config["CSP"] = {"font-src": ["'self'", "https://fonts.gstatic.com"]}
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
 
@@ -54,7 +50,7 @@ def test_csp_google_fonts_full():
     app = Asok()
     app.config["CSP"] = {
         "style-src": ["https://fonts.googleapis.com"],
-        "font-src": ["'self'", "https://fonts.gstatic.com"]
+        "font-src": ["'self'", "https://fonts.gstatic.com"],
     }
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
@@ -67,9 +63,7 @@ def test_csp_google_fonts_full():
 def test_csp_single_string_value():
     """Test that single string values work (not just lists)."""
     app = Asok()
-    app.config["CSP"] = {
-        "img-src": "https://example.com"
-    }
+    app.config["CSP"] = {"img-src": "https://example.com"}
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
 
@@ -83,7 +77,7 @@ def test_csp_multiple_custom_directives():
     app.config["CSP"] = {
         "style-src": ["https://fonts.googleapis.com"],
         "font-src": ["'self'", "https://fonts.gstatic.com"],
-        "img-src": ["'self'", "data:", "blob:", "https://example.com"]
+        "img-src": ["'self'", "data:", "blob:", "https://example.com"],
     }
     headers = dict(app._security_headers())
     csp = headers["Content-Security-Policy"]
@@ -96,9 +90,7 @@ def test_csp_multiple_custom_directives():
 def test_csp_with_nonce():
     """Test that nonce-based script-src works with custom CSP."""
     app = Asok()
-    app.config["CSP"] = {
-        "style-src": ["https://fonts.googleapis.com"]
-    }
+    app.config["CSP"] = {"style-src": ["https://fonts.googleapis.com"]}
     headers = dict(app._security_headers(nonce="abc123"))
     csp = headers["Content-Security-Policy"]
 

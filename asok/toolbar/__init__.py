@@ -57,11 +57,11 @@ class DeveloperToolbar:
             sql_rows += (
                 f'<tr class="asok-redir-banner">'
                 f'<td colspan="3">'
-                f'&#8593; REDIRECT FROM&nbsp;'
+                f"&#8593; REDIRECT FROM&nbsp;"
                 f'<span class="asok-method-badge">{redir_method}</span>'
-                f'&nbsp;{_html.escape(redir_path)}'
-                f'&nbsp;&#x2014;&nbsp;{len(redir_sql)} quer{"y" if len(redir_sql)==1 else "ies"}'
-                f'</td></tr>'
+                f"&nbsp;{_html.escape(redir_path)}"
+                f"&nbsp;&#x2014;&nbsp;{len(redir_sql)} quer{'y' if len(redir_sql) == 1 else 'ies'}"
+                f"</td></tr>"
             )
             for i, entry in enumerate(redir_sql):
                 query = entry.get("sql", "")
@@ -70,13 +70,13 @@ class DeveloperToolbar:
                 tc = "asok-time-slow" if duration > 50 else "asok-time-warn"
                 sql_rows += (
                     f'<tr class="asok-redir-row">'
-                    f'<td style="color:var(--fg-3)">{i+1}</td>'
-                    f'<td>'
+                    f'<td style="color:var(--fg-3)">{i + 1}</td>'
+                    f"<td>"
                     f'<div class="asok-query-sql">{_html.escape(query)}</div>'
                     f'<div class="asok-query-params">Params: {_html.escape(str(params))}</div>'
-                    f'</td>'
+                    f"</td>"
                     f'<td style="text-align:right; padding-right:24px"><span class="{tc}">{duration:.2f}ms</span></td>'
-                    f'</tr>'
+                    f"</tr>"
                 )
 
         # Current request rows
@@ -87,14 +87,14 @@ class DeveloperToolbar:
             duration = entry.get("duration", 0)
             tc = "asok-time-slow" if duration > 50 else "asok-time-fast"
             sql_rows += (
-                f'<tr>'
-                f'<td style="color:var(--fg-3)">{i+1}</td>'
-                f'<td>'
+                f"<tr>"
+                f'<td style="color:var(--fg-3)">{i + 1}</td>'
+                f"<td>"
                 f'<div class="asok-query-sql">{_html.escape(query)}</div>'
                 f'<div class="asok-query-params">Params: {_html.escape(str(params))}</div>'
-                f'</td>'
+                f"</td>"
                 f'<td style="text-align:right; padding-right:24px"><span class="{tc}">{duration:.2f}ms</span></td>'
-                f'</tr>'
+                f"</tr>"
             )
 
         if not sql_rows:
@@ -103,8 +103,8 @@ class DeveloperToolbar:
                 '<div class="asok-empty" style="padding:40px 0;">'
                 '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>'
                 '<span class="asok-empty-text">No SQL queries recorded.</span>'
-                '</div>'
-                '</td></tr>'
+                "</div>"
+                "</td></tr>"
             )
 
         # 3. Session data
@@ -122,10 +122,12 @@ class DeveloperToolbar:
                 req_info["JSON Payload"] = self.request.json
         except Exception:
             pass
-        req_info.update({
-            "Cookies": dict(self.request.cookies_dict),
-            "IP": self.request.ip,
-        })
+        req_info.update(
+            {
+                "Cookies": dict(self.request.cookies_dict),
+                "IP": self.request.ip,
+            }
+        )
         request_data = _html.escape(json.dumps(req_info, indent=2))
 
         # 5. Redirect info block for Request tab
@@ -143,12 +145,12 @@ class DeveloperToolbar:
             redir_info_html = (
                 f'<div class="asok-redir-block">'
                 f'<div class="asok-redir-block-header">'
-                f'&#8593; Previous Request &mdash; '
+                f"&#8593; Previous Request &mdash; "
                 f'<span class="asok-method-badge" style="background:rgba(217,119,6,0.3);color:var(--warn-fg);">{rm}</span>'
-                f'&nbsp;{_html.escape(rp)}'
-                f'</div>'
-                f'<pre>{_html.escape(json.dumps(prev, indent=2))}</pre>'
-                f'</div>'
+                f"&nbsp;{_html.escape(rp)}"
+                f"</div>"
+                f"<pre>{_html.escape(json.dumps(prev, indent=2))}</pre>"
+                f"</div>"
             )
 
         # 6. Templates info

@@ -22,16 +22,22 @@ def _get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def background(fn: Callable, *args: Any, **kwargs: Any) -> Future:
+def background(
+    fn: Callable,
+    *args: Any,
+    executor: Optional[ThreadPoolExecutor] = None,
+    **kwargs: Any,
+) -> Future:
     """Run a function in a background thread pool (fire-and-forget).
 
-    Tasks are queued and executed by a bounded pool of workers to prevent
-    resource exhaustion (DoS protection).
-
-    The request responds immediately. Errors are caught and logged, not raised.
+    Args:
+        fn: The function to execute.
+        *args: Positional arguments for the function.
+        executor: Optional executor to use (defaults to shared pool).
+        **kwargs: Keyword arguments for the function.
 
     Returns:
-        A concurrent.futures.Future object representing the execution.
+        A concurrent.futures.Future object.
     """
 
     def wrapper() -> None:
@@ -40,4 +46,5 @@ def background(fn: Callable, *args: Any, **kwargs: Any) -> Future:
         except Exception as e:
             logger.error("Background task %s failed: %s", fn.__name__, e)
 
-    return _get_executor().submit(wrapper)
+    exec_to_use = executor or _get_executor()
+    return exec_to_use.submit(wrapper)

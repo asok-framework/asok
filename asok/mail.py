@@ -31,6 +31,7 @@ class Mail:
         username: Optional[str],
         password: Optional[str],
         use_tls: bool,
+        raise_on_error: bool = False,
     ) -> None:
         try:
             with smtplib.SMTP(host, port) as server:
@@ -41,6 +42,10 @@ class Mail:
                 server.sendmail(sender, all_recipients, msg_string)
         except Exception as e:
             logger.error("Failed to send email: %s", e)
+            if raise_on_error:
+                from .exceptions import MailError
+
+                raise MailError(f"Failed to send email: {e}") from e
 
     @staticmethod
     def _sanitize(val: Union[str, list[str]]) -> Any:
@@ -107,6 +112,7 @@ class Mail:
                 username,
                 password,
                 use_tls,
+                raise_on_error=True,
             )
         else:
             t = threading.Thread(

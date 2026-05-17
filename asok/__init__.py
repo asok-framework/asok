@@ -1,7 +1,7 @@
 import os
 import sys
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 # Disable bytecode generation (__pycache__) by default to keep the file-system based routing clean.
 # Can be overridden by setting ASOK_WRITE_BYTECODE=true in the environment.
@@ -13,9 +13,33 @@ from .admin import ModelAdmin as ModelAdmin
 from .api import api as api
 from .background import background as background
 from .cache import Cache as Cache
+from .cache import cache_page as cache_page
 from .component import Component as Component
 from .core import Asok as Asok
-from .exceptions import RedirectException as RedirectException
+from .exceptions import (
+    AbortException as AbortException,
+)
+from .exceptions import (
+    AsokException as AsokException,
+)
+from .exceptions import (
+    ForbiddenError as ForbiddenError,
+)
+from .exceptions import (
+    NotFoundError as NotFoundError,
+)
+from .exceptions import (
+    RedirectException as RedirectException,
+)
+from .exceptions import (
+    SecurityError as SecurityError,
+)
+from .exceptions import (
+    UnauthorizedError as UnauthorizedError,
+)
+from .exceptions import (
+    ValidationError as ValidationError,
+)
 from .forms import Form as Form
 from .logger import RequestLogger as RequestLogger
 from .logger import get_logger as get_logger
@@ -26,6 +50,7 @@ from .orm import ModelError as ModelError
 from .orm import Relation as Relation
 from .orm import slugify as slugify
 from .ratelimit import RateLimit as RateLimit
+from .ratelimit import rate_limit as rate_limit
 from .request import Request as Request
 from .request import UploadedFile as UploadedFile
 from .scheduler import schedule as schedule

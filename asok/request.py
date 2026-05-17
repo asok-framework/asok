@@ -15,7 +15,10 @@ from urllib.parse import parse_qsl, unquote
 from .auth import BearerToken, MagicLink, OAuth
 from .exceptions import (
     AbortException,  # noqa: F401 — re-export for compat
+    ForbiddenError,
+    NotFoundError,
     RedirectException,
+    UnauthorizedError,
 )
 from .orm import MODELS_REGISTRY
 from .session import Session
@@ -102,13 +105,55 @@ class UploadedFile:
     """Wrapper for a file uploaded via multipart/form-data."""
 
     # Magic bytes pour validation MIME
+    # Support des formats les plus courants : images, audio, vidéo, documents
+    # Note: RIFF et ftyp sont gérés spécialement dans validate_mime_type() car ambigus
     _MAGIC_BYTES = {
-        b'\xFF\xD8\xFF': ('image/jpeg', ['.jpg', '.jpeg']),
-        b'\x89PNG\r\n\x1a\n': ('image/png', ['.png']),
-        b'GIF87a': ('image/gif', ['.gif']),
-        b'GIF89a': ('image/gif', ['.gif']),
-        b'%PDF': ('application/pdf', ['.pdf']),
-        b'PK\x03\x04': ('application/zip', ['.zip', '.docx', '.xlsx']),
+        # ── Images ──────────────────────────────────────
+        b"\xff\xd8\xff": ("image/jpeg", [".jpg", ".jpeg"]),
+        b"\x89PNG\r\n\x1a\n": ("image/png", [".png"]),
+        b"GIF87a": ("image/gif", [".gif"]),
+        b"GIF89a": ("image/gif", [".gif"]),
+        b"RIFF": ("image/webp", [".webp", ".wav", ".avi"]),
+        b"BM": ("image/bmp", [".bmp"]),
+        b"II*\x00": ("image/tiff", [".tif", ".tiff"]),  # TIFF (little-endian)
+        b"MM\x00*": ("image/tiff", [".tif", ".tiff"]),  # TIFF (big-endian)
+        b"\x00\x00\x01\x00": ("image/x-icon", [".ico"]),
+        b"<?xml": ("image/svg+xml", [".svg"]),  # SVG (XML)
+        b"<svg": ("image/svg+xml", [".svg"]),  # SVG direct
+        # ── Audio ───────────────────────────────────────
+        b"ID3": ("audio/mpeg", [".mp3"]),  # MP3 avec ID3v2
+        b"\xff\xfb": ("audio/mpeg", [".mp3"]),  # MP3 sans tag
+        b"\xff\xf3": ("audio/mpeg", [".mp3"]),  # MP3 MPEG-2.5
+        b"\xff\xf2": ("audio/mpeg", [".mp3"]),  # MP3 MPEG-2
+        b"fLaC": ("audio/flac", [".flac"]),  # FLAC
+        b"OggS": ("audio/ogg", [".ogg", ".oga"]),  # OGG Vorbis/Opus
+        b"\xff\xf1": ("audio/aac", [".aac"]),  # AAC (ADTS)
+        b"\xff\xf9": ("audio/aac", [".aac"]),  # AAC
+        # ── Vidéo ───────────────────────────────────────
+        b"ftyp": (
+            "video/mp4",
+            [".mp4", ".m4a", ".mov", ".3gp"],
+        ),  # Ambigu - traité spécialement
+        b"\x1aE\xdf\xa3": (
+            "video/webm",
+            [".webm", ".mkv"],
+        ),  # WebM/Matroska (Matroska header)
+        # ── Documents ───────────────────────────────────
+        b"%PDF": ("application/pdf", [".pdf"]),
+        b"PK\x03\x04": (
+            "application/zip",
+            [".zip", ".docx", ".xlsx", ".pptx", ".jar", ".apk", ".odt", ".ods"],
+        ),
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1": (
+            "application/msword",
+            [".doc", ".xls", ".ppt"],
+        ),  # MS Office legacy
+        b"{\\rtf": ("text/rtf", [".rtf"]),  # Rich Text Format
+        # ── Archives ────────────────────────────────────
+        b"\x1f\x8b": ("application/gzip", [".gz", ".gzip"]),
+        b"BZh": ("application/x-bzip2", [".bz2"]),
+        b"Rar!\x1a\x07": ("application/x-rar-compressed", [".rar"]),
+        b"7z\xbc\xaf\x27\x1c": ("application/x-7z-compressed", [".7z"]),
     }
 
     def __init__(self, filename: str, content: bytes):
@@ -149,15 +194,54 @@ class UploadedFile:
         if not self.content:
             raise ValueError("Cannot validate empty file")
 
-        # Vérifier les magic bytes
+        # Vérifier les magic bytes avec gestion des formats ambigus
         detected_mime = None
         detected_exts = []
 
-        for magic, (mime, exts) in self._MAGIC_BYTES.items():
-            if self.content.startswith(magic):
-                detected_mime = mime
-                detected_exts = exts
-                break
+        # RIFF est ambigu (WebP, WAV, AVI) - vérifier la sous-signature
+        if self.content.startswith(b"RIFF") and len(self.content) >= 12:
+            riff_type = self.content[8:12]
+            if riff_type == b"WEBP":
+                detected_mime = "image/webp"
+                detected_exts = [".webp"]
+            elif riff_type == b"WAVE":
+                detected_mime = "audio/wav"
+                detected_exts = [".wav"]
+            elif riff_type == b"AVI ":
+                detected_mime = "video/avi"
+                detected_exts = [".avi"]
+
+        # ftyp est ambigu (MP4, MOV, M4A, 3GP) - vérifier le type
+        elif self.content.startswith(b"ftyp") or (
+            len(self.content) >= 8 and self.content[4:8] == b"ftyp"
+        ):
+            # Extraire le type ftyp (4 octets après "ftyp")
+            ftyp_start = self.content.find(b"ftyp")
+            if ftyp_start != -1 and len(self.content) >= ftyp_start + 8:
+                ftyp_brand = self.content[ftyp_start + 4 : ftyp_start + 8]
+                if ftyp_brand.startswith(b"M4A"):
+                    detected_mime = "audio/mp4"
+                    detected_exts = [".m4a"]
+                elif ftyp_brand.startswith(b"3gp"):
+                    detected_mime = "video/3gpp"
+                    detected_exts = [".3gp"]
+                elif ftyp_brand in (b"isom", b"mp41", b"mp42"):
+                    detected_mime = "video/mp4"
+                    detected_exts = [".mp4"]
+                elif ftyp_brand.startswith(b"qt  "):
+                    detected_mime = "video/quicktime"
+                    detected_exts = [".mov"]
+
+        # Sinon, vérifier normalement
+        if not detected_mime:
+            for magic, (mime, exts) in self._MAGIC_BYTES.items():
+                if self.content.startswith(magic):
+                    # Ignorer RIFF et ftyp car déjà traités
+                    if magic in (b"RIFF", b"ftyp"):
+                        continue
+                    detected_mime = mime
+                    detected_exts = exts
+                    break
 
         if not detected_mime:
             raise ValueError(
@@ -174,6 +258,7 @@ class UploadedFile:
 
         # Vérifier que l'extension correspond au type détecté
         import os
+
         _, ext = os.path.splitext(self.filename.lower())
         if ext not in detected_exts:
             raise ValueError(
@@ -184,22 +269,50 @@ class UploadedFile:
         self._validated = True
         return True
 
-    def save(self, destination: str, validate: bool = True, allowed_types: Optional[list[str]] = None) -> str:
+    def save(
+        self,
+        destination: str,
+        validate: bool = True,
+        allowed_types: Optional[list[str]] = None,
+        secure_filename: bool = True,
+    ) -> str:
         """Save the uploaded file to disk.
 
         Args:
             destination: Path relative to project root or absolute path.
             validate: If True, validate MIME type before saving (default: True)
-            allowed_types: List of allowed MIME types for validation
+            allowed_types: List of allowed MIME types for validation.
+                          SECURITY WARNING: Should always be specified! Allowing all
+                          types can lead to security vulnerabilities.
+            secure_filename: If True, rename file with UUID for security (default: True)
 
         Returns:
             The absolute path where the file was saved.
 
         Raises:
             ValueError: If validation fails or path traversal is detected
+
+        SECURITY: Always specify allowed_types to prevent malicious file uploads.
+        Example: file.save('uploads/', allowed_types=['image/jpeg', 'image/png'])
         """
+        import logging
+
+        # SECURITY WARNING: Log if allowed_types not specified
+        if validate and allowed_types is None:
+            logging.getLogger(__name__).warning(
+                "SECURITY WARNING: File upload without allowed_types restriction. "
+                "This allows any file type with valid magic bytes. "
+                "Always specify allowed_types=['image/jpeg', 'image/png', ...] "
+                "for secure file uploads."
+            )
+
         # Validation MIME type AVANT d'écrire sur disque
-        if validate and not self._validated:
+        if not validate:
+            logging.getLogger(__name__).warning(
+                "SECURITY WARNING: File validation disabled (validate=False). "
+                "This is dangerous and should only be used for trusted sources."
+            )
+        elif not self._validated:
             self.validate_mime_type(allowed_types)
 
         # Detect if the user wants to save into a directory
@@ -215,10 +328,26 @@ class UploadedFile:
         else:
             dest = os.path.abspath(destination)
 
+        # SECURITY: Generate secure filename if requested
+        if secure_filename:
+            import uuid
+
+            _, ext = os.path.splitext(self.filename)
+            safe_name = f"{uuid.uuid4()}{ext.lower()}"
+        else:
+            # Use original filename sanitized
+            from .utils.security import secure_filename as sanitize_filename
+
+            safe_name = sanitize_filename(self.filename)
+
         # If it's a directory or already exists as one, append filename
         if is_dir or os.path.isdir(dest):
             os.makedirs(dest, exist_ok=True)
-            dest = os.path.join(dest, self.filename)
+            dest = os.path.join(dest, safe_name)
+        else:
+            # Replace filename in destination with safe name
+            dest_dir = os.path.dirname(dest)
+            dest = os.path.join(dest_dir, safe_name)
 
         print(f"  ➜ [ASOK] Saving file to: {dest}")
 
@@ -228,7 +357,7 @@ class UploadedFile:
             if common != base_dir:
                 raise ValueError(f"Path traversal blocked: {destination}")
         except Exception:
-             raise ValueError(f"Invalid destination: {destination}")
+            raise ValueError(f"Invalid destination: {destination}")
 
         # Ensure parent directory exists
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -242,6 +371,10 @@ class UploadedFile:
 
         with open(dest, "wb") as f:
             f.write(self.content)
+
+        # SECURITY: Set restrictive permissions (read-only for owner and group)
+        # 0o644 = rw-r--r-- (owner can read/write, others can only read)
+        os.chmod(dest, 0o644)
 
         # Optimization hook
         if os.environ.get("IMAGE_OPTIMIZATION") == "true" and is_image(dest):
@@ -496,28 +629,29 @@ class Request:
             elif "multipart/form-data" in enc_content_type:
                 # Extract boundary
                 import re
-                boundary_match = re.search(r'boundary=([^;]+)', enc_content_type)
+
+                boundary_match = re.search(r"boundary=([^;]+)", enc_content_type)
                 if boundary_match:
                     boundary = boundary_match.group(1).strip().encode()
                     # Split body by boundary
-                    parts = self.body.split(b'--' + boundary)
+                    parts = self.body.split(b"--" + boundary)
                     for part in parts:
-                        if not part or part == b'--\r\n' or part == b'--':
+                        if not part or part == b"--\r\n" or part == b"--":
                             continue
 
                         # Split headers and content
-                        if b'\r\n\r\n' not in part:
+                        if b"\r\n\r\n" not in part:
                             continue
 
-                        head, payload = part.split(b'\r\n\r\n', 1)
+                        head, payload = part.split(b"\r\n\r\n", 1)
                         # Remove trailing \r\n from payload
-                        if payload.endswith(b'\r\n'):
+                        if payload.endswith(b"\r\n"):
                             payload = payload[:-2]
 
-                        head_str = head.decode('utf-8', errors='ignore')
+                        head_str = head.decode("utf-8", errors="ignore")
                         cdisp = ""
-                        for line in head_str.split('\r\n'):
-                            if line.lower().startswith('content-disposition:'):
+                        for line in head_str.split("\r\n"):
+                            if line.lower().startswith("content-disposition:"):
                                 cdisp = line
                                 break
 
@@ -528,15 +662,21 @@ class Request:
                                 name = name_match.group(1)
                                 if filename_match:
                                     raw_filename = filename_match.group(1)
-                                    if raw_filename:  # Only if a file was actually selected
+                                    if (
+                                        raw_filename
+                                    ):  # Only if a file was actually selected
                                         safe_filename = secure_filename(raw_filename)
                                         uploaded = UploadedFile(safe_filename, payload)
                                         self.files[name] = uploaded
                                         self.all_files.append(uploaded)
-                                        self._files_multi.setdefault(name, []).append((name, uploaded))
+                                        self._files_multi.setdefault(name, []).append(
+                                            (name, uploaded)
+                                        )
                                 else:
                                     # Regular form field
-                                    self.form[name] = payload.decode('utf-8', errors='ignore')
+                                    self.form[name] = payload.decode(
+                                        "utf-8", errors="ignore"
+                                    )
 
     def file(self, name: str) -> Optional[UploadedFile]:
         """Get a single uploaded file by form field name."""
@@ -576,6 +716,45 @@ class Request:
             path = os.path.join(page_dir, filepath)
         else:
             path = os.path.join(root, filepath)
+
+        # Automatic extension resolution if file not found
+        if not os.path.isfile(path):
+            # 1. Try appending extensions (for request.html('page'))
+            for ext in (".html", ".asok"):
+                if os.path.isfile(path + ext):
+                    path = path + ext
+                    break
+
+            # 2. Try swapping extensions if still not found (for request.html('page.html') -> page.asok)
+            if not os.path.isfile(path):
+                base_path, current_ext = os.path.splitext(path)
+                if current_ext == ".html" and os.path.isfile(base_path + ".asok"):
+                    path = base_path + ".asok"
+                elif current_ext == ".asok" and os.path.isfile(base_path + ".html"):
+                    path = base_path + ".html"
+
+        # CONVENTION: Enforce strict naming convention for page templates
+        # Only allow 'page.html' or 'page.asok' as template names
+        # Exception: partials (src/partials/), layouts (src/html/), and components can have any name
+        normalized_path = path.replace("\\", "/")
+        is_partial = (
+            "/partials/" in normalized_path
+            or "/html/" in normalized_path
+            or "/components/" in normalized_path
+        )
+
+        if not is_partial:
+            basename = os.path.basename(path)
+            if basename not in ("page.html", "page.asok"):
+                raise ValueError(
+                    f"Invalid template name: '{basename}'. "
+                    f"Page templates must be named 'page.html' or 'page.asok'. "
+                    f"This convention ensures code readability and consistency.\n"
+                    f"  ✓ Valid: src/pages/contact/page.html\n"
+                    f"  ✗ Invalid: src/pages/contact/contact_form.html\n"
+                    f"Note: Partials (src/partials/), layouts (src/html/), and components can have any name."
+                )
+
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
         tpl_root = os.path.join(root, "src/partials")
@@ -672,10 +851,12 @@ class Request:
 
             app_ref = self.environ.get("asok.app")
             secret = (
-                app_ref.config.get("SECRET_KEY", "dev-secret-key")
-                if app_ref
-                else "dev-secret-key"
+                app_ref.config.get("SECRET_KEY") if app_ref else os.getenv("SECRET_KEY")
             )
+            if not secret:
+                raise RuntimeError(
+                    "SECRET_KEY is not configured. This should never happen if Asok() is properly initialized."
+                )
 
             # Try to restore from session (persists across page refreshes)
             sess = self.session
@@ -755,8 +936,10 @@ class Request:
             self._asok_templates = []
         self._asok_templates.append(filepath)
         return render_template_string(
-            content, self._template_context(context), root_dir=tpl_root,
-            inject_block_markers=True  # Inject markers for data-block targeting
+            content,
+            self._template_context(context),
+            root_dir=tpl_root,
+            inject_block_markers=True,  # Inject markers for data-block targeting
         )
 
     def stream(self, filepath: str, **context: Any) -> Any:
@@ -770,8 +953,10 @@ class Request:
 
         content, tpl_root = self._resolve_template(filepath)
         return stream_template_string(
-            content, self._template_context(context), root_dir=tpl_root,
-            inject_block_markers=True  # Inject markers for data-block targeting
+            content,
+            self._template_context(context),
+            root_dir=tpl_root,
+            inject_block_markers=True,  # Inject markers for data-block targeting
         )
 
     def _stream_blocks(
@@ -787,7 +972,9 @@ class Request:
             if not name:
                 continue
             if name.startswith("#"):
-                raise ValueError(f"Invalid block name '{name}'. Use the block name directly without the '#' prefix.")
+                raise ValueError(
+                    f"Invalid block name '{name}'. Use the block name directly without the '#' prefix."
+                )
         content, tpl_root = self._resolve_template(filepath)
 
         # Check if this is a genuine SPA block request (has X-Block header)
@@ -808,6 +995,52 @@ class Request:
                 # For normal page loads, return unwrapped content
                 # This ensures better SEO, accessibility, and first paint
                 yield block_html
+
+        # CRITICAL: Include scoped CSS/JS in SPA block responses
+        # This ensures that page-specific styles and scripts are preserved during navigation
+        if is_spa_request and hasattr(self, "scoped_assets"):
+            from .utils.css import scope_css
+            from .utils.minify import minify_css, minify_js
+
+            page_id = getattr(self, "page_id", None)
+
+            # Include scoped CSS if it exists
+            if self.scoped_assets.get("css") and page_id:
+                try:
+                    with open(self.scoped_assets["css"], "r", encoding="utf-8") as f:
+                        raw_css = f.read()
+                    scoped_css = scope_css(raw_css, page_id)
+                    # Minify in production
+                    if not self.environ.get("DEBUG"):
+                        scoped_css = minify_css(scoped_css)
+                    # SECURITY: Escape page_id for safe HTML attribute injection
+                    # Prevent CSS from breaking </style> tag by replacing it
+                    import html
+
+                    safe_page_id = html.escape(page_id, quote=True)
+                    safe_css = scoped_css.replace("</style>", "<\\/style>")
+                    yield f'<style id="asok-scoped-css" data-page-id="{safe_page_id}">{safe_css}</style>'
+                except Exception:
+                    pass  # Silently fail if CSS can't be loaded
+
+            # Include scoped JS if it exists
+            if self.scoped_assets.get("js"):
+                try:
+                    with open(self.scoped_assets["js"], "r", encoding="utf-8") as f:
+                        raw_js = f.read()
+                    from .utils.js import scope_js
+
+                    scoped_js = scope_js(raw_js, page_id) if page_id else raw_js
+                    # Minify in production
+                    if not self.environ.get("DEBUG"):
+                        scoped_js = minify_js(scoped_js)
+                    nonce = getattr(self, "nonce", "")
+                    # SECURITY: Prevent JS from breaking </script> tag
+                    # Replace </script> with <\/script> to avoid premature tag closure
+                    safe_js = scoped_js.replace("</script>", "<\\/script>")
+                    yield f"<script id=\"asok-scoped-js\" nonce=\"{nonce}\">(function(){{const init=function(){{{safe_js}}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();}})();</script>"
+                except Exception:
+                    pass  # Silently fail if JS can't be loaded
 
     def block(
         self, filepath: str, block_name: Optional[str] = None, **context: Any
@@ -985,15 +1218,42 @@ class Request:
                 f"Potentially unsafe redirect blocked: {url}. "
                 "Use safe=False for external redirects."
             )
+        from .exceptions import RedirectException
+
         raise RedirectException(url)
 
     def abort(self, code: int, message: Optional[str] = None) -> None:
-        """Stop execution immediately and return an error response with the given status code."""
+        """Raise an AbortException with the given status code and message."""
         raise AbortException(code, message)
+
+    def abort_404(
+        self, message: Optional[str] = "The requested resource was not found"
+    ) -> None:
+        """Shortcut for raising NotFoundError (404)."""
+        raise NotFoundError(message)
+
+    def abort_403(
+        self,
+        message: Optional[str] = "You do not have permission to access this resource",
+    ) -> None:
+        """Shortcut for raising ForbiddenError (403)."""
+        raise ForbiddenError(message)
+
+    def abort_401(
+        self,
+        message: Optional[str] = "Authentication is required to access this resource",
+    ) -> None:
+        """Shortcut for raising UnauthorizedError (401)."""
+        raise UnauthorizedError(message)
+
+    def login_required(self) -> None:
+        """Enforce authentication, aborting with 401 if not logged in."""
+        if not self.user:
+            self.abort_401()
 
     def not_found(self, message: Optional[str] = None) -> None:
         """Shortcut for abort(404)."""
-        self.abort(404, message)
+        self.abort_404(message)
 
     def forbidden(self, message: Optional[str] = None) -> None:
         """Shortcut for abort(403)."""
@@ -1058,7 +1318,9 @@ class Request:
 
             # Get current request's origin
             current_scheme = self.environ.get("wsgi.url_scheme", "http")
-            current_host = self.environ.get("HTTP_HOST") or self.environ.get("SERVER_NAME", "")
+            current_host = self.environ.get("HTTP_HOST") or self.environ.get(
+                "SERVER_NAME", ""
+            )
 
             # Only allow same-origin redirects
             return parsed.scheme == current_scheme and parsed.netloc == current_host
@@ -1095,10 +1357,12 @@ class Request:
     def verify_csrf(self):
         """Verify the CSRF token from headers, form data, or JSON body.
 
-        Aborts with 403 Forbidden if validation fails.
+        Raises SecurityError if validation fails.
         """
         if self._csrf_verified:
             return
+
+        from .exceptions import SecurityError
 
         if self.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
             self._csrf_verified = True
@@ -1108,8 +1372,8 @@ class Request:
         if self.scheme == "https":
             origin = self.headers.get("Origin") or self.headers.get("Referer")
             if not origin:
-                self.abort(
-                    403, "Strict CSRF: Origin or Referer header required for HTTPS."
+                raise SecurityError(
+                    "Strict CSRF: Origin or Referer header required for HTTPS."
                 )
 
             try:
@@ -1118,12 +1382,11 @@ class Request:
                 parsed = urlparse(origin)
                 # Compare netloc (host:port)
                 if parsed.netloc != self.host:
-                    self.abort(
-                        403,
+                    raise SecurityError(
                         f"CSRF Origin mismatch: expected {self.host}, got {parsed.netloc}",
                     )
             except Exception:
-                self.abort(403, "Invalid Origin or Referer format")
+                raise SecurityError("Invalid Origin or Referer format")
 
         # 2. Token verification
         # DEBUG
@@ -1132,7 +1395,11 @@ class Request:
 
         if not token:
             headers = self.headers
-            token = headers.get("X-CSRF-Token") or headers.get("X-Csrf-Token") or headers.get("X-CSRF-TOKEN")
+            token = (
+                headers.get("X-CSRF-Token")
+                or headers.get("X-Csrf-Token")
+                or headers.get("X-CSRF-TOKEN")
+            )
 
         if not token:
             token = self.form.get("csrf_token")
@@ -1143,13 +1410,14 @@ class Request:
         if not token or not hmac.compare_digest(
             str(token), str(self.csrf_token_value or "")
         ):
-            self.abort(403, "CSRF validation failed")
+            raise SecurityError("CSRF validation failed")
 
         self._csrf_verified = True
 
         # SECURITY: Rotate CSRF token after successful validation
         # to prevent token reuse attacks
         import secrets
+
         new_token = secrets.token_hex(32)
         self.csrf_token_value = new_token
         # Le nouveau token sera automatiquement envoyé via Set-Cookie et X-CSRF-Token header
@@ -1160,7 +1428,8 @@ class Request:
 
         The nonce is generated on first access and cached for the duration of the request.
         """
-        if self._nonce is None:
+        val = getattr(self, "_nonce", None)
+        if not val or not isinstance(val, str) or len(val) < 10:
             self._nonce = secrets.token_urlsafe(16)
         return self._nonce
 
@@ -1221,8 +1490,13 @@ class Request:
         signed_id = self._sign(user.id)
         self.environ["asok.session_cookie"] = self._session_cookie(signed_id, max_age)
 
-        # Security: Rotate the server-side session ID to prevent session fixation
+        # SECURITY: Rotate the server-side session ID to prevent session fixation
         self.session_regenerate()
+
+        # SECURITY: Rotate CSRF token to prevent CSRF token fixation
+        import secrets
+
+        self.csrf_token_value = secrets.token_hex(32)
 
         self._user_instance = user
         self._auth_resolved = True
@@ -1245,7 +1519,10 @@ class Request:
             raise RedirectException(redirect_url)
 
     def logout(self) -> None:
-        """Clear user session and logout."""
+        """Clear user session and logout.
+
+        SECURITY: Rotates CSRF token after logout.
+        """
         self.environ["asok.session_cookie"] = self._session_cookie("", 0)
 
         # Clear server-side session as well
@@ -1254,25 +1531,68 @@ class Request:
         except Exception:
             pass
 
+        # SECURITY: Rotate CSRF token after logout
+        import secrets
+
+        self.csrf_token_value = secrets.token_hex(32)
+
         self._user_instance = None
         self._auth_resolved = False
 
     def authenticate(
         self, password_field: str = "password", **credentials: Any
     ) -> Optional[Any]:
-        """Verify credentials and login user if successful."""
+        """Verify credentials and login user if successful.
+
+        SECURITY: Implements rate limiting to prevent brute force attacks.
+        Maximum 5 failed attempts per IP address within 15 minutes.
+        """
+        import logging
+        import time
+
+        from .cache import default_cache
+
         app_ref: Optional[Asok] = self.environ.get("asok.app")
         model_name = app_ref.config.get("AUTH_MODEL", "User") if app_ref else "User"
         user_model = MODELS_REGISTRY.get(model_name)
         if not user_model:
             return None
+
         password = credentials.pop(password_field, None)
         if not password or not credentials:
             return None
+
+        # SECURITY: Rate limiting by IP address
+        rate_limit_key = f"auth_attempts:{self.ip}"
+        attempts = default_cache.get(rate_limit_key, 0)
+
+        # Block if too many failed attempts
+        MAX_ATTEMPTS = 5
+        LOCKOUT_DURATION = 900  # 15 minutes in seconds
+
+        if attempts >= MAX_ATTEMPTS:
+            logging.getLogger(__name__).warning(
+                "SECURITY: Authentication blocked for IP %s: too many failed attempts (%d)",
+                self.ip,
+                attempts,
+            )
+            # Slow down attacker
+            time.sleep(2)
+            return None
+
         user = user_model.find(**credentials)
         if user and user.check_password(password_field, password):
+            # SECURITY: Reset counter on successful login
+            default_cache.forget(rate_limit_key)
             self.login(user)
             return user
+
+        # SECURITY: Increment failed attempts counter
+        default_cache.set(rate_limit_key, attempts + 1, ttl=LOCKOUT_DURATION)
+
+        # Slow down failed attempts to make brute force impractical
+        time.sleep(1)
+
         return None
 
     @property
@@ -1342,31 +1662,62 @@ class Request:
             filepath:      Path to the file (absolute or relative to project root).
             filename:      Download filename (defaults to basename).
             as_attachment:  If True, browser downloads; if False, inline display.
+
+        SECURITY: Enhanced path traversal protection using pathlib.
         """
-        root = self.environ.get("asok.root", os.getcwd())
-        base = os.path.realpath(os.path.abspath(os.path.join(root, "src/partials/uploads")))
+        from pathlib import Path
 
-        # SECURITY: Force normalization, resolve symlinks, and strip leading slashes
-        clean_path = os.path.normpath(filepath.lstrip("/").lstrip("\\"))
-        full_path = os.path.realpath(os.path.abspath(os.path.join(base, clean_path)))
+        root = Path(self.environ.get("asok.root", os.getcwd()))
+        base_dir = (root / "src/partials/uploads").resolve()
 
-        # Block path traversal outside partials/uploads directory
-        if not full_path.startswith(base + os.sep) or os.path.islink(full_path):
+        # SECURITY: Take ONLY the filename (basename) to prevent any path traversal
+        # This ensures even "../" or "../../" in the input cannot escape the directory
+        clean_name = Path(filepath).name
+        if not clean_name or clean_name in (".", ".."):
             self.status = "403 Forbidden"
             return "<h1>403 Forbidden</h1>"
 
-        if not os.path.isfile(full_path):
+        # Resolve the full path
+        try:
+            full_path = (base_dir / clean_name).resolve(strict=True)
+        except (ValueError, OSError, RuntimeError):
+            # File doesn't exist or path resolution failed
             self.status = "404 Not Found"
             return "<h1>404 Not Found</h1>"
 
-        mimetype, _ = mimetypes.guess_type(filepath)
+        # SECURITY: Verify the resolved path is still within the base directory
+        try:
+            full_path.relative_to(base_dir)
+        except ValueError:
+            # Path escapes the base directory
+            self.status = "403 Forbidden"
+            return "<h1>403 Forbidden</h1>"
+
+        # SECURITY: Check for symlinks in the entire path chain
+        # This prevents attacks using symlinks in parent directories
+        current = full_path
+        while current != base_dir:
+            if current.is_symlink():
+                self.status = "403 Forbidden"
+                return "<h1>403 Forbidden: Symlinks not allowed</h1>"
+            current = current.parent
+            if current == current.parent:  # Reached root
+                break
+
+        # Verify it's a regular file
+        if not full_path.is_file():
+            self.status = "404 Not Found"
+            return "<h1>404 Not Found</h1>"
+
+        mimetype, _ = mimetypes.guess_type(str(full_path))
 
         # Determine filename and sanitize it for the header
         from .utils.security import secure_filename
-        fname = secure_filename(filename or os.path.basename(filepath))
+
+        fname = secure_filename(filename or full_path.name)
 
         disposition = "attachment" if as_attachment else "inline"
-        file_size = os.path.getsize(full_path)
+        file_size = full_path.stat().st_size
 
         # SECURITY: Prevent DoS by limiting max file size (100 MB)
         MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
@@ -1384,7 +1735,7 @@ class Request:
 
         # Stream large files (> 5 MB) to avoid loading them entirely into memory
         if file_size > 5 * 1024 * 1024:
-            self.environ["asok.stream_file"] = full_path
+            self.environ["asok.stream_file"] = str(full_path)
         else:
             with open(full_path, "rb") as f:
                 self.environ["asok.binary_response"] = f.read()
@@ -1441,6 +1792,7 @@ class Request:
 
         # 2. Enrich with framework country data
         from .utils.geo import Countries
+
         country_info = Countries.get(loc.get("country", "")) or {
             "iso": "Unknown",
             "name": "Unknown",
@@ -1449,7 +1801,7 @@ class Request:
             "capital": "Unknown",
             "continent": "Unknown",
             "currency": "Unknown",
-            "languages": "Unknown"
+            "languages": "Unknown",
         }
 
         geo_data = {
@@ -1458,11 +1810,12 @@ class Request:
             "country": loc.get("country", "Unknown"),
             "lat": loc.get("lat", 0.0),
             "lon": loc.get("lon", 0.0),
-            **country_info
+            **country_info,
         }
 
         # 3. Add derived info
         from .utils.geo import Countries as GeoUtils
+
         geo_data["timezone"] = GeoUtils.get_timezone(geo_data["iso"])
 
         self.__dict__["_geo_cache"] = geo_data

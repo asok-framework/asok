@@ -220,3 +220,26 @@ class TestTemplateInheritance:
         result = render_template_string(tpl, {}, root_dir=str(tmp_path))
 
         assert "<input name='username' type='text'>" in result
+
+    def test_nested_block_markers(self):
+        tpl = (
+            "<div>"
+            "{% block main %}"
+            "<main>"
+            "{% block toc %}"
+            "<aside>toc</aside>"
+            "{% endblock %}"
+            "</main>"
+            "{% endblock %}"
+            "</div>"
+        )
+        result = render_template_string(tpl, {}, inject_block_markers=True)
+        # Verify that all markers are present and correctly formed
+        assert "<!-- block:main:start -->" in result
+        assert "<!-- block:main:end -->" in result
+        assert "<!-- block:toc:start -->" in result
+        assert "<!-- block:toc:end -->" in result
+        # Check that none of the HTML tags are broken
+        assert "<main>" in result
+        assert "</main>" in result
+        assert "<aside>toc</aside>" in result

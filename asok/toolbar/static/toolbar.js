@@ -1,6 +1,6 @@
 /* ASOK DEBUG SUITE JS
  * @author: Asok Framework Team
- * @version: 0.1.5 */
+ * @version: 0.1.6 */
 (function () {
     const trigger = document.getElementById('asok-debug-trigger');
     const suite = document.getElementById('asok-debug-suite');
@@ -51,7 +51,7 @@
 
     // Refresh Reactive States
     const refreshReactive = () => {
-        const clientStates = document.querySelectorAll('[asok-state]');
+        const clientStates = document.querySelectorAll('[asok-state], [asok-state-ref]');
         const wsComponents = Object.keys(window.Asok.wsStates);
         if (reactiveCount) reactiveCount.textContent = clientStates.length + wsComponents.length;
 

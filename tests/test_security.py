@@ -121,3 +121,17 @@ class TestCookieSigning:
         parts = signed.rsplit(".", 1)
         expected = hmac_mod.new(secret, parts[0].encode(), hashlib.sha256).hexdigest()
         assert not hmac_mod.compare_digest(parts[1], expected)
+
+
+# ---------------------------------------------------------------------------
+# Image optimization path traversal protection
+# ---------------------------------------------------------------------------
+
+
+class TestImageSecurity:
+    def test_optimize_image_path_traversal_blocked(self):
+        from asok.utils.image import optimize_image
+
+        # If we specify an evil root path that tries to escape, it should be blocked and return None
+        res = optimize_image("test.png", root="/../../etc")
+        assert res is None

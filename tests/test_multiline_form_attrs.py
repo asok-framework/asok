@@ -31,6 +31,7 @@ def test_multiline_class_attribute():
     except Exception as e:
         print(f"✗ Test 1 failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -48,6 +49,7 @@ def test_multiline_class_attribute():
     except Exception as e:
         print(f"✗ Test 2 failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -66,12 +68,15 @@ def test_multiline_class_attribute():
         print(f"Full result: {result}")
         assert "bg-white" in result
         assert "placeholder" in result
-        assert "data_test" in result  # data_test stays as-is (only trailing _ are transformed)
+        assert (
+            "data_test" in result
+        )  # data_test stays as-is (only trailing _ are transformed)
         print("✓ Test 3 passed!")
         print(f"Result: {result[:300]}...")
     except Exception as e:
         print(f"✗ Test 3 failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

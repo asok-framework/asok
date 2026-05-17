@@ -56,7 +56,6 @@ import os
 import socket
 import struct
 import threading
-import traceback
 from typing import Any, Optional, Union
 
 from .component import COMPONENTS_REGISTRY
@@ -64,6 +63,7 @@ from .core import Asok
 from .events import events
 from .orm import MODELS_REGISTRY, Model
 from .session import Session
+from .utils.minify import minify_js
 
 logger = logging.getLogger("asok.ws")
 
@@ -387,12 +387,14 @@ class WebSocketServer:
         def _relay_model_event(event_name, model_obj):
             # Broadcast to rooms: model:Name, model:Name:id
             model_name = model_obj.__class__.__name__
-            msg = json.dumps({
-                "op": "model_event",
-                "event": event_name,
-                "model": model_name,
-                "id": getattr(model_obj, "id", None)
-            })
+            msg = json.dumps(
+                {
+                    "op": "model_event",
+                    "event": event_name,
+                    "model": model_name,
+                    "id": getattr(model_obj, "id", None),
+                }
+            )
             self.broadcast_to(f"model:{model_name}", msg)
             if hasattr(model_obj, "id") and model_obj.id:
                 self.broadcast_to(f"model:{model_name}:{model_obj.id}", msg)
@@ -414,6 +416,8 @@ class WebSocketServer:
         return r
 
     def on(self, path):
+        """Decorator to register a message handler for a specific path."""
+
         def wrap(fn):
             self._route(path).on_message = fn
             return fn
@@ -421,6 +425,8 @@ class WebSocketServer:
         return wrap
 
     def on_connect(self, path):
+        """Decorator to register a connection handler for a specific path."""
+
         def wrap(fn):
             self._route(path).on_connect = fn
             return fn
@@ -428,6 +434,8 @@ class WebSocketServer:
         return wrap
 
     def on_disconnect(self, path):
+        """Decorator to register a disconnection handler for a specific path."""
+
         def wrap(fn):
             self._route(path).on_disconnect = fn
             return fn
@@ -463,6 +471,7 @@ class WebSocketServer:
             self._remove(c)
 
     def broadcast_json(self, path, obj, exclude=None):
+        """Send a JSON-encoded message to every connection on `path`."""
         return self.broadcast(path, json.dumps(obj), exclude=exclude)
 
     def broadcast_to(self, room, message, exclude=None):
@@ -484,6 +493,7 @@ class WebSocketServer:
         return self.broadcast_to(room, json.dumps(obj), exclude=exclude)
 
     def connections(self, path=None):
+        """Return a list of all currently active WebSocket connections, optionally filtered by path."""
         with self._conn_lock:
             if path is not None:
                 return list(self._connections.get(path, ()))
@@ -491,12 +501,20 @@ class WebSocketServer:
 
     # --- lifecycle ---
     def start(self):
+        """Start the WebSocket server in a background thread."""
         if os.environ.get("ASOK_CLI") == "true":
             return self
         if self._running:
             return self
         if self.secret_key is None:
-            self.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
+            if self.app and hasattr(self.app, "secret_key"):
+                self.secret_key = self.app.secret_key
+            else:
+                self.secret_key = os.getenv("SECRET_KEY")
+                if not self.secret_key:
+                    raise RuntimeError(
+                        "SECRET_KEY is not configured. This should never happen if Asok() is properly initialized."
+                    )
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -532,17 +550,58 @@ class WebSocketServer:
             pass
 
     def _is_origin_allowed(self, origin):
-        """Check if the given Origin header is allowed to connect."""
+        """Check if the given Origin header is allowed to connect.
+
+        SECURITY: Even in debug mode, only localhost origins are allowed by default.
+        """
+        is_debug = (
+            os.environ.get("DEBUG") != "false"
+            and os.environ.get("ASOK_ENV") != "production"
+        )
+
         if not self.allowed_origins or self.allowed_origins == "*":
-            # SECURITY: allowed_origins="*" is forbidden in production as it disables CSRF protection.
-            is_prod = os.environ.get("ASOK_ENV") == "production" or os.environ.get("DEBUG") == "false"
-            if is_prod:
+            # SECURITY: In production, this is forbidden
+            if not is_debug:
                 raise RuntimeError(
                     "SECURITY ERROR: allowed_origins='*' is forbidden in production for WebSockets. "
                     "This disables CSRF protection. Please specify your domain (e.g., https://yourdomain.com)."
                 )
 
-            logger.warning("⚠️  DEBUG MODE: WebSocket allowed_origins='*' detected. CSRF protection is DISABLED.")
+            # SECURITY: Even in debug mode, only allow localhost origins
+            if origin:
+                origin_lower = origin.lower().rstrip("/")
+                # Allow localhost and 127.0.0.1 with any port
+                localhost_origins = [
+                    "http://localhost",
+                    "https://localhost",
+                    "http://127.0.0.1",
+                    "https://127.0.0.1",
+                    "ws://localhost",
+                    "wss://localhost",
+                    "ws://127.0.0.1",
+                    "wss://127.0.0.1",
+                ]
+                # Check if origin starts with any allowed localhost pattern (to allow any port)
+                for allowed_origin in localhost_origins:
+                    if origin_lower.startswith(allowed_origin):
+                        # Verify it's just adding a port or nothing
+                        remainder = origin_lower[len(allowed_origin) :]
+                        if not remainder or remainder.startswith(":"):
+                            logger.debug(
+                                "DEBUG MODE: Allowing localhost origin: %s", origin
+                            )
+                            return True
+
+                # Reject non-localhost origins even in debug
+                logger.warning(
+                    "⚠️  DEBUG MODE: Rejecting non-localhost origin: %s. "
+                    "Only localhost/127.0.0.1 allowed when allowed_origins='*' in debug. "
+                    "Set allowed_origins explicitly to allow other origins.",
+                    origin,
+                )
+                return False
+
+            # No origin header (non-browser client)
             return True
         if not origin:
             # Allow non-browser clients (standard behavior)
@@ -711,7 +770,11 @@ class WebSocketServer:
                     self.app._session_store.save(conn.session.sid, conn.session)
 
                 # Re-render and update stored signed state
-                secret = self.secret_key or os.getenv("SECRET_KEY", "dev-secret-key")
+                secret = self.secret_key or os.getenv("SECRET_KEY")
+                if not secret:
+                    raise RuntimeError(
+                        "SECRET_KEY is not configured. This should never happen if Asok() is properly initialized."
+                    )
                 new_state_signed = comp._sign_state(secret)
                 conn._live_comps[cid] = (cls, new_state_signed)
 
@@ -721,6 +784,26 @@ class WebSocketServer:
                     self.app._session_store.save(conn.session.sid, conn.session)
 
                 new_html = str(comp)
+
+                # Pre-compile directives for Zero-Eval Security
+                if self.app:
+                    new_html, registry = self.app._precompile_directives(new_html)
+                    # Convert registry functions to JS strings
+                    registry_js = {}
+                    if registry:
+                        for h, expr in registry.items():
+                            is_stmt = ";" in expr or "if " in expr or "return " in expr
+                            if expr.strip().startswith("{") and not is_stmt:
+                                expr = f"({expr})"
+                            body = f"return ({expr})" if not is_stmt else expr
+                            # Minify the function body to remove newlines/comments that break script injection
+                            body = minify_js(body)
+                            registry_js[h] = (
+                                f"function($, $store, $el, $event, $refs, $nextTick) {{ with($||{{}}) {{ {body} }} }}"
+                            )
+                else:
+                    registry_js = {}
+
                 # Invalidate SPA cache so navigation shows updated state
                 conn.send_json(
                     {
@@ -728,13 +811,14 @@ class WebSocketServer:
                         "cid": cid,
                         "name": comp.__class__.__name__,
                         "html": new_html,
+                        "registry": registry_js,
                         "state": comp._get_state(),
                         "invalidate_cache": True,
                     }
                 )
 
-        except Exception:
-            traceback.print_exc()
+        except Exception as e:
+            logger.error(f"Error handling live message: {e}", exc_info=True)
 
     def _handle(self, sock, addr):
         # 1. Connection limit check
@@ -796,8 +880,8 @@ class WebSocketServer:
             if route.on_connect:
                 try:
                     route.on_connect(conn)
-                except Exception:
-                    traceback.print_exc()
+                except Exception as e:
+                    logger.error(f"Error in on_connect handler: {e}", exc_info=True)
 
             msg_handler = route.on_message
             try:
@@ -818,15 +902,19 @@ class WebSocketServer:
                         if msg_handler:
                             try:
                                 msg_handler(conn, text)
-                            except Exception:
-                                traceback.print_exc()
+                            except Exception as e:
+                                logger.error(
+                                    f"Error in on_message handler: {e}", exc_info=True
+                                )
                     # binary frames are ignored by default
             finally:
                 if route.on_disconnect:
                     try:
                         route.on_disconnect(conn)
-                    except Exception:
-                        traceback.print_exc()
+                    except Exception as e:
+                        logger.error(
+                            f"Error in on_disconnect handler: {e}", exc_info=True
+                        )
                 self._remove(conn)
                 conn.close()
         except socket.timeout:
@@ -835,8 +923,10 @@ class WebSocketServer:
                 sock.close()
             except OSError:
                 pass
-        except Exception:
-            traceback.print_exc()
+        except Exception as e:
+            logger.error(
+                f"Error handling WebSocket client connection: {e}", exc_info=True
+            )
             try:
                 sock.close()
             except OSError:

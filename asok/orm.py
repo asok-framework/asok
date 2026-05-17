@@ -21,9 +21,130 @@ import warnings
 from typing import Any, Generic, Optional, TypeVar, Union
 
 from .events import events
+from .exceptions import AsokException
 
 T = TypeVar("T", bound="Model")
 logger = logging.getLogger(__name__)
+
+# SECURITY: SQL identifier validation regex (alphanumeric + underscore, 1-64 chars)
+_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
+
+# SQLite reserved keywords that should not be used as identifiers
+_SQL_RESERVED_WORDS = {
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "CREATE",
+    "ALTER",
+    "TABLE",
+    "INDEX",
+    "VIEW",
+    "TRIGGER",
+    "FROM",
+    "WHERE",
+    "JOIN",
+    "ON",
+    "AS",
+    "AND",
+    "OR",
+    "NOT",
+    "NULL",
+    "TRUE",
+    "FALSE",
+    "UNION",
+    "INTERSECT",
+    "EXCEPT",
+    "GROUP",
+    "BY",
+    "ORDER",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "DISTINCT",
+    "ALL",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
+    "IN",
+    "BETWEEN",
+    "LIKE",
+    "GLOB",
+    "IS",
+    "ISNULL",
+    "NOTNULL",
+    "EXISTS",
+    "CAST",
+    "COLLATE",
+    "ASC",
+    "DESC",
+    "DEFAULT",
+    "CONSTRAINT",
+    "PRIMARY",
+    "KEY",
+    "FOREIGN",
+    "REFERENCES",
+    "UNIQUE",
+    "CHECK",
+    "AUTOINCREMENT",
+    "CASCADE",
+    "RESTRICT",
+    "SET",
+    "NO",
+    "ACTION",
+    "PRAGMA",
+    "TRANSACTION",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+    "SAVEPOINT",
+    "RELEASE",
+    "VACUUM",
+    "ANALYZE",
+    "EXPLAIN",
+    "ATTACH",
+    "DETACH",
+}
+
+
+def validate_sql_identifier(name: str, context: str = "identifier") -> str:
+    """Validate a SQL identifier (table/column/index name) to prevent SQL injection.
+
+    SECURITY: This function prevents SQL injection in dynamic schema operations
+    by ensuring identifiers only contain safe characters and aren't SQL keywords.
+
+    Args:
+        name: The identifier to validate
+        context: Description of the identifier for error messages
+
+    Returns:
+        The validated identifier (unchanged if valid)
+
+    Raises:
+        ValueError: If the identifier is invalid or a SQL keyword
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError(f"Invalid SQL {context}: identifier cannot be empty")
+
+    # Check format: alphanumeric + underscore, max 64 chars
+    if not _SQL_IDENTIFIER_PATTERN.match(name):
+        raise ValueError(
+            f"Invalid SQL {context}: '{name}'. "
+            f"Must start with letter/underscore, contain only alphanumeric "
+            f"characters and underscores, and be max 64 characters long."
+        )
+
+    # Check against reserved words (case-insensitive)
+    if name.upper() in _SQL_RESERVED_WORDS:
+        raise ValueError(
+            f"Invalid SQL {context}: '{name}' is a SQL reserved word. "
+            f"Please use a different name or add a prefix/suffix."
+        )
+
+    return name
 
 
 def convert_sql_to_text(obj: Any) -> str:
@@ -62,8 +183,8 @@ def _pluralize(word: str) -> str:
     if not word:
         return word
     # CamelCase to snake_case
-    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', word)
-    word = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", word)
+    word = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
     if word.endswith(("s", "x", "z", "ch", "sh")):
         return word + "es"
@@ -72,7 +193,7 @@ def _pluralize(word: str) -> str:
     return word + "s"
 
 
-class ModelError(Exception):
+class ModelError(AsokException):
     """Raised on ORM save/create errors with a user-friendly message."""
 
     def __init__(
@@ -189,6 +310,9 @@ class ModelList(list):
         self._args = args or []
 
     def count(self, value=None):
+        """Return the number of items in the list.
+        If 'value' is provided, returns the number of occurrences of 'value'.
+        """
         if value is not None:
             return super().count(value)
         return len(self)
@@ -203,6 +327,8 @@ class ModelList(list):
 
 
 class ConnectionProxy:
+    """A wrapper for SQLite connections that logs execution time and queries for the Developer Toolbar."""
+
     def __init__(self, conn):
         self._conn = conn
 
@@ -210,6 +336,7 @@ class ConnectionProxy:
         return getattr(self._conn, name)
 
     def execute(self, sql, parameters=()):
+        """Execute a SQL statement and log its performance to the current request context."""
         from .context import request_var
 
         req = request_var.get()
@@ -240,6 +367,7 @@ class ConnectionProxy:
 # Registry for all models to enable cross-model relationships
 MODELS_REGISTRY = {}
 
+
 class Migrations:
     """Utility to track and manage applied database migrations."""
 
@@ -267,7 +395,9 @@ class Migrations:
         conn = sqlite3.connect(Model._db_path)
         conn.row_factory = sqlite3.Row
         try:
-            rows = conn.execute("SELECT name FROM _asok_migrations ORDER BY id ASC").fetchall()
+            rows = conn.execute(
+                "SELECT name FROM _asok_migrations ORDER BY id ASC"
+            ).fetchall()
             return [row["name"] for row in rows]
         finally:
             conn.close()
@@ -277,7 +407,10 @@ class Migrations:
         """Record a new migration as applied."""
         conn = sqlite3.connect(Model._db_path)
         try:
-            conn.execute("INSERT INTO _asok_migrations (name, batch) VALUES (?, ?)", (name, batch))
+            conn.execute(
+                "INSERT INTO _asok_migrations (name, batch) VALUES (?, ?)",
+                (name, batch),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -289,7 +422,9 @@ class Migrations:
         conn = sqlite3.connect(Model._db_path)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT MAX(batch) as max_batch FROM _asok_migrations").fetchone()
+            row = conn.execute(
+                "SELECT MAX(batch) as max_batch FROM _asok_migrations"
+            ).fetchone()
             return row["max_batch"] or 0
         finally:
             conn.close()
@@ -303,7 +438,10 @@ class Migrations:
         conn = sqlite3.connect(Model._db_path)
         conn.row_factory = sqlite3.Row
         try:
-            rows = conn.execute("SELECT name FROM _asok_migrations WHERE batch = ? ORDER BY id DESC", (last_batch,)).fetchall()
+            rows = conn.execute(
+                "SELECT name FROM _asok_migrations WHERE batch = ? ORDER BY id DESC",
+                (last_batch,),
+            ).fetchall()
             return [row["name"] for row in rows]
         finally:
             conn.close()
@@ -357,6 +495,7 @@ class Field:
         messages: Optional[dict[str, str]] = None,
         index: bool = False,
         form_type: Optional[str] = None,
+        **kwargs,
     ):
         self.sql_type: str = sql_type
         self.default: Any = default
@@ -369,6 +508,7 @@ class Field:
         self.messages: dict[str, str] = messages or {}
         self.index: bool = index
         self.form_type: Optional[str] = form_type
+        self.attrs: dict[str, Any] = kwargs
 
     @staticmethod
     def String(
@@ -383,10 +523,23 @@ class Field:
         messages: Optional[dict[str, str]] = None,
         index: bool = False,
         form_type: Optional[str] = None,
+        **kwargs,
     ) -> Field:
         """Short text, rendered as <input type="text">."""
-        f = Field("TEXT", default=default, unique=unique, nullable=nullable, hidden=hidden,
-                  protected=protected, label=label, rules=rules, messages=messages, index=index, form_type=form_type)
+        f = Field(
+            "TEXT",
+            default=default,
+            unique=unique,
+            nullable=nullable,
+            hidden=hidden,
+            protected=protected,
+            label=label,
+            rules=rules,
+            messages=messages,
+            index=index,
+            form_type=form_type,
+            **kwargs,
+        )
         f.max_length = max_length
         return f
 
@@ -402,10 +555,22 @@ class Field:
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
         index: bool = False,
+        **kwargs,
     ) -> Field:
         """Long text, rendered as <textarea>."""
-        f = Field("TEXT", default=default, unique=unique, nullable=nullable, hidden=hidden,
-                  protected=protected, label=label, rules=rules, messages=messages, index=index)
+        f = Field(
+            "TEXT",
+            default=default,
+            unique=unique,
+            nullable=nullable,
+            hidden=hidden,
+            protected=protected,
+            label=label,
+            rules=rules,
+            messages=messages,
+            index=index,
+            **kwargs,
+        )
         f.is_text = True
         f.wysiwyg = wysiwyg
         return f
@@ -421,9 +586,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Text field indexed for full-text search (FTS5)."""
-        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            False,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.searchable = True
         if max_length:
             f.max_length = max_length
@@ -443,9 +620,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Email field with automatic validation."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.max_length = max_length
         f.is_email = True
         return f
@@ -461,9 +650,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Telephone field with automatic validation."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.max_length = max_length
         f.is_tel = True
         return f
@@ -480,10 +681,23 @@ class Field:
         messages: Optional[dict[str, str]] = None,
         index: bool = False,
         form_type: Optional[str] = None,
+        **kwargs,
     ) -> Field:
         """Integer number (or rating if form_type='rating')."""
-        return Field("INTEGER", default=default, unique=unique, nullable=nullable, hidden=hidden,
-                     protected=protected, label=label, rules=rules, messages=messages, index=index, form_type=form_type)
+        return Field(
+            "INTEGER",
+            default=default,
+            unique=unique,
+            nullable=nullable,
+            hidden=hidden,
+            protected=protected,
+            label=label,
+            rules=rules,
+            messages=messages,
+            index=index,
+            form_type=form_type,
+            **kwargs,
+        )
 
     @staticmethod
     def Boolean(
@@ -497,10 +711,23 @@ class Field:
         messages: Optional[dict[str, str]] = None,
         index: bool = False,
         form_type: Optional[str] = None,
+        **kwargs,
     ) -> Field:
         """Boolean value, rendered as a checkbox (or toggle if form_type='toggle')."""
-        f = Field("INTEGER", default=default, unique=unique, nullable=nullable, hidden=hidden,
-                  protected=protected, label=label, rules=rules, messages=messages, index=index, form_type=form_type)
+        f = Field(
+            "INTEGER",
+            default=default,
+            unique=unique,
+            nullable=nullable,
+            hidden=hidden,
+            protected=protected,
+            label=label,
+            rules=rules,
+            messages=messages,
+            index=index,
+            form_type=form_type,
+            **kwargs,
+        )
         f.is_boolean = True
         return f
 
@@ -515,9 +742,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Floating-point number."""
-        f = Field("REAL", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "REAL",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.precision = precision
         return f
 
@@ -531,9 +770,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Date without time."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_date = True
         return f
 
@@ -548,10 +799,22 @@ class Field:
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
         index: bool = False,
+        **kwargs,
     ) -> Field:
         """Date and time."""
-        f = Field("TEXT", default=default, unique=unique, nullable=nullable, hidden=hidden,
-                  protected=protected, label=label, rules=rules, messages=messages, index=index)
+        f = Field(
+            "TEXT",
+            default=default,
+            unique=unique,
+            nullable=nullable,
+            hidden=hidden,
+            protected=protected,
+            label=label,
+            rules=rules,
+            messages=messages,
+            index=index,
+            **kwargs,
+        )
         f.is_datetime = True
         return f
 
@@ -565,9 +828,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Time only."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_time = True
         return f
 
@@ -588,9 +863,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Relationship column pointing to another model."""
-        f = Field("INTEGER", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "INTEGER",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_foreign_key = True
         f.related_model = model_class
         f.autocomplete = autocomplete
@@ -612,9 +899,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Uploaded file reference."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_file = True
         f.upload_to = upload_to
         return f
@@ -627,9 +926,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Hashed password field, hidden in forms and protected from mass assignment."""
-        f = Field("TEXT", default, unique, nullable, hidden=True, protected=True, label=label, rules=rules, messages=messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden=True,
+            protected=True,
+            label=label,
+            rules=rules,
+            messages=messages,
+            **kwargs,
+        )
         f.is_password = True
         return f
 
@@ -665,9 +976,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Field for storing JSON objects as text."""
-        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            False,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_json = True
         return f
 
@@ -681,9 +1004,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Restricted values from a Python Enum."""
-        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            False,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_enum = True
         f.enum_class = enum_class
         return f
@@ -699,9 +1034,21 @@ class Field:
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
         searchable: bool = True,
+        **kwargs,
     ) -> Field:
         """Field for fixed-choice dropdowns with rich UI support."""
-        f = Field("TEXT", default, False, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            False,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_dropdown = True
         f.choices = choices
         f.dropdown_searchable = searchable
@@ -718,9 +1065,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Fixed-point decimal for currencies/accuracy."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_decimal = True
         f.precision = precision
         return f
@@ -735,9 +1094,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Universal unique identifier."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_uuid = True
         return f
 
@@ -752,9 +1123,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """URL-friendly string automatically generated from another field."""
-        f = Field("TEXT", None, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            None,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_slug = True
         f.populate_from = populate_from
         f.always_update = always_update
@@ -770,9 +1153,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """URL string with validation."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_url = True
         return f
 
@@ -786,9 +1181,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Hex color code, rendered as <input type="color">."""
-        f = Field("TEXT", default, unique, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "TEXT",
+            default,
+            unique,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_color = True
         return f
 
@@ -802,9 +1209,21 @@ class Field:
         label: Optional[str] = None,
         rules: Optional[str] = None,
         messages: Optional[dict[str, str]] = None,
+        **kwargs,
     ) -> Field:
         """Vector field for storing embeddings (BLOB)."""
-        f = Field("BLOB", default, False, nullable, hidden, protected, label, rules, messages)
+        f = Field(
+            "BLOB",
+            default,
+            False,
+            nullable,
+            hidden,
+            protected,
+            label,
+            rules,
+            messages,
+            **kwargs,
+        )
         f.is_vector = True
         f.dimensions = dimensions
         return f
@@ -895,6 +1314,12 @@ class Query(Generic[T]):
         self._eager.extend(relation_names)
         return self
 
+    def cache(self, ttl: int = 60, key: Optional[str] = None) -> Query[T]:
+        """Enable caching for this query."""
+        self._cache_ttl = ttl
+        self._cache_key = key
+        return self
+
     def select(self, *columns: str) -> Query[T]:
         """Set specific columns to select (useful for aggregates or partial loads)."""
         valid_cols = []
@@ -912,7 +1337,9 @@ class Query(Generic[T]):
 
             # Allow common aggregates e.g. COUNT(*) or SUM(price) as total
             # Regex to match FUNC(col) [AS alias]
-            match = re.match(r"^(COUNT|SUM|AVG|MIN|MAX)\((.*?)\)(?:\s+AS\s+(\w+))?$", col_strip, re.I)
+            match = re.match(
+                r"^(COUNT|SUM|AVG|MIN|MAX)\((.*?)\)(?:\s+AS\s+(\w+))?$", col_strip, re.I
+            )
             if match:
                 func, inner, alias = match.groups()
                 inner_strip = inner.strip()
@@ -1051,8 +1478,6 @@ class Query(Generic[T]):
         self._wheres.append(f"{column} IS NULL")
         return self
 
-
-
     def where_not_null(self, column: str) -> Query[T]:
         """Filter rows where column is NOT NULL."""
         if not self.model._valid_column(column):
@@ -1085,6 +1510,19 @@ class Query(Generic[T]):
 
         self._args.append(blob)
         return self.limit(limit)
+
+    def search(self, term: str) -> Query[T]:
+        """Perform a full-text search against indexed fields."""
+        if not self.model._search_fields:
+            return self
+
+        if term and "*" not in term:
+            term = " ".join([f"{t}*" for t in term.split() if t])
+
+        subquery = f"SELECT rowid FROM {self.model._table}_fts WHERE {self.model._table}_fts MATCH ?"
+        self._wheres.append(f"id IN ({subquery})")
+        self._args.append(term)
+        return self
 
     def order_by(self, column: str) -> Query[T]:
         """Sort the query results. Use '-column' for descending order."""
@@ -1168,7 +1606,9 @@ class Query(Generic[T]):
 
         # Add INTERSECT queries
         for intersect_query in self._intersect_queries:
-            intersect_sql = f"SELECT {intersect_query._select} FROM {intersect_query.model._table}"
+            intersect_sql = (
+                f"SELECT {intersect_query._select} FROM {intersect_query.model._table}"
+            )
             intersect_sql += intersect_query._build_where()
             if intersect_query._groups:
                 intersect_sql += f" GROUP BY {', '.join(intersect_query._groups)}"
@@ -1194,6 +1634,22 @@ class Query(Generic[T]):
         for intersect_query in self._intersect_queries:
             all_args.extend(intersect_query._args)
 
+        cache_ttl = getattr(self, "_cache_ttl", None)
+        if cache_ttl is not None:
+            import hashlib
+
+            from .cache import default_cache
+
+            if hasattr(self, "_cache_key") and self._cache_key:
+                cache_key = self._cache_key
+            else:
+                raw_key = f"{sql}_{all_args}_{self._eager}"
+                cache_key = "orm_" + hashlib.md5(raw_key.encode()).hexdigest()
+
+            cached = default_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         with self.model._get_conn() as conn:
             rows = conn.execute(sql, all_args).fetchall()
         results = ModelList(
@@ -1203,6 +1659,20 @@ class Query(Generic[T]):
         )
         if self._eager and results:
             self._load_eager(results)
+
+        if getattr(self, "_cache_ttl", None) is not None:
+            from .cache import default_cache
+
+            # Ensure cache_key is available in this scope
+            cache_key = (
+                getattr(self, "_cache_key", None)
+                or "orm_"
+                + __import__("hashlib")
+                .md5(f"{sql}_{all_args}_{self._eager}".encode())
+                .hexdigest()
+            )
+            default_cache.set(cache_key, results, ttl=self._cache_ttl)
+
         return results
 
     def _load_eager(self, results):
@@ -1346,6 +1816,10 @@ class Query(Generic[T]):
 
 
 class ModelMeta(type):
+    """Metaclass for all Asok Models.
+    Handles field discovery, relationship mapping, and automatic table name generation.
+    """
+
     def __new__(mcs, name, bases, attrs):
         if name == "Model":
             return super().__new__(mcs, name, bases, attrs)
@@ -1650,8 +2124,13 @@ class Model(metaclass=ModelMeta):
     @classmethod
     def create_table(cls):
         """Create the table if it doesn't exist, or migrate it by adding missing columns."""
+        # SECURITY: Validate table name to prevent SQL injection
+        validate_sql_identifier(cls._table, "table name")
+
         f_defs = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
         for name, f in cls._fields.items():
+            # SECURITY: Validate column name to prevent SQL injection
+            validate_sql_identifier(name, "column name")
             def_str = f"{name} {f.sql_type}"
             if f.unique:
                 def_str += " UNIQUE"
@@ -1678,6 +2157,8 @@ class Model(metaclass=ModelMeta):
             ]
             for name, f in cls._fields.items():
                 if name not in existing_cols:
+                    # SECURITY: Validate column name (already validated above, but double-check for migrations)
+                    validate_sql_identifier(name, "column name")
                     def_str = f"{name} {f.sql_type}"
                     if f.unique:
                         def_str += " UNIQUE"
@@ -1696,7 +2177,9 @@ class Model(metaclass=ModelMeta):
                     try:
                         conn.execute(f"ALTER TABLE {cls._table} ADD COLUMN {def_str}")
                     except Exception as e:
-                        logger.error("Failed to migrate %s (adding %s): %s", cls._table, name, e)
+                        logger.error(
+                            "Failed to migrate %s (adding %s): %s", cls._table, name, e
+                        )
 
             if cls._search_fields:
                 # Create FTS5 virtual table
@@ -1721,10 +2204,16 @@ class Model(metaclass=ModelMeta):
 
                 # Auto-rebuild if FTS is empty but source has data
                 try:
-                    source_count = conn.execute(f"SELECT COUNT(*) FROM {cls._table}").fetchone()[0]
-                    fts_count = conn.execute(f"SELECT COUNT(*) FROM {cls._table}_fts").fetchone()[0]
+                    source_count = conn.execute(
+                        f"SELECT COUNT(*) FROM {cls._table}"
+                    ).fetchone()[0]
+                    fts_count = conn.execute(
+                        f"SELECT COUNT(*) FROM {cls._table}_fts"
+                    ).fetchone()[0]
                     if source_count > 0 and fts_count == 0:
-                        conn.execute(f"INSERT INTO {cls._table}_fts({cls._table}_fts) VALUES('rebuild')")
+                        conn.execute(
+                            f"INSERT INTO {cls._table}_fts({cls._table}_fts) VALUES('rebuild')"
+                        )
                 except Exception:
                     pass
 
@@ -1738,6 +2227,11 @@ class Model(metaclass=ModelMeta):
                         pivot_table = rel.pivot_table or "_".join(sorted([a, b]))
                         pivot_fk = rel.pivot_fk or f"{a}_id"
                         pivot_other_fk = rel.pivot_other_fk or f"{b}_id"
+
+                        # SECURITY: Validate all identifiers to prevent SQL injection
+                        validate_sql_identifier(pivot_table, "pivot table name")
+                        validate_sql_identifier(pivot_fk, "pivot foreign key")
+                        validate_sql_identifier(pivot_other_fk, "pivot foreign key")
 
                         # Create the pivot table
                         pivot_sql = f"""
@@ -1753,14 +2247,27 @@ class Model(metaclass=ModelMeta):
 
             # Create indexes for fields marked with index=True
             for field_name, field in cls._fields.items():
-                if getattr(field, 'index', False) and not field.unique:
+                if getattr(field, "index", False) and not field.unique:
+                    # SECURITY: Validate identifiers (field_name already validated above)
                     index_name = f"idx_{cls._table}_{field_name}"
+                    validate_sql_identifier(index_name, "index name")
                     index_sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {cls._table}({field_name})"
                     try:
                         conn.execute(index_sql)
-                        logger.info("Created index %s on %s.%s", index_name, cls._table, field_name)
+                        logger.info(
+                            "Created index %s on %s.%s",
+                            index_name,
+                            cls._table,
+                            field_name,
+                        )
                     except Exception as e:
-                        logger.error("Failed to create index %s on %s.%s: %s", index_name, cls._table, field_name, e)
+                        logger.error(
+                            "Failed to create index %s on %s.%s: %s",
+                            index_name,
+                            cls._table,
+                            field_name,
+                            e,
+                        )
 
             # Commit all schema changes (explicit commit like in save())
             conn.commit()
@@ -1774,27 +2281,35 @@ class Model(metaclass=ModelMeta):
 
     # ── Model event hooks (override in subclasses) ───────────
     def before_save(self):
+        """Called before a model is persisted to the database (both on create and update)."""
         pass
 
     def after_save(self):
+        """Called after a model is successfully saved to the database."""
         pass
 
     def before_create(self):
+        """Called only before a new model record is created."""
         pass
 
     def after_create(self):
+        """Called only after a new model record is successfully created."""
         pass
 
     def before_update(self):
+        """Called only before an existing model record is updated."""
         pass
 
     def after_update(self):
+        """Called only after an existing model record is successfully updated."""
         pass
 
     def before_delete(self):
+        """Called before a model record is deleted from the database."""
         pass
 
     def after_delete(self):
+        """Called after a model record is successfully deleted."""
         pass
 
     def update(self, **values: Any) -> Model:
@@ -2052,6 +2567,7 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def count(cls, **kwargs):
+        """Return the total number of records matching the given criteria."""
         for k in kwargs:
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
@@ -2069,6 +2585,7 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def exists(cls, **kwargs):
+        """Return True if at least one record exists matching the given criteria."""
         for k in kwargs:
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
@@ -2196,7 +2713,7 @@ class Model(metaclass=ModelMeta):
                     f"Use parameterized queries with '?' placeholders and pass values via args parameter. "
                     f"Query: {sql[:100]}...",
                     UserWarning,
-                    stacklevel=2
+                    stacklevel=2,
                 )
                 break
 
@@ -2375,7 +2892,13 @@ class Model(metaclass=ModelMeta):
         return q
 
     @classmethod
-    def paginate(cls, page: int = 1, per_page: int = 10, order_by: Optional[str] = None, **kwargs: Any) -> dict[str, Any]:
+    def paginate(
+        cls,
+        page: int = 1,
+        per_page: int = 10,
+        order_by: Optional[str] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """Paginate results matching the given criteria.
 
         Example:

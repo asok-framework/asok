@@ -26,14 +26,17 @@ class Session(dict):
         super().__delitem__(key)
 
     def pop(self, key: Any, *args: Any) -> Any:
+        """Remove a key and return its value. Marks the session as modified."""
         self.modified = True
         return super().pop(key, *args)
 
     def update(self, *args: Any, **kwargs: Any) -> None:
+        """Update the session with multiple key-value pairs. Marks the session as modified."""
         self.modified = True
         super().update(*args, **kwargs)
 
     def clear(self) -> None:
+        """Remove all items from the session. Marks the session as modified."""
         self.modified = True
         super().clear()
 
@@ -61,9 +64,9 @@ class SessionStore:
         self.ttl = ttl
         self.max_sessions = max_sessions
         self._lock = threading.Lock()
-        self._memory: dict[str, dict[str, Any]] = (
-            {}
-        )  # sid -> {"data": dict, "ts": float}
+        self._memory: dict[
+            str, dict[str, Any]
+        ] = {}  # sid -> {"data": dict, "ts": float}
 
         if backend == "file":
             os.makedirs(path, exist_ok=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -142,3 +143,47 @@ class Cache:
 
 
 _SENTINEL = object()
+
+# Global default cache instance
+_backend = os.environ.get("ASOK_CACHE_BACKEND", "memory").lower()
+default_cache = Cache(backend=_backend)
+
+
+def cache_page(
+    ttl: int = 60, key_prefix: str = "page_", cache_instance: Optional[Cache] = None
+):
+    """
+    Decorator to cache the HTTP response of a view function.
+    Only caches GET requests.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(request, *args, **kwargs):
+            if getattr(request, "method", "GET") != "GET":
+                return func(request, *args, **kwargs)
+
+            cache = cache_instance or default_cache
+            # Provide a safe fallback if request doesn't have path for some reason
+            path = getattr(request, "path", "")
+            qs = getattr(request, "query_string", "")
+            full_path = f"{path}?{qs}" if qs else path
+            cache_key = f"{key_prefix}{full_path}"
+
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            response = func(request, *args, **kwargs)
+
+            # Do not cache explicit errors or redirects if possible.
+            # In Asok, view functions often return a Response object or just a string.
+            status_code = getattr(response, "status", "200")
+            if str(status_code).startswith("200"):
+                cache.set(cache_key, response, ttl=ttl)
+
+            return response
+
+        return wrapper
+
+    return decorator

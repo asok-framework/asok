@@ -5,8 +5,9 @@ import json
 from html import escape
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
+from .exceptions import ValidationError
 from .orm import Model
-from .templates import SafeString
+from .templates import SafeString, _extract_nested_attrs, _render_attrs
 from .validation import Validator
 
 if TYPE_CHECKING:
@@ -22,15 +23,9 @@ def _merge_attrs(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, A
     return merged
 
 
-def _render_attrs(attrs: dict[str, Any]) -> str:
-    """Render a dictionary of attributes into a space-separated HTML string."""
-    parts = ""
-    for k, v in attrs.items():
-        if v is True:
-            parts += f" {escape(k)}"
-        elif v is not False and v is not None:
-            parts += f' {escape(k)}="{escape(str(v))}"'
-    return parts
+def _filter_nested_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    """Filter out attributes meant for nested elements (containing '__')."""
+    return {k: v for k, v in attrs.items() if "__" not in k}
 
 
 class Renderable:
@@ -80,7 +75,7 @@ class FormField:
             "title": attrs.pop("title", "name"),
             "subtitle": attrs.pop("subtitle", None),
             "image": attrs.pop("image", None),
-            "searchable": attrs.pop("searchable", True)
+            "searchable": attrs.pop("searchable", True),
         }
 
         attrs = dict(attrs)  # never mutate the schema dict (shared in templates)
@@ -178,11 +173,13 @@ class FormField:
             return f"<textarea{_render_attrs(attrs)}>{val}</textarea>"
 
         if self.type == "select":
-            attrs = {"id": self.name, "name": self.name, **merged}
+            select_attrs = _filter_nested_attrs(merged)
+            attrs = {"id": self.name, "name": self.name, **select_attrs}
+            option_attrs = _extract_nested_attrs(merged, "option")
             options_html = ""
             for opt_val, opt_label in self.choices or []:
                 sel = " selected" if str(opt_val) == str(self.value) else ""
-                options_html += f'<option value="{esc(str(opt_val))}"{sel}>{esc(str(opt_label))}</option>'
+                options_html += f'<option value="{esc(str(opt_val))}"{sel}{_render_attrs(option_attrs)}>{esc(str(opt_label))}</option>'
             return f"<select{_render_attrs(attrs)}>{options_html}</select>"
 
         if self.type == "checkbox":
@@ -192,18 +189,24 @@ class FormField:
             return f"<input{_render_attrs(attrs)}>"
 
         if self.type == "radio":
+            label_attrs = _extract_nested_attrs(merged, "label")
+            input_attrs_base = _extract_nested_attrs(merged, "input")
+            # If no specific input__* attributes, fall back to filtered main attrs
+            if not input_attrs_base:
+                input_attrs_base = _filter_nested_attrs(merged)
+
             html = ""
             for opt_val, opt_label in self.choices or []:
                 radio_attrs = {
                     "type": "radio",
                     "name": self.name,
                     "value": str(opt_val),
-                    **merged,
+                    **input_attrs_base,
                 }
                 radio_attrs.pop("id", None)
                 if str(opt_val) == str(self.value):
                     radio_attrs["checked"] = True
-                html += f"<label><input{_render_attrs(radio_attrs)}> {esc(str(opt_label))}</label>"
+                html += f"<label{_render_attrs(label_attrs)}><input{_render_attrs(radio_attrs)}> {esc(str(opt_label))}</label>"
             return html
 
         if self.type == "dropdown":
@@ -240,39 +243,69 @@ class FormField:
 
                 if str(tid) == str(self.value):
                     current_label = title
-                render_items.append({"id": tid, "title": title, "subtitle": subtitle, "image": image})
+                render_items.append(
+                    {"id": tid, "title": title, "subtitle": subtitle, "image": image}
+                )
 
-            container_attrs = _merge_attrs({"class": "asok-dropdown"}, overrides)
-            trigger_class = overrides.get("trigger_class", self.attrs.get("trigger_class", ""))
-            menu_class = overrides.get("menu_class", self.attrs.get("menu_class", ""))
-            item_class = overrides.get("item_class", self.attrs.get("item_class", ""))
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-dropdown {container_class}".strip()
+            # Still respect overrides for backward compatibility or direct calls
+            if "class" in overrides:
+                container_attrs["class"] = overrides["class"]
+
+            trigger_attrs = _extract_nested_attrs(merged, "trigger")
+            trigger_class = trigger_attrs.get("class", "")
+            trigger_attrs["class"] = f"asok-dropdown-trigger {trigger_class}".strip()
+            trigger_attrs["type"] = "button"
+            trigger_attrs["asok-on:click"] = "open = !open"
+
+            menu_attrs = _extract_nested_attrs(merged, "menu")
+            menu_class = menu_attrs.get("class", "")
+            menu_attrs["class"] = f"asok-dropdown-menu {menu_class}".strip()
+            menu_attrs["asok-show"] = "open"
+            menu_attrs["asok-on:click.outside"] = "open = false"
+            menu_attrs["asok-cloak"] = True
+
+            item_attrs_base = _extract_nested_attrs(merged, "item")
+            item_class_base = item_attrs_base.get("class", "")
+
             searchable = self.item_meta["searchable"]
 
-            html = f'<div{_render_attrs(container_attrs)} asok-state="{{ open: false, search: \'\', label: \'{esc(str(current_label))}\' }}">'
-            html += f'  <button type="button" class="asok-dropdown-trigger {esc(trigger_class)}" asok-on:click="open = !open">'
+            html = f"<div{_render_attrs(container_attrs)} asok-state=\"{{ open: false, search: '', label: '{esc(str(current_label))}' }}\">"
+            html += f"  <button{_render_attrs(trigger_attrs)}>"
             html += f'    <span asok-text="label">{esc(str(current_label))}</span>'
             html += '    <svg class="asok-dropdown-arrow" width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
-            html += '  </button>'
-            html += f'  <div class="asok-dropdown-menu {esc(menu_class)}" asok-show="open" asok-on:click.outside="open = false" asok-cloak>'
+            html += "  </button>"
+            html += f"  <div{_render_attrs(menu_attrs)}>"
             if searchable:
-                html += '    <div class="asok-dropdown-search"><input type="text" asok-model="search" placeholder="Search..." asok-on:keydown.escape="open = false"></div>'
+                search_attrs = _extract_nested_attrs(merged, "search")
+                search_class = search_attrs.get("class", "")
+                search_attrs["class"] = f"asok-dropdown-search {search_class}".strip()
+                html += f'    <div{_render_attrs(search_attrs)}><input type="text" asok-model="search" placeholder="Search..." asok-on:keydown.escape="open = false"></div>'
             html += '    <div class="asok-dropdown-items">'
             for ri in render_items:
                 s_cond = f"!search || '{esc(str(ri['title'])).lower()}'.includes(search.toLowerCase())"
                 click = f"label = '{esc(str(ri['title']))}'; open = false; $refs.input_{self.name}.value = '{esc(str(ri['id']))}'; $refs.input_{self.name}.dispatchEvent(new Event('change'))"
-                html += f'      <div class="asok-dropdown-item {esc(item_class)}" asok-show="{s_cond}" asok-on:click="{click}">'
+
+                item_attrs = dict(item_attrs_base)
+                item_attrs["class"] = f"asok-dropdown-item {item_class_base}".strip()
+                item_attrs["asok-show"] = s_cond
+                item_attrs["asok-on:click"] = click
+
+                html += f"      <div{_render_attrs(item_attrs)}>"
                 if ri["image"]:
                     html += f'        <img src="{esc(str(ri["image"]))}" class="asok-dropdown-item-img">'
                 html += '        <div class="asok-dropdown-item-content">'
                 html += f'          <div class="asok-dropdown-item-title">{esc(str(ri["title"]))}</div>'
                 if ri["subtitle"]:
                     html += f'          <div class="asok-dropdown-item-subtitle">{esc(str(ri["subtitle"]))}</div>'
-                html += '        </div>'
-                html += '      </div>'
-            html += '    </div>'
-            html += '  </div>'
+                html += "        </div>"
+                html += "      </div>"
+            html += "    </div>"
+            html += "  </div>"
             html += f'  <input type="hidden" name="{self.name}" id="{self.name}" value="{esc(str(self.value))}" asok-ref="input_{self.name}">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "image":
@@ -283,13 +316,19 @@ class FormField:
             if preview:
                 # Wrap in container with asok-state for CSP-compliant preview
                 initial_preview = self.value if self.value else ""
-                state = json.dumps({"preview": initial_preview}).replace('"', '&quot;')
+                state = json.dumps({"preview": initial_preview}).replace('"', "&quot;")
 
                 container_attrs = _merge_attrs({"class": "asok-image-upload"}, {})
                 html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
                 # File input with asok-on:change instead of inline onchange
-                file_attrs = {"type": "file", "id": self.name, "name": self.name, "accept": "image/*", **merged}
+                file_attrs = {
+                    "type": "file",
+                    "id": self.name,
+                    "name": self.name,
+                    "accept": "image/*",
+                    **merged,
+                }
                 file_attrs.pop("preview", None)
                 file_attrs.pop("max_width", None)
                 file_attrs.pop("max_height", None)
@@ -308,10 +347,16 @@ class FormField:
                 # Preview image bound to state (asok-cloak hides until Asok loads)
                 preview_style = f"max-width:{max_width}px;max-height:{max_height}px;margin-top:10px;"
                 html += f'<br><img asok-show="preview" asok-bind:src="preview" style="{preview_style}" alt="Preview" asok-cloak>'
-                html += '</div>'
+                html += "</div>"
             else:
                 # No preview - just a simple file input
-                file_attrs = {"type": "file", "id": self.name, "name": self.name, "accept": "image/*", **merged}
+                file_attrs = {
+                    "type": "file",
+                    "id": self.name,
+                    "name": self.name,
+                    "accept": "image/*",
+                    **merged,
+                }
                 file_attrs.pop("preview", None)
                 file_attrs.pop("max_width", None)
                 file_attrs.pop("max_height", None)
@@ -327,10 +372,16 @@ class FormField:
             current_values = []
             if self.value:
                 try:
-                    current_values = json.loads(self.value) if isinstance(self.value, str) else self.value
+                    current_values = (
+                        json.loads(self.value)
+                        if isinstance(self.value, str)
+                        else self.value
+                    )
                 except (json.JSONDecodeError, TypeError):
                     # Fallback to comma-separated
-                    current_values = [v.strip() for v in str(self.value).split(",") if v.strip()]
+                    current_values = [
+                        v.strip() for v in str(self.value).split(",") if v.strip()
+                    ]
 
             # Build available options from choices
             available_options = []
@@ -342,8 +393,12 @@ class FormField:
                         current_labels[str(val)] = str(label)
 
             # Create state with selected tags
-            selected_tags = [{"value": v, "label": current_labels.get(v, v)} for v in current_values]
-            state = json.dumps({"selected": selected_tags, "open": False, "search": ""}).replace('"', '&quot;')
+            selected_tags = [
+                {"value": v, "label": current_labels.get(v, v)} for v in current_values
+            ]
+            state = json.dumps(
+                {"selected": selected_tags, "open": False, "search": ""}
+            ).replace('"', "&quot;")
 
             container_attrs = _merge_attrs({"class": "asok-tags"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
@@ -353,13 +408,19 @@ class FormField:
             html += '    <template asok-for="tag in selected">'
             html += '      <span class="asok-tag">'
             html += '        <span asok-text="tag.label"></span>'
-            html += '        <button type="button" class="asok-tag-remove" asok-on:click="selected = selected.filter(t => t.value !== tag.value); $refs.input_' + self.name + '.value = JSON.stringify(selected.map(t => t.value)); $refs.input_' + self.name + '.dispatchEvent(new Event(\'change\'))">×</button>'
-            html += '      </span>'
-            html += '    </template>'
+            html += (
+                '        <button type="button" class="asok-tag-remove" asok-on:click="selected = selected.filter(t => t.value !== tag.value); $refs.input_'
+                + self.name
+                + ".value = JSON.stringify(selected.map(t => t.value)); $refs.input_"
+                + self.name
+                + ".dispatchEvent(new Event('change'))\">×</button>"
+            )
+            html += "      </span>"
+            html += "    </template>"
 
             # Add button
             html += '    <button type="button" class="asok-tags-add" asok-on:click="open = !open">+ Add</button>'
-            html += '  </div>'
+            html += "  </div>"
 
             # Dropdown menu with options
             html += '  <div class="asok-tags-menu" asok-show="open" asok-on:click.outside="open = false" asok-cloak>'
@@ -368,18 +429,24 @@ class FormField:
             html += '    <div class="asok-tags-options">'
 
             for opt in available_options:
-                search_cond = f"!search || '{esc(opt['label']).lower()}'.includes(search.toLowerCase())" if searchable else "true"
-                already_selected = f"selected.some(t => t.value === '{esc(opt['value'])}')"
+                search_cond = (
+                    f"!search || '{esc(opt['label']).lower()}'.includes(search.toLowerCase())"
+                    if searchable
+                    else "true"
+                )
+                already_selected = (
+                    f"selected.some(t => t.value === '{esc(opt['value'])}')"
+                )
                 click_action = f"if(!{already_selected}){{selected.push({{value:'{esc(opt['value'])}',label:'{esc(opt['label'])}'}});$refs.input_{self.name}.value=JSON.stringify(selected.map(t=>t.value));$refs.input_{self.name}.dispatchEvent(new Event('change'))}};open=false"
                 html += f'      <div class="asok-tags-option" asok-show="{search_cond} && !{already_selected}" asok-on:click="{click_action}">{esc(opt["label"])}</div>'
 
-            html += '    </div>'
-            html += '  </div>'
+            html += "    </div>"
+            html += "  </div>"
 
             # Hidden input to store selected values as JSON array
             value_json = json.dumps(current_values)
             html += f'  <input type="hidden" name="{self.name}" id="{self.name}" value=\'{esc(value_json)}\' asok-ref="input_{self.name}">'
-            html += '</div>'
+            html += "</div>"
 
             return html
 
@@ -403,55 +470,83 @@ class FormField:
                     pass
 
             # Use asok-state for reactive date range (CSP-compliant)
-            state = json.dumps({"start": start_value, "end": end_value}).replace('"', '&quot;')
+            state = json.dumps({"start": start_value, "end": end_value}).replace(
+                '"', "&quot;"
+            )
             container_attrs = _merge_attrs({"class": "asok-daterange"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
             # Start date input with asok-on:change
             html += '  <div class="asok-daterange-field">'
-            html += f'    <label class="asok-daterange-label">{esc(start_label)}</label>'
+            html += (
+                f'    <label class="asok-daterange-label">{esc(start_label)}</label>'
+            )
             start_attrs = {"type": "date", "id": f"{self.name}_start"}
             if "future" in self.rules:
                 import datetime
+
                 start_attrs["min"] = datetime.date.today().isoformat()
 
             # Use asok-model for two-way binding and update hidden input
             update_hidden = f"$refs.hidden_{self.name}.value=JSON.stringify({{start:start,end:end}});$refs.hidden_{self.name}.dispatchEvent(new Event('change'))"
             html += f'    <input{_render_attrs(start_attrs)} asok-model="start" asok-on:change="{update_hidden}">'
-            html += '  </div>'
+            html += "  </div>"
 
             # End date input restricted by start date
             html += '  <div class="asok-daterange-field">'
             html += f'    <label class="asok-daterange-label">{esc(end_label)}</label>'
-            end_attrs = {"type": "date", "id": f"{self.name}_end", "asok-bind:min": "start"}
+            end_attrs = {
+                "type": "date",
+                "id": f"{self.name}_end",
+                "asok-bind:min": "start",
+            }
             html += f'    <input{_render_attrs(end_attrs)} asok-model="end" asok-on:change="{update_hidden}">'
-            html += '  </div>'
+            html += "  </div>"
 
             # Hidden input to store the range as JSON
             value_json = json.dumps({"start": start_value, "end": end_value})
             html += f'  <input type="hidden" name="{self.name}" id="{self.name}" value=\'{esc(value_json)}\' asok-ref="hidden_{self.name}">'
-            html += '</div>'
+            html += "</div>"
 
             return html
 
         if self.type == "toggle":
             # Toggle switch (styled checkbox)
-            container_attrs = _merge_attrs({"class": "asok-toggle"}, {})
-            html = f'<div{_render_attrs(container_attrs)}>'
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-toggle {container_class}".strip()
 
-            checkbox_attrs = {"type": "checkbox", "id": self.name, "name": self.name, **merged}
+            html = f"<div{_render_attrs(container_attrs)}>"
+
+            input_attrs_base = _extract_nested_attrs(merged, "input")
+            if not input_attrs_base:
+                input_attrs_base = _filter_nested_attrs(merged)
+
+            checkbox_attrs = {
+                "type": "checkbox",
+                "id": self.name,
+                "name": self.name,
+                **input_attrs_base,
+            }
             if self.value and self.value != "0":
                 checkbox_attrs["checked"] = True
 
-            html += f'<input{_render_attrs(checkbox_attrs)}>'
-            html += f'<label for="{self.name}" class="asok-toggle-slider"></label>'
-            html += '</div>'
+            slider_attrs = _extract_nested_attrs(merged, "slider")
+            slider_class = slider_attrs.get("class", "")
+            slider_attrs["class"] = f"asok-toggle-slider {slider_class}".strip()
+            slider_attrs["for"] = self.name
+
+            html += f"<input{_render_attrs(checkbox_attrs)}>"
+            html += f"<label{_render_attrs(slider_attrs)}></label>"
+            html += "</div>"
             return html
 
         if self.type == "otp":
             # OTP input with separate boxes
             length = self.attrs.get("length", 6)
-            container_attrs = _merge_attrs({"class": "asok-otp"}, {})
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-otp {container_class}".strip()
 
             # Split current value into individual digits
             current_value = str(self.value) if self.value else ""
@@ -462,18 +557,26 @@ class FormField:
 
             # Use double quotes for JSON and escape correctly
             state_json = json.dumps({"digits": digits})
-            html = f'<div{_render_attrs(container_attrs)} asok-state="{esc(state_json)}">'
+            html = (
+                f'<div{_render_attrs(container_attrs)} asok-state="{esc(state_json)}">'
+            )
+
+            input_attrs_base = _extract_nested_attrs(merged, "input")
+            input_class_base = input_attrs_base.get("class", "")
 
             for i in range(length):
                 input_attrs = {
                     "type": "text",
                     "maxlength": "1",
-                    "class": "asok-otp-input",
+                    **input_attrs_base,
                     "asok-model": f"digits[{i}]",
                 }
+                input_attrs["class"] = f"asok-otp-input {input_class_base}".strip()
                 # Auto-focus next input on keyup
                 next_focus = "if($event.target.value && $event.key !== 'Backspace'){const next=$event.target.nextElementSibling;if(next && next.tagName==='INPUT')next.focus()}"
-                html += f'<input{_render_attrs(input_attrs)} asok-on:keyup="{next_focus}">'
+                html += (
+                    f'<input{_render_attrs(input_attrs)} asok-on:keyup="{next_focus}">'
+                )
 
             # Hidden input to store the complete OTP. Bound to the reactive 'digits' array.
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" asok-bind:value="digits.join(\'\')" asok-ref="hidden_{self.name}">'
@@ -491,25 +594,32 @@ class FormField:
             max_stars = self.attrs.get("max_stars", 5)
             current_rating = int(self.value) if self.value else 0
 
-            container_attrs = _merge_attrs({"class": "asok-rating"}, {})
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-rating {container_class}".strip()
+
             html = f'<div{_render_attrs(container_attrs)} asok-state=\'{{"rating": {current_rating}, "hover": 0}}\'>'
+
+            star_attrs_base = _extract_nested_attrs(merged, "star")
+            star_class_base = star_attrs_base.get("class", "")
 
             for i in range(1, max_stars + 1):
                 star_attrs = {
-                    "class": "asok-rating-star",
+                    **star_attrs_base,
                     "asok-on:click": f"rating={i};$refs.hidden_{self.name}.value={i};$refs.hidden_{self.name}.dispatchEvent(new Event('change'))",
                     "asok-on:mouseenter": f"hover={i}",
                     "asok-on:mouseleave": "hover=0",
                 }
+                star_attrs["class"] = f"asok-rating-star {star_class_base}".strip()
                 # Show filled star if rated or hovered
                 filled_condition = f"(hover >= {i}) || (hover === 0 && rating >= {i})"
-                html += f'<span{_render_attrs(star_attrs)}>'
+                html += f"<span{_render_attrs(star_attrs)}>"
                 html += f'<svg asok-show="{filled_condition}" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>'
                 html += f'<svg asok-show="!({filled_condition})" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>'
-                html += '</span>'
+                html += "</span>"
 
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" value="{current_rating}" asok-ref="hidden_{self.name}">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "timerange":
@@ -532,29 +642,64 @@ class FormField:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
-            state = json.dumps({"start": start_value, "end": end_value}).replace('"', '&quot;')
-            container_attrs = _merge_attrs({"class": "asok-timerange"}, {})
+            state = json.dumps({"start": start_value, "end": end_value}).replace(
+                '"', "&quot;"
+            )
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-timerange {container_class}".strip()
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
-            # Start time input
-            html += '  <div class="asok-timerange-field">'
-            html += f'    <label class="asok-timerange-label">{esc(start_label)}</label>'
-            start_attrs = {"type": "time", "id": f"{self.name}_start"}
+            field_attrs_base = _extract_nested_attrs(merged, "field")
+            field_class_base = field_attrs_base.get("class", "")
+
+            label_attrs_base = _extract_nested_attrs(merged, "label")
+            label_class_base = label_attrs_base.get("class", "")
+
+            input_attrs_base = _extract_nested_attrs(merged, "input")
+            input_class_base = input_attrs_base.get("class", "")
             update_hidden = f"$refs.hidden_{self.name}.value=JSON.stringify({{start:start,end:end}});$refs.hidden_{self.name}.dispatchEvent(new Event('change'))"
+
+            # Start time input
+            field_attrs = dict(field_attrs_base)
+            field_attrs["class"] = f"asok-timerange-field {field_class_base}".strip()
+            html += f"  <div{_render_attrs(field_attrs)}>"
+
+            label_attrs = dict(label_attrs_base)
+            label_attrs["class"] = f"asok-timerange-label {label_class_base}".strip()
+            html += f"    <label{_render_attrs(label_attrs)}>{esc(start_label)}</label>"
+
+            start_attrs = {
+                "type": "time",
+                "id": f"{self.name}_start",
+                **input_attrs_base,
+            }
+            start_attrs["class"] = f"asok-timerange-input {input_class_base}".strip()
             html += f'    <input{_render_attrs(start_attrs)} asok-model="start" asok-on:change="{update_hidden}">'
-            html += '  </div>'
+            html += "  </div>"
 
             # End time input
-            html += '  <div class="asok-timerange-field">'
-            html += f'    <label class="asok-timerange-label">{esc(end_label)}</label>'
-            end_attrs = {"type": "time", "id": f"{self.name}_end"}
+            field_attrs = dict(field_attrs_base)
+            field_attrs["class"] = f"asok-timerange-field {field_class_base}".strip()
+            html += f"  <div{_render_attrs(field_attrs)}>"
+
+            label_attrs = dict(label_attrs_base)
+            label_attrs["class"] = f"asok-timerange-label {label_class_base}".strip()
+            html += f"    <label{_render_attrs(label_attrs)}>{esc(end_label)}</label>"
+
+            end_attrs = {
+                "type": "time",
+                "id": f"{self.name}_end",
+                **input_attrs_base,
+            }
+            end_attrs["class"] = f"asok-timerange-input {input_class_base}".strip()
             html += f'    <input{_render_attrs(end_attrs)} asok-model="end" asok-on:change="{update_hidden}">'
-            html += '  </div>'
+            html += "  </div>"
 
             # Hidden input
             value_json = json.dumps({"start": start_value, "end": end_value})
             html += f'  <input type="hidden" name="{self.name}" id="{self.name}" value=\'{esc(value_json)}\' asok-ref="hidden_{self.name}">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "files":
@@ -562,11 +707,18 @@ class FormField:
             max_files = self.attrs.get("max_files", 10)
             preview_enabled = self.attrs.get("preview", True)
 
-            state = json.dumps({"files": []}).replace('"', '&quot;')
+            state = json.dumps({"files": []}).replace('"', "&quot;")
             container_attrs = _merge_attrs({"class": "asok-files"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
-            file_attrs = {"type": "file", "id": self.name, "name": self.name, "multiple": True, "accept": "*/*", **merged}
+            file_attrs = {
+                "type": "file",
+                "id": self.name,
+                "name": self.name,
+                "multiple": True,
+                "accept": "*/*",
+                **merged,
+            }
             file_attrs.pop("max_files", None)
             file_attrs.pop("preview", None)
 
@@ -576,7 +728,9 @@ class FormField:
                 f"if(fileList.length>{max_files}){{alert('Maximum {max_files} files');return}};"
                 "files=fileList.map((f,i)=>({name:f.name,size:f.size,url:URL.createObjectURL(f)}))"
             )
-            html += f'<input{_render_attrs(file_attrs)} asok-on:change="{change_handler}">'
+            html += (
+                f'<input{_render_attrs(file_attrs)} asok-on:change="{change_handler}">'
+            )
 
             if preview_enabled:
                 html += '<div class="asok-files-preview">'
@@ -585,11 +739,11 @@ class FormField:
                 html += '      <img asok-show="file.url" asok-bind:src="file.url" style="max-width:100px;max-height:100px;">'
                 html += '      <span asok-text="file.name"></span>'
                 html += '      <button type="button" asok-on:click="files=files.filter((_,i)=>i!==index)">×</button>'
-                html += '    </div>'
-                html += '  </template>'
-                html += '</div>'
+                html += "    </div>"
+                html += "  </template>"
+                html += "</div>"
 
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "autocomplete":
@@ -597,13 +751,21 @@ class FormField:
             min_chars = self.attrs.get("min_chars", 1)
             items = self.items or self.choices or []
 
-            state = json.dumps({"query": self.value or "", "show": False, "filtered": items}).replace('"', '&quot;')
+            state = json.dumps(
+                {"query": self.value or "", "show": False, "filtered": items}
+            ).replace('"', "&quot;")
             container_attrs = _merge_attrs({"class": "asok-autocomplete"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
             # Input with filtering
-            input_attrs = {"type": "text", "id": self.name, "name": self.name, "autocomplete": "off", **merged}
-            items_json = json.dumps(items).replace('"', '&quot;').replace("'", "\\'")
+            input_attrs = {
+                "type": "text",
+                "id": self.name,
+                "name": self.name,
+                "autocomplete": "off",
+                **merged,
+            }
+            items_json = json.dumps(items).replace('"', "&quot;").replace("'", "\\'")
             filter_logic = (
                 f"const all={items_json};"
                 f"if(query.length>={min_chars}){{filtered=all.filter(item=>String(item).toLowerCase().includes(query.toLowerCase()));show=true}}else{{show=false}}"
@@ -613,12 +775,16 @@ class FormField:
             # Suggestions dropdown
             html += '<div class="asok-autocomplete-menu" asok-show="show && filtered.length > 0" asok-cloak>'
             html += '  <template asok-for="item in filtered">'
-            select_action = "query=String(item);show=false;$refs.input_" + self.name + ".value=query"
+            select_action = (
+                "query=String(item);show=false;$refs.input_"
+                + self.name
+                + ".value=query"
+            )
             html += f'    <div class="asok-autocomplete-item" asok-on:click="{select_action}" asok-text="item"></div>'
-            html += '  </template>'
-            html += '</div>'
+            html += "  </template>"
+            html += "</div>"
 
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "cascading":
@@ -626,8 +792,13 @@ class FormField:
             choices_dict = self.choices or {}
 
             parents = list(choices_dict.keys())
-            state_dict = {"parent": "", "child": "", "children": [], "map": choices_dict}
-            state = json.dumps(state_dict).replace('"', '&quot;')
+            state_dict = {
+                "parent": "",
+                "child": "",
+                "children": [],
+                "map": choices_dict,
+            }
+            state = json.dumps(state_dict).replace('"', "&quot;")
             container_attrs = _merge_attrs({"class": "asok-cascading"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
@@ -636,19 +807,21 @@ class FormField:
             html += '<option value="">Select...</option>'
             for parent in parents:
                 html += f'<option value="{esc(parent)}">{esc(parent)}</option>'
-            html += '</select>'
+            html += "</select>"
 
             # Child select
-            html += '<select asok-model="child" asok-show="children.length > 0" asok-cloak>'
+            html += (
+                '<select asok-model="child" asok-show="children.length > 0" asok-cloak>'
+            )
             html += '<option value="">Select...</option>'
             html += '<template asok-for="option in children">'
             html += '<option asok-bind:value="option" asok-text="option"></option>'
-            html += '</template>'
-            html += '</select>'
+            html += "</template>"
+            html += "</select>"
 
             # Hidden input to store the selection
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" asok-bind:value="parent+\' > \'+child">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "phone":
@@ -656,10 +829,15 @@ class FormField:
             default_country = self.attrs.get("default_country", "US")
 
             from .utils.geo import get_dial_codes, iso_to_flag
+
             countries = get_dial_codes()
 
-            default_code = next((c[1] for c in countries if c[0] == default_country), "+1")
-            state = json.dumps({"code": default_code, "number": ""}).replace('"', '&quot;')
+            default_code = next(
+                (c[1] for c in countries if c[0] == default_country), "+1"
+            )
+            state = json.dumps({"code": default_code, "number": ""}).replace(
+                '"', "&quot;"
+            )
             container_attrs = _merge_attrs({"class": "asok-phone"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
@@ -669,7 +847,7 @@ class FormField:
                 selected = " selected" if code == default_country else ""
                 flag = iso_to_flag(code)
                 html += f'<option value="{dial}"{selected}>{flag} {dial}</option>'
-            html += '</select>'
+            html += "</select>"
 
             # Phone number input
             update_hidden = f"$refs.hidden_{self.name}.value=code+number;$refs.hidden_{self.name}.dispatchEvent(new Event('change'))"
@@ -677,7 +855,7 @@ class FormField:
 
             # Hidden input to store complete phone
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" asok-bind:value="code+number" asok-ref="hidden_{self.name}">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "wysiwyg":
@@ -685,7 +863,7 @@ class FormField:
             height = self.attrs.get("height", 300)
             current_content = self.value or ""
 
-            state = json.dumps({"content": current_content}).replace('"', '&quot;')
+            state = json.dumps({"content": current_content}).replace('"', "&quot;")
             container_attrs = _merge_attrs({"class": "asok-wysiwyg"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
@@ -695,7 +873,7 @@ class FormField:
             html += '<button type="button" asok-on:click="document.execCommand(\'italic\')"><i>I</i></button>'
             html += '<button type="button" asok-on:click="document.execCommand(\'underline\')"><u>U</u></button>'
             html += '<button type="button" asok-on:click="document.execCommand(\'insertUnorderedList\')">• List</button>'
-            html += '</div>'
+            html += "</div>"
 
             # Editor (contenteditable div)
             update_hidden = f"$refs.hidden_{self.name}.value=$event.target.innerHTML;content=$event.target.innerHTML"
@@ -703,14 +881,14 @@ class FormField:
 
             # Hidden input to store HTML
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" value="{esc(current_content)}" asok-ref="hidden_{self.name}">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "dropzone":
             # Drag and drop file upload
             max_files = self.attrs.get("max_files", 10)
 
-            state = json.dumps({"files": [], "dragging": False}).replace('"', '&quot;')
+            state = json.dumps({"files": [], "dragging": False}).replace('"', "&quot;")
             container_attrs = _merge_attrs({"class": "asok-dropzone"}, {})
 
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
@@ -724,31 +902,44 @@ class FormField:
                 "files=fileList.map((f,i)=>({name:f.name,size:f.size,_file:f}))"
             )
             drag_handlers = (
-                "asok-on:dragover.prevent=\"dragging=true\" "
-                "asok-on:dragleave=\"dragging=false\" "
-                f"asok-on:drop.prevent=\"{drop_handler}\""
+                'asok-on:dragover.prevent="dragging=true" '
+                'asok-on:dragleave="dragging=false" '
+                f'asok-on:drop.prevent="{drop_handler}"'
             )
             html += f'<div class="asok-dropzone-area" {drag_handlers} asok-bind:class="dragging?\'dragging\':\'\'" style="border:2px dashed #ccc;padding:40px;text-align:center;cursor:pointer;">'
             html += f'<p>Drag & drop files here or <label for="{self.name}" style="color:blue;cursor:pointer;">browse</label></p>'
-            html += '</div>'
+            html += "</div>"
 
             # Hidden file input - copy exact syntax from working 'files' component
-            file_attrs = {"type": "file", "id": self.name, "name": self.name, "multiple": True, "style": "display:none;", "asok-ref": f"input_{self.name}"}
+            file_attrs = {
+                "type": "file",
+                "id": self.name,
+                "name": self.name,
+                "multiple": True,
+                "style": "display:none;",
+                "asok-ref": f"input_{self.name}",
+            }
             change_handler = (
                 "const fileList=Array.from($event.target.files);"
                 f"if(fileList.length>{max_files}){{alert('Maximum {max_files} files');return}};"
                 "files=fileList.map((f,i)=>({name:f.name,size:f.size,_file:f}))"
             )
-            html += f'<input{_render_attrs(file_attrs)} asok-on:change="{change_handler}">'
+            html += (
+                f'<input{_render_attrs(file_attrs)} asok-on:change="{change_handler}">'
+            )
 
             # File list
             html += '<ul class="asok-dropzone-files">'
             html += '  <template asok-for="(file, index) in files">'
-            html += '    <li><span asok-text="file.name"></span> <button type="button" asok-on:click="files=files.filter((_,i)=>i!==index); const dt=new DataTransfer(); files.forEach(f=>dt.items.add(f._file)); $refs.input_' + self.name + '.files=dt.files;">×</button></li>'
-            html += '  </template>'
-            html += '</ul>'
+            html += (
+                '    <li><span asok-text="file.name"></span> <button type="button" asok-on:click="files=files.filter((_,i)=>i!==index); const dt=new DataTransfer(); files.forEach(f=>dt.items.add(f._file)); $refs.input_'
+                + self.name
+                + '.files=dt.files;">×</button></li>'
+            )
+            html += "  </template>"
+            html += "</ul>"
 
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "signature":
@@ -756,7 +947,7 @@ class FormField:
             width = self.attrs.get("width", 400)
             height = self.attrs.get("height", 200)
 
-            state = json.dumps({"drawing": False}).replace('"', '&quot;')
+            state = json.dumps({"drawing": False}).replace('"', "&quot;")
             container_attrs = _merge_attrs({"class": "asok-signature"}, {})
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
@@ -767,7 +958,7 @@ class FormField:
                 "width": width,
                 "height": height,
                 "style": "border:1px solid #ccc;cursor:crosshair;touch-action:none;",
-                "asok-ref": f"canvas_{self.name}"
+                "asok-ref": f"canvas_{self.name}",
             }
 
             # Handlers pour le dessin
@@ -781,7 +972,7 @@ class FormField:
             canvas_attrs["asok-on:mouseup"] = mouseup
             canvas_attrs["asok-on:mouseleave"] = mouseleave
 
-            html += f'<canvas{_render_attrs(canvas_attrs)}></canvas>'
+            html += f"<canvas{_render_attrs(canvas_attrs)}></canvas>"
 
             # Clear button
             clear_handler = f"const c=$refs.canvas_{self.name};c.getContext('2d').clearRect(0,0,c.width,c.height);$refs.hidden_{self.name}.value=''"
@@ -790,83 +981,160 @@ class FormField:
             # Hidden input to store base64 signature
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" asok-ref="hidden_{self.name}" value="{val}">'
 
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "transfer":
             # Transfer list (dual listbox)
             items = self.items or self.choices or []
 
-            state = json.dumps({"available": items, "selected": [], "h_avail": [], "h_sel": []}).replace('"', '&quot;')
-            container_attrs = _merge_attrs({"class": "asok-transfer"}, {})
+            state = json.dumps(
+                {"available": items, "selected": [], "h_avail": [], "h_sel": []}
+            ).replace('"', "&quot;")
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-transfer {container_class}".strip()
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
-            html += '<div class="asok-transfer-lists" style="display:flex;gap:20px;">'
+            lists_attrs = _extract_nested_attrs(merged, "lists")
+            lists_class = lists_attrs.get("class", "")
+            lists_attrs["class"] = f"asok-transfer-lists {lists_class}".strip()
+            # Default layout style if no class provided
+            if not lists_class:
+                lists_attrs["style"] = "display:flex;gap:20px;"
+
+            html += f"  <div{_render_attrs(lists_attrs)}>"
+
+            list_attrs_base = _extract_nested_attrs(merged, "list")
+            list_class_base = list_attrs_base.get("class", "")
+
+            button_attrs_base = _extract_nested_attrs(merged, "button")
+            button_class_base = button_attrs_base.get("class", "")
 
             # Available list
-            html += '  <div style="flex:1;">'
-            html += '    <h4>Available</h4>'
+            avail_attrs = dict(list_attrs_base)
+            avail_attrs["class"] = f"asok-transfer-avail {list_class_base}".strip()
+            if not list_class_base:
+                avail_attrs["style"] = "flex:1;"
+            html += f"  <div{_render_attrs(avail_attrs)}>"
+            html += "    <h4>Available</h4>"
             html += '    <select multiple style="width:100%;height:200px;" asok-on:change="h_avail=Array.from($event.target.selectedOptions).map(o=>o.value)">'
             html += '      <template asok-for="item in available">'
             html += '        <option asok-bind:value="item.id || item" asok-text="item.name || item" asok-on:dblclick="selected.push(item);available=available.filter(i=>i!==item)" asok-bind:style="h_avail.includes(String(item.id || item)) ? \'background-color: #e7f3ff;\' : \'\'"></option>'
-            html += '      </template>'
-            html += '    </select>'
-            html += '  </div>'
+            html += "      </template>"
+            html += "    </select>"
+            html += "  </div>"
 
-            html += '  <div style="display:flex;flex-direction:column;justify-content:center;gap:10px;">'
-            html += '    <button type="button" asok-on:click="const move=available.filter(i=>h_avail.includes(String(i.id||i)));selected=[...selected,...move];available=available.filter(i=>!move.includes(i));h_avail=[]">→</button>'
-            html += '    <button type="button" asok-on:click="const move=selected.filter(i=>h_sel.includes(String(i.id||i)));available=[...available,...move];selected=selected.filter(i=>!move.includes(i));h_sel=[]">←</button>'
-            html += '  </div>'
+            # Actions buttons
+            btns_attrs = _extract_nested_attrs(merged, "actions")
+            btns_class = btns_attrs.get("class", "")
+            btns_attrs["class"] = f"asok-transfer-actions {btns_class}".strip()
+            if not btns_class:
+                btns_attrs["style"] = (
+                    "display:flex;flex-direction:column;justify-content:center;gap:10px;"
+                )
+            html += f"  <div{_render_attrs(btns_attrs)}>"
+
+            right_btn = dict(button_attrs_base)
+            right_btn["class"] = f"asok-transfer-btn-right {button_class_base}".strip()
+            right_btn["type"] = "button"
+            right_btn["asok-on:click"] = (
+                "const move=available.filter(i=>h_avail.includes(String(i.id||i)));selected=[...selected,...move];available=available.filter(i=>!move.includes(i));h_avail=[]"
+            )
+            html += f"    <button{_render_attrs(right_btn)}>→</button>"
+
+            left_btn = dict(button_attrs_base)
+            left_btn["class"] = f"asok-transfer-btn-left {button_class_base}".strip()
+            left_btn["type"] = "button"
+            left_btn["asok-on:click"] = (
+                "const move=selected.filter(i=>h_sel.includes(String(i.id||i)));available=[...available,...move];selected=selected.filter(i=>!move.includes(i));h_sel=[]"
+            )
+            html += f"    <button{_render_attrs(left_btn)}>←</button>"
+            html += "  </div>"
 
             # Selected list
-            html += '  <div style="flex:1;">'
-            html += '    <h4>Selected</h4>'
+            sel_list_attrs = dict(list_attrs_base)
+            sel_list_attrs["class"] = (
+                f"asok-transfer-selected {list_class_base}".strip()
+            )
+            if not list_class_base:
+                sel_list_attrs["style"] = "flex:1;"
+            html += f"  <div{_render_attrs(sel_list_attrs)}>"
+            html += "    <h4>Selected</h4>"
             html += '    <select multiple style="width:100%;height:200px;" asok-on:change="h_sel=Array.from($event.target.selectedOptions).map(o=>o.value)">'
             html += '      <template asok-for="item in selected">'
             html += '        <option asok-bind:value="item.id || item" asok-text="item.name || item" asok-on:dblclick="available.push(item);selected=selected.filter(i=>i!==item)" asok-bind:style="h_sel.includes(String(item.id || item)) ? \'background-color: #e7f3ff;\' : \'\'"></option>'
-            html += '      </template>'
-            html += '    </select>'
-            html += '  </div>'
+            html += "      </template>"
+            html += "    </select>"
+            html += "  </div>"
 
-            html += '</div>'
+            html += "</div>"
 
             # Hidden input to store selected IDs
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" asok-bind:value="JSON.stringify(selected.map(i=>i.id||i))">'
-            html += '</div>'
+            html += "</div>"
             return html
 
         if self.type == "treeselect":
             # Tree select (hierarchical selection - simplified)
             items = self.items or self.choices or []
 
-            state = json.dumps({"tree": items, "selected": "", "expanded": []}).replace('"', '&quot;')
-            container_attrs = _merge_attrs({"class": "asok-treeselect"}, {})
+            state = json.dumps({"tree": items, "selected": "", "expanded": []}).replace(
+                '"', "&quot;"
+            )
+            container_attrs = _extract_nested_attrs(merged, "container")
+            container_class = container_attrs.get("class", "")
+            container_attrs["class"] = f"asok-treeselect {container_class}".strip()
             html = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
-            # Simple tree rendering (would need recursive template in real implementation)
-            html += '<div class="asok-tree" style="border:1px solid #ddd;padding:10px;max-height:300px;overflow-y:auto;">'
+            tree_attrs = _extract_nested_attrs(merged, "tree")
+            tree_class = tree_attrs.get("class", "")
+            tree_attrs["class"] = f"asok-tree {tree_class}".strip()
+            if not tree_class:
+                tree_attrs["style"] = (
+                    "border:1px solid #ddd;padding:10px;max-height:300px;overflow-y:auto;"
+                )
+            html += f"  <div{_render_attrs(tree_attrs)}>"
+
+            item_attrs_base = _extract_nested_attrs(merged, "item")
+            item_class_base = item_attrs_base.get("class", "")
+
             html += '  <template asok-for="item in tree">'
-            html += '    <div class="asok-tree-item" style="margin:2px 0;">'
-            html += '      <div style="display:flex;align-items:center;padding:5px;cursor:pointer;border-radius:4px;" asok-on:click="selected=item.id;$refs.hidden_' + self.name + '.value=item.id" asok-bind:style="selected==item.id ? \'background:#e7f3ff;color:#0056b3\' : \'\'">'
-            html += '        <span style="width:20px;text-align:center;cursor:pointer;user-select:none;" asok-on:click.stop="expanded.includes(item.id) ? (expanded=expanded.filter(i=>i!==item.id)) : expanded.push(item.id)" asok-text="item.children && item.children.length > 0 ? (expanded.includes(item.id) ? \'▾\' : \'▸\') : \'•\'"></span>'
+
+            item_wrapper_attrs = dict(item_attrs_base)
+            item_wrapper_attrs["class"] = f"asok-tree-item {item_class_base}".strip()
+            if not item_class_base:
+                item_wrapper_attrs["style"] = "margin:2px 0;"
+            html += f"    <div{_render_attrs(item_wrapper_attrs)}>"
+
+            html += (
+                '      <div style="display:flex;align-items:center;padding:5px;cursor:pointer;border-radius:4px;" asok-on:click="selected=item.id;$refs.hidden_'
+                + self.name
+                + ".value=item.id\" asok-bind:style=\"selected==item.id ? 'background:#e7f3ff;color:#0056b3' : ''\">"
+            )
+            html += "        <span style=\"width:20px;text-align:center;cursor:pointer;user-select:none;\" asok-on:click.stop=\"expanded.includes(item.id) ? (expanded=expanded.filter(i=>i!==item.id)) : expanded.push(item.id)\" asok-text=\"item.children && item.children.length > 0 ? (expanded.includes(item.id) ? '▾' : '▸') : '•'\"></span>"
             html += '        <span asok-text="item.name"></span>'
-            html += '      </div>'
+            html += "      </div>"
             html += '      <template asok-if="item.children && item.children.length > 0 && expanded.includes(item.id)">'
             html += '        <div style="margin-left:20px;margin-top:2px;border-left:1px solid #eee;">'
             html += '          <template asok-for="child in item.children">'
-            html += '            <div style="display:flex;align-items:center;padding:4px 10px;cursor:pointer;border-radius:3px;margin:1px 0;" asok-on:click.stop="selected=child.id;$refs.hidden_' + self.name + '.value=child.id" asok-bind:style="selected==child.id ? \'background:#e7f3ff;color:#0056b3\' : \'\'">'
+            html += (
+                '            <div style="display:flex;align-items:center;padding:4px 10px;cursor:pointer;border-radius:3px;margin:1px 0;" asok-on:click.stop="selected=child.id;$refs.hidden_'
+                + self.name
+                + ".value=child.id\" asok-bind:style=\"selected==child.id ? 'background:#e7f3ff;color:#0056b3' : ''\">"
+            )
             html += '              <span style="color:#ccc;margin-right:8px;">└</span>'
             html += '              <span asok-text="child.name"></span>'
-            html += '            </div>'
-            html += '          </template>'
-            html += '        </div>'
-            html += '      </template>'
-            html += '    </div>'
-            html += '  </template>'
-            html += '</div>'
+            html += "            </div>"
+            html += "          </template>"
+            html += "        </div>"
+            html += "      </template>"
+            html += "    </div>"
+            html += "  </template>"
+            html += "</div>"
 
             html += f'<input type="hidden" name="{self.name}" id="{self.name}" asok-model="selected" asok-ref="hidden_{self.name}">'
-            html += '</div>'
+            html += "</div>"
             return html
 
             return html
@@ -970,7 +1238,12 @@ class Form:
                     field.value = request.form.get(name, "")
         return self
 
-    def validate(self, request: Optional[Request] = None, csrf: bool = True) -> bool:
+    def validate(
+        self,
+        request: Optional[Request] = None,
+        csrf: bool = True,
+        raise_error: bool = False,
+    ) -> bool:
         """Run validation rules against the submitted request data.
 
         Returns True if all fields are valid, False otherwise.
@@ -979,6 +1252,7 @@ class Form:
         Args:
             request: The request object to validate (if not already bound).
             csrf: If True, automatically performs CSRF verification.
+            raise_error: If True, raises a ValidationError if validation fails.
         """
         if request is not None and self._request is None:
             self.bind(request)
@@ -1005,8 +1279,6 @@ class Form:
             else:
                 schema[name] = field.rules
 
-        # from .validation import Validator
-
         v = Validator(
             self._request.form, self._request.files, translate=self._request.__
         )
@@ -1016,6 +1288,9 @@ class Form:
         for name, error in v.errors.items():
             if name in self._fields:
                 self._fields[name]._error = error
+
+        if not result and raise_error:
+            raise ValidationError("Form validation failed", errors=v.errors)
 
         return result
 
@@ -1054,6 +1329,7 @@ class Form:
 
     @property
     def errors(self):
+        """Return a dictionary of validation errors for each field."""
         return {name: f._error for name, f in self._fields.items() if f._error}
 
     @property
@@ -1155,7 +1431,7 @@ class Form:
                 rules_parts.append(field.rules)
 
             rules = "|".join(rules_parts)
-            attrs = {}
+            attrs = dict(getattr(field, "attrs", {}))
             if max_length:
                 attrs["maxlength"] = max_length
 
@@ -1170,26 +1446,36 @@ class Form:
                         schema[name] = form_method(label, rules, messages, **attrs)
                     elif form_type == "rating":
                         max_stars = attrs.pop("max_stars", 5)
-                        schema[name] = form_method(label, rules, messages, max_stars=max_stars, **attrs)
+                        schema[name] = form_method(
+                            label, rules, messages, max_stars=max_stars, **attrs
+                        )
                     elif form_type == "otp":
                         length = attrs.pop("length", 6)
-                        schema[name] = form_method(label, rules, messages, length=length, **attrs)
+                        schema[name] = form_method(
+                            label, rules, messages, length=length, **attrs
+                        )
                     elif form_type == "month":
                         schema[name] = form_method(label, rules, messages, **attrs)
                     elif form_type == "timerange":
                         schema[name] = form_method(label, rules, messages, **attrs)
                     elif form_type == "wysiwyg":
                         height = attrs.pop("height", 300)
-                        schema[name] = form_method(label, rules, messages, height=height, **attrs)
+                        schema[name] = form_method(
+                            label, rules, messages, height=height, **attrs
+                        )
                     elif form_type == "phone":
                         schema[name] = form_method(label, rules, messages, **attrs)
                     elif form_type == "autocomplete":
                         items = attrs.pop("items", [])
-                        schema[name] = form_method(label, items, rules, messages, **attrs)
+                        schema[name] = form_method(
+                            label, items, rules, messages, **attrs
+                        )
                     elif form_type == "signature":
                         width = attrs.pop("width", 400)
                         height = attrs.pop("height", 200)
-                        schema[name] = form_method(label, rules, messages, width=width, height=height, **attrs)
+                        schema[name] = form_method(
+                            label, rules, messages, width=width, height=height, **attrs
+                        )
                     else:
                         # Default: call with standard params
                         schema[name] = form_method(label, rules, messages, **attrs)
@@ -1213,7 +1499,9 @@ class Form:
             elif getattr(field, "is_datetime", False):
                 schema[name] = cls.datetime_local(label, rules, messages, **attrs)
             elif getattr(field, "is_enum", False):
-                schema[name] = cls.enum(label, field.enum_class, rules, messages, **attrs)
+                schema[name] = cls.enum(
+                    label, field.enum_class, rules, messages, **attrs
+                )
             elif getattr(field, "is_json", False):
                 schema[name] = cls.json(label, rules, messages, **attrs)
             elif getattr(field, "is_decimal", False):
@@ -1234,12 +1522,15 @@ class Form:
                     except Exception:
                         items = []
                     schema[name] = cls.dropdown(
-                        label, items,
+                        label,
+                        items,
                         title=getattr(field, "dropdown_title", "name"),
                         subtitle=getattr(field, "dropdown_subtitle", None),
                         image=getattr(field, "dropdown_image", None),
                         searchable=getattr(field, "dropdown_searchable", True),
-                        rules=rules, messages=messages, **attrs
+                        rules=rules,
+                        messages=messages,
+                        **attrs,
                     )
                 else:
                     try:
@@ -1250,10 +1541,13 @@ class Form:
                     schema[name] = cls.select(label, choices, rules, messages, **attrs)
             elif getattr(field, "is_dropdown", False):
                 schema[name] = cls.dropdown(
-                    label, [],
+                    label,
+                    [],
                     searchable=getattr(field, "dropdown_searchable", True),
                     choices=field.choices,
-                    rules=rules, messages=messages, **attrs
+                    rules=rules,
+                    messages=messages,
+                    **attrs,
                 )
             elif getattr(field, "is_boolean", False):
                 schema[name] = cls.checkbox(label, "", messages, **attrs)
@@ -1388,9 +1682,9 @@ class Form:
         Example:
             avatar = form.image("Avatar", rules="ext:jpg,png|size:2M", preview=True)
         """
-        attrs['preview'] = preview
-        attrs['max_width'] = max_width
-        attrs['max_height'] = max_height
+        attrs["preview"] = preview
+        attrs["max_width"] = max_width
+        attrs["max_height"] = max_height
         return ("image", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1417,8 +1711,8 @@ class Form:
         Example:
             tags = form.tags("Skills", choices=[("python", "Python"), ("js", "JavaScript")], searchable=True)
         """
-        attrs['searchable'] = searchable
-        attrs['allow_custom'] = allow_custom
+        attrs["searchable"] = searchable
+        attrs["allow_custom"] = allow_custom
         return ("tags", label, rules, messages, choices, attrs)
 
     @staticmethod
@@ -1443,8 +1737,8 @@ class Form:
         Example:
             daterange = form.daterange("Booking Period", start_label="Check-in", end_label="Check-out")
         """
-        attrs['start_label'] = start_label
-        attrs['end_label'] = end_label
+        attrs["start_label"] = start_label
+        attrs["end_label"] = end_label
         return ("daterange", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1487,7 +1781,7 @@ class Form:
         Example:
             code = form.otp("Verification Code", length=6, rules="required")
         """
-        attrs['length'] = length
+        attrs["length"] = length
         return ("otp", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1530,7 +1824,7 @@ class Form:
         Example:
             rating = form.rating("Rate this product", max_stars=5, rules="required")
         """
-        attrs['max_stars'] = max_stars
+        attrs["max_stars"] = max_stars
         return ("rating", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1555,8 +1849,8 @@ class Form:
         Example:
             hours = form.timerange("Business Hours", start_label="Opens", end_label="Closes")
         """
-        attrs['start_label'] = start_label
-        attrs['end_label'] = end_label
+        attrs["start_label"] = start_label
+        attrs["end_label"] = end_label
         return ("timerange", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1581,8 +1875,8 @@ class Form:
         Example:
             photos = form.files("Product Photos", max_files=5, rules="ext:jpg,png")
         """
-        attrs['max_files'] = max_files
-        attrs['preview'] = preview
+        attrs["max_files"] = max_files
+        attrs["preview"] = preview
         return ("files", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1607,7 +1901,7 @@ class Form:
         Example:
             city = form.autocomplete("City", items=["Paris", "London", "New York"], min_chars=2)
         """
-        attrs['min_chars'] = min_chars
+        attrs["min_chars"] = min_chars
         return ("autocomplete", label, rules, messages, items, attrs)
 
     @staticmethod
@@ -1655,7 +1949,7 @@ class Form:
         Example:
             mobile = form.phone("Mobile Number", default_country="FR", rules="required")
         """
-        attrs['default_country'] = default_country
+        attrs["default_country"] = default_country
         return ("phone", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1678,7 +1972,7 @@ class Form:
         Example:
             content = form.wysiwyg("Article Content", height=400, rules="required")
         """
-        attrs['height'] = height
+        attrs["height"] = height
         return ("wysiwyg", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1701,7 +1995,7 @@ class Form:
         Example:
             files = form.dropzone("Drop files here", max_files=5, rules="ext:pdf,doc")
         """
-        attrs['max_files'] = max_files
+        attrs["max_files"] = max_files
         return ("dropzone", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1726,8 +2020,8 @@ class Form:
         Example:
             signature = form.signature("Sign Here", width=500, height=150, rules="required")
         """
-        attrs['width'] = width
-        attrs['height'] = height
+        attrs["width"] = width
+        attrs["height"] = height
         return ("signature", label, rules, messages, None, attrs)
 
     @staticmethod
@@ -1781,8 +2075,6 @@ class Form:
             ])
         """
         return ("treeselect", label, rules, messages, items, attrs)
-
-
 
     @staticmethod
     def checkbox(

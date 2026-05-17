@@ -1,4 +1,4 @@
-"""Asok Admin — self-contained Django-style admin interface.
+"""Asok Admin — self-contained admin interface.
 
 Usage in wsgi.py::
 
@@ -88,8 +88,83 @@ class ModelAdmin:
     actions: list[str] = None
     vector_search_field: str = None
 
+
 # Above this many target rows, FK fields render as autocomplete instead of <select>
 FK_AUTOCOMPLETE_THRESHOLD = 200
+
+# Whitelist of allowed MIME types for file uploads in admin
+# Add more types as needed, but be restrictive for security
+ALLOWED_UPLOAD_MIMES = {
+    # Images
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",  # Be cautious with SVG - can contain JS
+    "image/bmp",
+    "image/x-icon",  # Favicon
+    # Documents
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+    "application/msword",  # .doc
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+    "application/vnd.ms-excel",  # .xls
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # .xlsx
+    # Videos
+    "video/mp4",
+    "video/mpeg",
+    "video/quicktime",  # .mov
+    "video/x-msvideo",  # .avi
+    "video/webm",
+    "video/x-matroska",  # .mkv
+    "video/x-flv",  # .flv
+    # Audio
+    "audio/mpeg",  # .mp3
+    "audio/wav",
+    "audio/x-wav",
+    "audio/ogg",
+    "audio/webm",
+    "audio/aac",
+    "audio/flac",
+    "audio/x-m4a",  # .m4a
+    # Archives
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-rar-compressed",  # .rar
+    "application/x-7z-compressed",  # .7z
+    "application/x-tar",  # .tar
+    "application/gzip",  # .gz
+}
+
+# Extensions to block regardless of MIME type
+BLOCKED_EXTENSIONS = {
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".pif",
+    ".scr",  # Windows executables
+    ".php",
+    ".php3",
+    ".php4",
+    ".php5",
+    ".phtml",  # PHP scripts
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",  # Shell scripts
+    ".py",
+    ".pyc",
+    ".pyo",  # Python scripts
+    ".js",
+    ".mjs",  # JavaScript (except in specific contexts)
+    ".jar",
+    ".war",  # Java archives
+    ".app",
+    ".dmg",
+    ".pkg",  # macOS executables/installers
+}
 
 _DEFAULT_USER_MODEL_SRC = """\
 from asok import Field, Model
@@ -97,11 +172,15 @@ from asok import Field, Model
 
 class User(Model):
     email = Field.String(unique=True, nullable=False)
-    password = Field.Password()
+    password = Field.Password(
+        rules="required|password_strength",
+        messages={"password_strength": "Password must be 8+ characters with uppercase, number, and special char."}
+    )
     name = Field.String()
     is_admin = Field.Boolean(default=False)
     totp_secret = Field.String(nullable=True, hidden=True)
     totp_enabled = Field.Boolean(default=False)
+    backup_codes = Field.String(nullable=True, hidden=True)  # JSON array of hashed codes
     created_at = Field.CreatedAt()
 """
 
@@ -246,6 +325,112 @@ def _totp_uri(secret_b32, account, issuer):
     return f"otpauth://totp/{label}?{params}"
 
 
+def _generate_backup_codes(count=10):
+    """Generate backup codes (8 chars alphanumeric, easy to type)."""
+    codes = []
+    for _ in range(count):
+        # 8 chars: XXXX-XXXX format for readability
+        code = "".join(
+            secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)
+        )
+        formatted = f"{code[:4]}-{code[4:]}"
+        codes.append(formatted)
+    return codes
+
+
+def _hash_backup_code(code):
+    """Hash a backup code with PBKDF2-SHA256."""
+    import hashlib
+
+    # Remove hyphen for hashing
+    code_clean = code.replace("-", "")
+    salt = secrets.token_hex(16)
+    hash_bytes = hashlib.pbkdf2_hmac(
+        "sha256", code_clean.encode(), salt.encode(), 600000
+    )
+    return f"{salt}${hash_bytes.hex()}"
+
+
+def _verify_backup_code(code, hashed):
+    """Verify a backup code against its hash."""
+    import hashlib
+    import hmac
+
+    code_clean = code.replace("-", "").upper()
+    try:
+        salt, expected_hash = hashed.split("$")
+        hash_bytes = hashlib.pbkdf2_hmac(
+            "sha256", code_clean.encode(), salt.encode(), 600000
+        )
+        return hmac.compare_digest(hash_bytes.hex(), expected_hash)
+    except Exception:
+        return False
+
+
+def _encrypt_totp_secret(secret, master_key):
+    """Encrypt TOTP secret with XOR + HMAC (stdlib only, zero-dep).
+
+    Format: salt$iv$ciphertext$hmac
+    - salt: 16 bytes hex (for key derivation)
+    - iv: 16 bytes hex (initialization vector)
+    - ciphertext: XOR encrypted secret
+    - hmac: HMAC-SHA256 for integrity
+    """
+    import hashlib
+    import hmac
+
+    # Generate salt and IV
+    salt = secrets.token_bytes(16)
+    iv = secrets.token_bytes(16)
+
+    # Derive encryption key from master key + salt (OWASP 2026: 600k iterations)
+    key = hashlib.pbkdf2_hmac("sha256", master_key.encode(), salt, 600000)
+
+    # XOR encryption (repeat key to match plaintext length)
+    plaintext = secret.encode()
+    keystream = (key * ((len(plaintext) // len(key)) + 1))[: len(plaintext)]
+    ciphertext = bytes(p ^ k for p, k in zip(plaintext, keystream))
+
+    # HMAC for integrity (over salt + iv + ciphertext)
+    mac = hmac.new(key, salt + iv + ciphertext, hashlib.sha256).digest()
+
+    # Encode and return
+    return f"{salt.hex()}${iv.hex()}${ciphertext.hex()}${mac.hex()}"
+
+
+def _decrypt_totp_secret(encrypted, master_key):
+    """Decrypt TOTP secret encrypted with _encrypt_totp_secret."""
+    import hashlib
+    import hmac
+
+    try:
+        # Parse components
+        parts = encrypted.split("$")
+        if len(parts) != 4:
+            return None
+
+        salt = bytes.fromhex(parts[0])
+        iv = bytes.fromhex(parts[1])
+        ciphertext = bytes.fromhex(parts[2])
+        expected_mac = bytes.fromhex(parts[3])
+
+        # Derive key (OWASP 2026: 600k iterations)
+        key = hashlib.pbkdf2_hmac("sha256", master_key.encode(), salt, 600000)
+
+        # Verify HMAC
+        mac = hmac.new(key, salt + iv + ciphertext, hashlib.sha256).digest()
+        if not hmac.compare_digest(mac, expected_mac):
+            return None  # Integrity check failed
+
+        # XOR decryption
+        keystream = (key * ((len(ciphertext) // len(key)) + 1))[: len(ciphertext)]
+        plaintext = bytes(c ^ k for c, k in zip(ciphertext, keystream))
+
+        return plaintext.decode()
+    except Exception:
+        return None
+
+
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _TPL_DIR = os.path.join(_PKG_DIR, "templates")
 _STATIC_DIR = os.path.join(_PKG_DIR, "static")
@@ -313,6 +498,7 @@ class Admin:
         def recent_users(request):
             return "<ul>...</ul>"
     """
+
     def __init__(
         self,
         app,
@@ -346,6 +532,7 @@ class Admin:
         app._admin = self
 
     def t(self, request, key, **kwargs):
+        """Helper to translate a key into the active admin locale."""
         locale = self._resolve_locale(request)
         return translate(locale, key, **kwargs)
 
@@ -411,35 +598,29 @@ class Admin:
         pass
 
     def _get_user_2fa(self, user_id):
-        """Return (secret, enabled) for a user via raw SQL."""
+        """Return (secret, enabled) for a user. Decrypts the secret."""
         User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
         if not User or not user_id:
-            return None, False
-        try:
-            with User._get_conn() as conn:
-                row = conn.execute(
-                    f"SELECT totp_secret, totp_enabled FROM {User._table} WHERE id = ?",
-                    (user_id,),
-                ).fetchone()
-                if not row:
-                    return None, False
-                return row[0], bool(row[1])
-        except Exception:
             return None, False
 
-    def _set_user_2fa(self, user_id, secret, enabled):
-        User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
-        if not User or not user_id:
-            return
         try:
-            with User._get_conn() as conn:
-                conn.execute(
-                    f"UPDATE {User._table} SET totp_secret = ?, totp_enabled = ? "
-                    f"WHERE id = ?",
-                    (secret, 1 if enabled else 0, user_id),
-                )
+            user = User.find(id=user_id)
+            if not user:
+                return None, False
+
+            encrypted_secret = getattr(user, "totp_secret", None)
+            enabled = bool(getattr(user, "totp_enabled", False))
+
+            # Decrypt the secret if present
+            if encrypted_secret:
+                master_key = self.app.config.get("SECRET_KEY", "")
+                secret = _decrypt_totp_secret(encrypted_secret, master_key)
+            else:
+                secret = None
+
+            return secret, enabled
         except Exception:
-            pass
+            return None, False
 
     def _inject_user_methods(self):
         """Attach roles accessor, can() helper, and BelongsToMany relation
@@ -818,6 +999,9 @@ class Admin:
         if path == "/2fa-disable":
             return self._twofa_disable(request)
 
+        if path == "/2fa-backup-codes":
+            return self._twofa_backup_codes(request)
+
         if path == "/search":
             return self._search(request)
 
@@ -856,7 +1040,10 @@ class Admin:
                 request,
                 404,
                 self.t(request, "Page Not Found"),
-                self.t(request, "The page you are looking for does not exist or has been moved."),
+                self.t(
+                    request,
+                    "The page you are looking for does not exist or has been moved.",
+                ),
             )
 
         if not self._can(request, slug, "view"):
@@ -911,7 +1098,9 @@ class Admin:
                 request,
                 404,
                 self.t(request, "Item Not Found"),
-                self.t(request, "The requested item does not exist or has been deleted."),
+                self.t(
+                    request, "The requested item does not exist or has been deleted."
+                ),
             )
 
         if len(parts) == 3:
@@ -1077,7 +1266,9 @@ class Admin:
                     request.flash(
                         "success",
                         self.t(
-                            request, "Welcome back, {name}!", name=user.name or user.email
+                            request,
+                            "Welcome back, {name}!",
+                            name=user.name or user.email,
                         ),
                     )
                     raise RedirectException(self.prefix)
@@ -1094,7 +1285,10 @@ class Admin:
         except AbortException as e:
             # Special handling for CSRF failure in login form to avoid 403 pages
             if e.status == 403:
-                request.flash("error", self.t(request, "Security session expired. Please try again."))
+                request.flash(
+                    "error",
+                    self.t(request, "Security session expired. Please try again."),
+                )
             else:
                 raise
         return self._render(request, "login.html", form=form)
@@ -1135,7 +1329,35 @@ class Admin:
                 )
                 return self._render(request, "2fa.html", form=form)
             secret, enabled = self._get_user_2fa(user.id)
+            code_valid = False
+            used_backup = False
+
+            # Try TOTP code first
             if enabled and _totp_verify(secret, form.code.value):
+                code_valid = True
+
+            # If TOTP fails, try backup codes
+            if not code_valid and user.backup_codes:
+                import json
+
+                try:
+                    backup_codes_hashed = json.loads(user.backup_codes)
+                    code_input = form.code.value.strip().upper()
+
+                    # Try each backup code
+                    for i, hashed_code in enumerate(backup_codes_hashed):
+                        if _verify_backup_code(code_input, hashed_code):
+                            code_valid = True
+                            used_backup = True
+                            # Remove used backup code
+                            backup_codes_hashed.pop(i)
+                            user.backup_codes = json.dumps(backup_codes_hashed)
+                            user.save()
+                            break
+                except Exception:
+                    pass  # Invalid JSON or other error, fall through to failure
+
+            if code_valid:
                 self._login_rate_reset(request)
                 try:
                     request.session.pop("pending_2fa_uid", None)
@@ -1147,8 +1369,17 @@ class Admin:
                     "login",
                     "User",
                     entity_id=user.id,
-                    changes={"twofa": True},
+                    changes={"twofa": True, "backup_code": used_backup},
                 )
+                if used_backup:
+                    request.flash(
+                        "warning",
+                        self.t(
+                            request,
+                            "Backup code used. You have {count} codes remaining.",
+                            count=len(json.loads(user.backup_codes or "[]")),
+                        ),
+                    )
                 request.flash(
                     "success",
                     self.t(
@@ -1189,16 +1420,48 @@ class Admin:
         )
         if request.method == "POST" and form.validate():
             if _totp_verify(secret, form.code.value):
-                self._set_user_2fa(u.id, secret, True)
+                # Generate backup codes
+                backup_codes_plain = _generate_backup_codes(10)
+                backup_codes_hashed = [
+                    _hash_backup_code(code) for code in backup_codes_plain
+                ]
+
+                # Encrypt TOTP secret
+                import json
+
+                master_key = self.app.config.get("SECRET_KEY", "")
+                encrypted_secret = _encrypt_totp_secret(secret, master_key)
+
+                # CRITICAL: Activate 2FA BEFORE showing backup codes (atomic SQL update)
+                User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
+                with User._get_conn() as conn:
+                    conn.execute(
+                        f"UPDATE {User._table} SET totp_secret = ?, totp_enabled = ?, backup_codes = ? WHERE id = ?",
+                        (encrypted_secret, 1, json.dumps(backup_codes_hashed), u.id),
+                    )
+
                 try:
                     request.session.pop("pending_2fa_secret", None)
                 except Exception:
                     pass
+
+                # Store codes temporarily in session with 5-min expiration
+                import time
+
+                request.session["_backup_codes_display"] = {
+                    "codes": backup_codes_plain,
+                    "expires_at": time.time() + 300,  # 5 minutes
+                }
+
                 self._log(request, "2fa_enabled", "User", entity_id=u.id)
                 request.flash(
-                    "success", self.t(request, "Two-factor authentication enabled.")
+                    "success",
+                    self.t(
+                        request,
+                        "Two-factor authentication enabled. Save your backup codes!",
+                    ),
                 )
-                raise RedirectException(self.prefix + "/me")
+                raise RedirectException(self.prefix + "/2fa-backup-codes")
             request.flash("error", self.t(request, "Invalid code, try again."))
         return self._render(
             request,
@@ -1225,10 +1488,71 @@ class Admin:
         if not pw or not u.check_password("password", pw):
             request.flash("error", self.t(request, "Current password is incorrect."))
             raise RedirectException(self.prefix + "/me")
-        self._set_user_2fa(u.id, None, False)
+
+        # Disable 2FA and clear backup codes (atomic SQL update)
+        User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
+        with User._get_conn() as conn:
+            conn.execute(
+                f"UPDATE {User._table} SET totp_secret = NULL, totp_enabled = 0, backup_codes = NULL WHERE id = ?",
+                (u.id,),
+            )
+
         self._log(request, "2fa_disabled", "User", entity_id=u.id)
         request.flash("success", self.t(request, "Two-factor authentication disabled."))
         raise RedirectException(self.prefix + "/me")
+
+    def _twofa_backup_codes(self, request):
+        """Display backup codes once after 2FA setup."""
+        u = request.user
+        if not u:
+            raise RedirectException(self.prefix + "/login")
+
+        # POST: User confirms they saved the codes → clear from session
+        if request.method == "POST":
+            request.session.pop("_backup_codes_display", None)
+            request.flash("success", self.t(request, "2FA setup complete!"))
+            raise RedirectException(self.prefix + "/me")
+
+        # GET: Display codes (keep in session until confirmed, max 5 min)
+        import time
+
+        codes_data = request.session.get("_backup_codes_display")
+
+        if not codes_data:
+            request.flash(
+                "error", self.t(request, "Backup codes have already been displayed.")
+            )
+            raise RedirectException(self.prefix + "/me")
+
+        # Check expiration (5 minutes timeout)
+        if isinstance(codes_data, dict):
+            if time.time() > codes_data.get("expires_at", 0):
+                request.session.pop("_backup_codes_display", None)
+                request.flash(
+                    "error",
+                    self.t(request, "Backup codes expired. Please regenerate 2FA."),
+                )
+                raise RedirectException(self.prefix + "/me")
+            codes = codes_data.get("codes", [])
+        else:
+            # Legacy format (list) - accept but warn
+            codes = codes_data if isinstance(codes_data, list) else []
+
+        if not codes:
+            request.flash("error", self.t(request, "No backup codes available."))
+            raise RedirectException(self.prefix + "/me")
+
+        return self._render(
+            request,
+            "2fa_backup_codes.html",
+            codes=codes,
+            active=None,
+            breadcrumbs=[
+                {"label": "Dashboard", "url": self.prefix},
+                {"label": "My profile", "url": self.prefix + "/me"},
+                {"label": "Backup Codes", "url": None},
+            ],
+        )
 
     # ── Audit log ────────────────────────────────────────────
 
@@ -1435,25 +1759,25 @@ class Admin:
                 pw_field = "password" if "password" in me._fields else None
                 if cur or new or conf:
                     if not pw_field:
-                        form._fields["new_password"]._error = (
-                            "User model has no password field"
-                        )
+                        form._fields[
+                            "new_password"
+                        ]._error = "User model has no password field"
                     elif not cur:
-                        form._fields["current_password"]._error = (
-                            "Current password required"
-                        )
+                        form._fields[
+                            "current_password"
+                        ]._error = "Current password required"
                     elif not me.check_password(pw_field, cur):
-                        form._fields["current_password"]._error = (
-                            "Current password is incorrect"
-                        )
+                        form._fields[
+                            "current_password"
+                        ]._error = "Current password is incorrect"
                     elif new != conf:
-                        form._fields["confirm_password"]._error = (
-                            "Passwords do not match"
-                        )
+                        form._fields[
+                            "confirm_password"
+                        ]._error = "Passwords do not match"
                     elif len(new) < 6:
-                        form._fields["new_password"]._error = (
-                            "Password must be at least 6 characters"
-                        )
+                        form._fields[
+                            "new_password"
+                        ]._error = "Password must be at least 6 characters"
                     else:
                         setattr(me, pw_field, new)
                         changed["password"] = ["***", "***"]
@@ -1676,6 +2000,17 @@ class Admin:
 
     def _col_value(self, item, col, model):
         field = model._fields.get(col)
+        # Mask sensitive fields (passwords, 2FA secrets, backup codes)
+        if field and (
+            getattr(field, "is_password", False)
+            or col in ("totp_secret", "backup_codes")
+        ):
+            val = getattr(item, col, None)
+            if val:
+                return SafeString(
+                    '<span style="letter-spacing:2px;color:var(--fg-3)">••••••••</span>'
+                )
+            return SafeString('<span class="muted">—</span>')
         # Never render hidden fields, even if explicitly requested in columns
         if field and getattr(field, "hidden", False):
             return SafeString('<span class="muted">[hidden]</span>')
@@ -1947,7 +2282,9 @@ class Admin:
                 request,
                 404,
                 self.t(request, "Trash Not Available"),
-                self.t(request, "This model does not support soft delete functionality."),
+                self.t(
+                    request, "This model does not support soft delete functionality."
+                ),
             )
         return self._list(request, entry, trash=True)
 
@@ -2349,6 +2686,9 @@ class Admin:
         Returns (form_field_tuple, meta_dict) or (None, None) if the field
         should be skipped entirely.
         """
+        # Skip hidden fields EXCEPT passwords (passwords are hidden but editable)
+        if getattr(field, "hidden", False) and not getattr(field, "is_password", False):
+            return None, None
         if getattr(field, "is_soft_delete", False):
             return None, None
         is_readonly = name in readonly_set
@@ -2472,7 +2812,7 @@ class Admin:
 
         schema = {}
         meta = {}
-        is_creation = not (item and getattr(item, 'id', None))
+        is_creation = not (item and getattr(item, "id", None))
         for name, field in model._fields.items():
             # Skip excluded fields
             if name in form_exclude:
@@ -2794,6 +3134,38 @@ class Admin:
             if getattr(field, "is_file", False):
                 upload = request.files.get(name)
                 if upload and upload.filename:
+                    # SECURITY: Validate file extension and MIME type
+                    import mimetypes
+
+                    filename_lower = upload.filename.lower()
+
+                    # Check blocked extensions
+                    for blocked_ext in BLOCKED_EXTENSIONS:
+                        if filename_lower.endswith(blocked_ext):
+                            request.flash(
+                                "error",
+                                self.t(
+                                    request,
+                                    "File type not allowed: {ext}",
+                                    ext=blocked_ext,
+                                ),
+                            )
+                            continue
+
+                    # Validate MIME type
+                    mime_type = (
+                        upload.content_type or mimetypes.guess_type(upload.filename)[0]
+                    )
+                    if mime_type and mime_type not in ALLOWED_UPLOAD_MIMES:
+                        request.flash(
+                            "error",
+                            self.t(
+                                request, "File type not allowed: {mime}", mime=mime_type
+                            ),
+                        )
+                        continue
+
+                    # Save the file
                     upload.save(os.path.join(field.upload_to or "", upload.filename))
                     setattr(item, name, upload.filename)
                 continue

@@ -31,7 +31,9 @@ def test_between_placeholders():
     """Test that {min} and {max} placeholders work with between rule."""
     data = {"age": "5"}
     v = Validator(data)
-    result = v.rule("age", "between:10,99", {"between": "Must be between {min} and {max}"})
+    result = v.rule(
+        "age", "between:10,99", {"between": "Must be between {min} and {max}"}
+    )
 
     assert result is False
     assert "age" in v.errors
@@ -40,6 +42,7 @@ def test_between_placeholders():
 
 def test_ext_placeholder():
     """Test that {extensions} placeholder is interpolated."""
+
     # Simulated file data
     class FakeFile:
         filename = "test.txt"
@@ -48,7 +51,9 @@ def test_ext_placeholder():
     data = {}
     files = {"document": FakeFile()}
     v = Validator(data, files)
-    result = v.rule("document", "ext:pdf,docx", {"ext": "Only {extensions} files allowed"})
+    result = v.rule(
+        "document", "ext:pdf,docx", {"ext": "Only {extensions} files allowed"}
+    )
 
     assert result is False
     assert "document" in v.errors
@@ -59,7 +64,9 @@ def test_field_placeholder():
     """Test that {field} placeholder shows field name."""
     data = {"user_name": "ab"}
     v = Validator(data)
-    result = v.rule("user_name", "min:5", {"min": "{field} must have at least {min} characters"})
+    result = v.rule(
+        "user_name", "min:5", {"min": "{field} must have at least {min} characters"}
+    )
 
     assert result is False
     assert "user_name" in v.errors
@@ -70,9 +77,11 @@ def test_same_placeholder():
     """Test that {other} placeholder works with same rule."""
     data = {"password": "secret123", "password_confirmation": "different"}
     v = Validator(data)
-    result = v.rule("password", "same:password_confirmation", {
-        "same": "Password must match {other}"
-    })
+    result = v.rule(
+        "password",
+        "same:password_confirmation",
+        {"same": "Password must match {other}"},
+    )
 
     assert result is False
     assert "password" in v.errors
@@ -83,9 +92,9 @@ def test_in_placeholder():
     """Test that {values} placeholder works with in rule."""
     data = {"status": "pending"}
     v = Validator(data)
-    result = v.rule("status", "in:active,inactive", {
-        "in": "Status must be one of: {values}"
-    })
+    result = v.rule(
+        "status", "in:active,inactive", {"in": "Status must be one of: {values}"}
+    )
 
     assert result is False
     assert "status" in v.errors
@@ -140,12 +149,16 @@ def test_multiple_placeholders_in_one_message():
     """Test using multiple placeholders in a single message."""
     data = {"username": "a"}
     v = Validator(data)
-    result = v.rule("username", "min:3", {
-        "min": "{field} needs at least {min} characters (you entered {arg})"
-    })
+    result = v.rule(
+        "username",
+        "min:3",
+        {"min": "{field} needs at least {min} characters (you entered {arg})"},
+    )
 
     assert result is False
-    assert v.errors["username"] == "Username needs at least 3 characters (you entered 3)"
+    assert (
+        v.errors["username"] == "Username needs at least 3 characters (you entered 3)"
+    )
 
 
 def test_missing_placeholder_not_replaced():

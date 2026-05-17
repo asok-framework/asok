@@ -6,7 +6,9 @@ if TYPE_CHECKING:
     from .request import Request
 
 # Thread-safe global request context
-request_var: contextvars.ContextVar[Optional["Request"]] = contextvars.ContextVar("request", default=None)
+request_var: contextvars.ContextVar[Optional["Request"]] = contextvars.ContextVar(
+    "request", default=None
+)
 
 
 @contextmanager

@@ -71,7 +71,7 @@ def test_nested_quotes():
     context = {"msg": lambda x: x}
     result = render_template_string(template, context)
     # HTML escaping converts " to &quot;
-    assert result == 'This is a &quot;test&quot;'
+    assert result == "This is a &quot;test&quot;"
 
 
 def test_escaped_quotes_in_strings():

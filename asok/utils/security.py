@@ -56,6 +56,7 @@ def is_safe_url(url: str, allowed_host: Optional[str] = None) -> bool:
             return False
         # Ensure it starts with http://host or https://host
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         return parsed.netloc == allowed_host
 

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # (like mandatory long SECRET_KEY or allowed_origins validation).
 os.environ["DEBUG"] = "true"
 os.environ["ASOK_ENV"] = "development"
+os.environ["SECRET_KEY"] = "test-secret-key-do-not-use-in-prod"
 
 from asok.core import Asok
 from asok.testing import TestClient

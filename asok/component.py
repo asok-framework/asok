@@ -21,6 +21,10 @@ def exposed(fn):
 
 
 class ComponentMeta(type):
+    """Metaclass for all Asok Components.
+    Automatically registers components in the global registry for server-side lookup.
+    """
+
     def __new__(mcs, name, bases, attrs):
         cls = super().__new__(mcs, name, bases, attrs)
         if name != "Component":
@@ -77,7 +81,27 @@ class Component(metaclass=ComponentMeta):
 
         path = os.path.join(dir_path, name)
         if not os.path.exists(path):
-            return f"<!-- Template {name} not found in {dir_path} -->"
+            # Try automatic extension resolution
+            resolved = False
+            # 1. Try appending
+            for ext in (".html", ".asok"):
+                if os.path.exists(path + ext):
+                    path = path + ext
+                    resolved = True
+                    break
+
+            # 2. Try swapping
+            if not resolved:
+                base_path, current_ext = os.path.splitext(path)
+                if current_ext == ".html" and os.path.exists(base_path + ".asok"):
+                    path = base_path + ".asok"
+                    resolved = True
+                elif current_ext == ".asok" and os.path.exists(base_path + ".html"):
+                    path = base_path + ".html"
+                    resolved = True
+
+            if not resolved:
+                return f"<!-- Template {name} not found in {dir_path} -->"
 
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
@@ -87,7 +111,26 @@ class Component(metaclass=ComponentMeta):
         raise NotImplementedError
 
     def _get_state(self) -> dict[str, Any]:
-        """Extract all public, serializable state from the component."""
+        """Extract all public, serializable state from the component.
+
+        SECURITY: Only JSON-serializable types are allowed to prevent
+        deserialization attacks (no pickle).
+        """
+        # Whitelist of safe types for serialization
+        SAFE_TYPES = (str, int, float, bool, type(None), list, dict, tuple)
+
+        def is_safe_value(val: Any) -> bool:
+            """Check if a value is safe to serialize."""
+            if isinstance(val, SAFE_TYPES):
+                if isinstance(val, (list, tuple)):
+                    return all(is_safe_value(item) for item in val)
+                elif isinstance(val, dict):
+                    return all(
+                        isinstance(k, str) and is_safe_value(v) for k, v in val.items()
+                    )
+                return True
+            return False
+
         state = {}
         # 1. Collect class-level non-callable, non-private attributes
         #    Walk the MRO in reverse so more derived classes win.
@@ -96,11 +139,17 @@ class Component(metaclass=ComponentMeta):
                 continue
             for k, v in cls.__dict__.items():
                 if not k.startswith("_") and not callable(v):
-                    state[k] = v
+                    # SECURITY: Only add safe types
+                    if is_safe_value(v):
+                        state[k] = v
+
         # 2. Overlay with instance-level overrides (set via __init__ or methods)
         for k, v in self.__dict__.items():
             if not k.startswith("_") and not callable(v):
-                state[k] = v
+                # SECURITY: Only add safe types
+                if is_safe_value(v):
+                    state[k] = v
+
         return state
 
     def _sign_state(self, secret_key: str) -> str:
@@ -133,6 +182,7 @@ class Component(metaclass=ComponentMeta):
             ts = state.pop("_ts", 0)
             if time.time() - ts > 3600:
                 import logging
+
                 logging.getLogger(__name__).warning(
                     "Expired state signature (age: %d seconds)", time.time() - ts
                 )
@@ -150,7 +200,11 @@ class Component(metaclass=ComponentMeta):
     def __str__(self) -> str:
         """Render the component to an HTML string including its signed state."""
         # We need the secret key to sign the state
-        secret = os.getenv("SECRET_KEY", "dev-secret-key")
+        secret = os.getenv("SECRET_KEY")
+        if not secret:
+            raise RuntimeError(
+                "SECRET_KEY is not configured. This should never happen if Asok() is properly initialized."
+            )
         # Collect state for context (including class defaults)
         ctx = self._get_state()
         ctx["session"] = self.session

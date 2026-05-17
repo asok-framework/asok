@@ -45,6 +45,17 @@ def optimize_image(
     name = "cwebp.exe" if suffix.endswith(".exe") else "cwebp"
     bin_path = os.path.join(root, ".asok", "bin", name)
 
+    # SECURITY: Ensure that the binary stays strictly within the authorized .asok/bin directory
+    try:
+        abs_root = os.path.abspath(root)
+        allowed_dir = os.path.abspath(os.path.join(abs_root, ".asok", "bin"))
+        abs_bin_path = os.path.abspath(bin_path)
+        if os.path.commonpath([abs_bin_path, allowed_dir]) != allowed_dir:
+            raise ValueError(f"Path traversal detected in binary path: {bin_path}")
+    except Exception as e:
+        logger.warning(f"Security validation failed for binary path: {e}")
+        return None
+
     if not os.path.exists(bin_path):
         return None
 

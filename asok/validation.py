@@ -8,7 +8,14 @@ from typing import Any, Callable, Optional, Union
 from .context import request_var
 from .orm import MODELS_REGISTRY, Field
 
-_RE_EMAIL = re.compile(r"[^@]+@[^@]+\.[^@]+")
+# SECURITY: RFC 5322 compliant email regex (simplified but secure)
+# Allows alphanumeric, dots, hyphens, underscores, and special chars before @
+# Domain must be valid with at least one dot and proper TLD
+_RE_EMAIL = re.compile(
+    r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+)
 _RE_URL = re.compile(r"https?://[^\s/$.?#].[^\s]*")
 _RE_TEL = re.compile(r"^\+?[0-9\s\-()\.]{7,20}$")
 _regex_cache = {}
@@ -57,7 +64,9 @@ _DEFAULT_MESSAGES = {
 _CUSTOM_RULES = {}
 
 
-def _interpolate(text: str, field: Optional[str], rule_name: str, arg: Optional[Any]) -> str:
+def _interpolate(
+    text: str, field: Optional[str], rule_name: str, arg: Optional[Any]
+) -> str:
     """Interpolate placeholders in error messages with contextual values.
 
     Supports both generic {arg} and specific placeholders like {min}, {max}, {field}, etc.
@@ -75,41 +84,41 @@ def _interpolate(text: str, field: Optional[str], rule_name: str, arg: Optional[
 
     # Always include generic {arg} for backward compatibility
     if arg:
-        placeholders['arg'] = str(arg)
+        placeholders["arg"] = str(arg)
 
     # Add field name placeholders
     if field:
-        placeholders['field'] = field.replace('_', ' ').title()
-        placeholders['name'] = field.replace('_', ' ')
+        placeholders["field"] = field.replace("_", " ").title()
+        placeholders["name"] = field.replace("_", " ")
 
     # Add rule-specific placeholders
-    if rule_name == 'min' and arg:
-        placeholders['min'] = str(arg)
-    elif rule_name == 'max' and arg:
-        placeholders['max'] = str(arg)
-    elif rule_name == 'between' and arg:
+    if rule_name == "min" and arg:
+        placeholders["min"] = str(arg)
+    elif rule_name == "max" and arg:
+        placeholders["max"] = str(arg)
+    elif rule_name == "between" and arg:
         try:
-            parts = str(arg).split(',')
+            parts = str(arg).split(",")
             if len(parts) == 2:
-                placeholders['min'] = parts[0].strip()
-                placeholders['max'] = parts[1].strip()
-                placeholders['between'] = str(arg)
+                placeholders["min"] = parts[0].strip()
+                placeholders["max"] = parts[1].strip()
+                placeholders["between"] = str(arg)
         except Exception:
             pass
-    elif rule_name == 'ext' and arg:
-        placeholders['extensions'] = str(arg)
-        placeholders['ext'] = str(arg)
-    elif rule_name == 'size' and arg:
-        placeholders['size'] = str(arg)
-    elif rule_name == 'same' and arg:
-        placeholders['other'] = arg.replace('_', ' ').title()
-    elif rule_name == 'in' and arg:
-        placeholders['values'] = str(arg)
-        placeholders['in'] = str(arg)
+    elif rule_name == "ext" and arg:
+        placeholders["extensions"] = str(arg)
+        placeholders["ext"] = str(arg)
+    elif rule_name == "size" and arg:
+        placeholders["size"] = str(arg)
+    elif rule_name == "same" and arg:
+        placeholders["other"] = arg.replace("_", " ").title()
+    elif rule_name == "in" and arg:
+        placeholders["values"] = str(arg)
+        placeholders["in"] = str(arg)
 
     # Replace all placeholders in the text
     for key, value in placeholders.items():
-        text = text.replace(f'{{{key}}}', str(value))
+        text = text.replace(f"{{{key}}}", str(value))
 
     return text
 
@@ -145,7 +154,11 @@ class Validator:
         self._t = translate
 
     def _msg(
-        self, rule_name: str, messages: dict[str, str], arg: Optional[Any] = None, field: Optional[str] = None
+        self,
+        rule_name: str,
+        messages: dict[str, str],
+        arg: Optional[Any] = None,
+        field: Optional[str] = None,
     ) -> str:
         """Resolve and format the error message for a specific rule failure."""
         if rule_name in messages:
@@ -182,7 +195,9 @@ class Validator:
                 if val is None or str(val).strip() == "":
                     f = self.files.get(field)
                     if not f or not getattr(f, "content", None):
-                        self.errors[field] = self._msg("required", messages, field=field)
+                        self.errors[field] = self._msg(
+                            "required", messages, field=field
+                        )
 
             # 2. Email
             if name == "email":
@@ -190,7 +205,9 @@ class Validator:
                 # SECURITY: Limit input length to prevent ReDoS attacks
                 if val:
                     val_str = str(val)
-                    if len(val_str) > _MAX_REGEX_INPUT_LENGTH or not _RE_EMAIL.match(val_str):
+                    if len(val_str) > _MAX_REGEX_INPUT_LENGTH or not _RE_EMAIL.match(
+                        val_str
+                    ):
                         self.errors[field] = self._msg("email", messages, field=field)
 
             # 3. Min Length
@@ -277,7 +294,9 @@ class Validator:
                             pattern = re.compile(arg)
                             _regex_cache[arg] = pattern
                         except re.error:
-                            self.errors[field] = self._msg("regex", messages, field=field)
+                            self.errors[field] = self._msg(
+                                "regex", messages, field=field
+                            )
                             continue
                     if not pattern.match(val):
                         self.errors[field] = self._msg("regex", messages, field=field)
@@ -286,7 +305,9 @@ class Validator:
             if name == "url":
                 val = str(self.data.get(field, ""))
                 # SECURITY: Limit input length to prevent ReDoS attacks
-                if val and (len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_URL.match(val)):
+                if val and (
+                    len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_URL.match(val)
+                ):
                     self.errors[field] = self._msg("url", messages, field=field)
 
             # 13. Date (ISO format YYYY-MM-DD)
@@ -304,14 +325,18 @@ class Validator:
                 if str(self.data.get(other, "")) == expected:
                     val = self.data.get(field)
                     if val is None or str(val).strip() == "":
-                        self.errors[field] = self._msg("required_if", messages, field=field)
+                        self.errors[field] = self._msg(
+                            "required_if", messages, field=field
+                        )
 
             # required_with:other_field
             if name == "required_with" and arg:
                 if self.data.get(arg):
                     val = self.data.get(field)
                     if val is None or str(val).strip() == "":
-                        self.errors[field] = self._msg("required_with", messages, field=field)
+                        self.errors[field] = self._msg(
+                            "required_with", messages, field=field
+                        )
 
             # between:min,max (numeric range)
             if name == "between" and arg:
@@ -341,7 +366,9 @@ class Validator:
             # url
             if name == "url":
                 val = str(self.data.get(field, ""))
-                if val and (len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_URL.match(val)):
+                if val and (
+                    len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_URL.match(val)
+                ):
                     self.errors[field] = self._msg("url", messages, field=field)
 
             # regex:pattern
@@ -349,13 +376,15 @@ class Validator:
                 val = str(self.data.get(field, ""))
                 if val:
                     if len(val) > _MAX_REGEX_INPUT_LENGTH:
-                         self.errors[field] = self._msg("regex", messages, field=field)
+                        self.errors[field] = self._msg("regex", messages, field=field)
                     else:
                         try:
                             if arg not in _regex_cache:
                                 _regex_cache[arg] = re.compile(arg)
                             if not _regex_cache[arg].match(val):
-                                self.errors[field] = self._msg("regex", messages, field=field)
+                                self.errors[field] = self._msg(
+                                    "regex", messages, field=field
+                                )
                         except re.error:
                             pass
 
@@ -364,7 +393,16 @@ class Validator:
                 val = self.data.get(field)
                 if val is not None and val != "":
                     s_val = str(val).lower()
-                    if s_val not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+                    if s_val not in (
+                        "true",
+                        "false",
+                        "1",
+                        "0",
+                        "yes",
+                        "no",
+                        "on",
+                        "off",
+                    ):
                         self.errors[field] = self._msg("boolean", messages, field=field)
 
             # slug
@@ -397,7 +435,9 @@ class Validator:
             if name == "tel":
                 val = str(self.data.get(field, ""))
                 # SECURITY: Limit input length to prevent ReDoS attacks
-                if val and (len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_TEL.match(val)):
+                if val and (
+                    len(val) > _MAX_REGEX_INPUT_LENGTH or not _RE_TEL.match(val)
+                ):
                     self.errors[field] = self._msg("tel", messages, field=field)
 
             # image
@@ -407,8 +447,11 @@ class Validator:
                     try:
                         # Validate that it's one of the supported image types
                         from .request import UploadedFile
+
                         if isinstance(f, UploadedFile):
-                            f.validate_mime_type(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+                            f.validate_mime_type(
+                                ["image/jpeg", "image/png", "image/gif", "image/webp"]
+                            )
                     except ValueError:
                         self.errors[field] = self._msg("image", messages, field=field)
 
@@ -417,9 +460,15 @@ class Validator:
                 val = str(self.data.get(field, ""))
                 if val:
                     # 8+ chars, 1 uppercase, 1 number, 1 special char
-                    if len(val) < 8 or not re.search(r"[A-Z]", val) or \
-                       not re.search(r"\d", val) or not re.search(r"[!@#$%^&*(),.?\":{}|<>]", val):
-                        self.errors[field] = self._msg("password_strength", messages, field=field)
+                    if (
+                        len(val) < 8
+                        or not re.search(r"[A-Z]", val)
+                        or not re.search(r"\d", val)
+                        or not re.search(r"[!@#$%^&*(),.?\":{}|<>]", val)
+                    ):
+                        self.errors[field] = self._msg(
+                            "password_strength", messages, field=field
+                        )
 
             # color (hex format #RRGGBB or #RGB)
             if name == "color":
@@ -442,10 +491,18 @@ class Validator:
                             year, month = val.split("-")
                             year_int = int(year)
                             month_int = int(month)
-                            if not (1 <= month_int <= 12) or year_int < 1000 or year_int > 9999:
-                                self.errors[field] = self._msg("month", messages, field=field)
+                            if (
+                                not (1 <= month_int <= 12)
+                                or year_int < 1000
+                                or year_int > 9999
+                            ):
+                                self.errors[field] = self._msg(
+                                    "month", messages, field=field
+                                )
                         except (ValueError, AttributeError):
-                            self.errors[field] = self._msg("month", messages, field=field)
+                            self.errors[field] = self._msg(
+                                "month", messages, field=field
+                            )
 
             # base64 (validates base64 encoded data, especially for images)
             if name == "base64":
@@ -457,12 +514,16 @@ class Validator:
                         # Data URI format
                         pattern = r"^data:([a-zA-Z0-9]+/[a-zA-Z0-9\-\+\.]+)?;base64,[A-Za-z0-9+/]+=*$"
                         if not re.match(pattern, val):
-                            self.errors[field] = self._msg("base64", messages, field=field)
+                            self.errors[field] = self._msg(
+                                "base64", messages, field=field
+                            )
                     else:
                         # Plain base64 string
                         pattern = r"^[A-Za-z0-9+/]+=*$"
                         if not re.match(pattern, val):
-                            self.errors[field] = self._msg("base64", messages, field=field)
+                            self.errors[field] = self._msg(
+                                "base64", messages, field=field
+                            )
 
             # 14. Same as another field (same:other_field)
             if name == "same" and arg:
@@ -546,6 +607,10 @@ class Validator:
 
 
 class SchemaMeta(type):
+    """Metaclass for all Asok Schemas.
+    Automatically discovers and isolates Field definitions from class attributes.
+    """
+
     def __new__(mcs, name, bases, attrs):
         if name == "Schema":
             return super().__new__(mcs, name, bases, attrs)

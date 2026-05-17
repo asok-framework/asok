@@ -118,6 +118,8 @@ Asok is built for the modern era of web development, where the boundary between 
 
 ## 🛠️ Installation & Setup
 
+> **💡 Note for VS Code Users:** For the best developer experience, we highly recommend installing the official **[Asok VS Code Extension](https://marketplace.visualstudio.com/items?itemName=AsokFramework.asok-vscode)**. It provides native autocompletion, reactive snippets, and integrated CLI commands directly in your editor.
+
 ### 1. Installation
 You can install Asok via pip:
 
@@ -354,6 +356,7 @@ Thanks to all our amazing contributors! 🎉
 ## 🌐 Ecosystem
 
 Explore the Asok ecosystem:
+- ⚡ **[Asok VS Code Extension](https://marketplace.visualstudio.com/items?itemName=AsokFramework.asok-vscode)** - Official editor toolkit (autocompletion, snippets, CLI)
 - 🛠️ **[Asok Examples](https://github.com/asok-framework/asok-examples)** - Ready-to-use projects and templates
 - 🧪 **[Asok Lab](https://github.com/asok-framework/asok-lab)** - Experimental features, benchmarks, playground
 - 📖 **[Asok Docs](https://github.com/asok-framework/asok-docs)** - Documentation and website source

@@ -19,7 +19,15 @@ def mock_do_send(monkeypatch):
     sent_emails = []
 
     def fake_do_send(
-        sender, all_recipients, msg_string, host, port, username, password, use_tls
+        sender,
+        all_recipients,
+        msg_string,
+        host,
+        port,
+        username,
+        password,
+        use_tls,
+        **kwargs,
     ):
         sent_emails.append(
             {

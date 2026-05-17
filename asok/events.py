@@ -35,7 +35,10 @@ class EventEmitter:
                 listener(*args, **kwargs)
             except Exception as e:
                 import logging
-                logging.getLogger("asok.events").error(f"Error in listener for {event}: {e}")
+
+                logging.getLogger("asok.events").error(
+                    f"Error in listener for {event}: {e}"
+                )
 
 
 # Global event bus

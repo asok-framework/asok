@@ -25,9 +25,9 @@ from . import __version__
 from .orm import MODELS_REGISTRY, Model, slugify
 from .utils.minify import minify_html
 
-TAILWIND_VERSION = "4.2.2"
-IMAGE_VERSION = "1.5.0"
-ASSETS_VERSION = "0.25.0"
+TAILWIND_VERSION = "4.3.0"
+IMAGE_VERSION = "1.6.0"
+ASSETS_VERSION = "0.28.0"
 
 
 class _QuietHandler(WSGIRequestHandler):
@@ -106,11 +106,12 @@ class Style:
 
 
 def _ensure_init_py(directory: str) -> None:
-    """Create an empty __init__.py if it doesn't exist in the directory."""
+    """Create an empty __init__.py if it doesn't exist in the directory (and no .pyc exists)."""
     if not os.path.isdir(directory):
         return
     init_file = os.path.join(directory, "__init__.py")
-    if not os.path.exists(init_file):
+    init_file_c = os.path.join(directory, "__init__.pyc")
+    if not os.path.exists(init_file) and not os.path.exists(init_file_c):
         try:
             with open(init_file, "w"):
                 pass
@@ -159,7 +160,14 @@ def scaffold(
     ]:
         dir_path = os.path.join(root, d)
         os.makedirs(dir_path, exist_ok=True)
-        if d in ("src", "src/components", "src/middlewares", "src/models", "src/pages", "src/migrations"):
+        if d in (
+            "src",
+            "src/components",
+            "src/middlewares",
+            "src/models",
+            "src/pages",
+            "src/migrations",
+        ):
             _ensure_init_py(dir_path)
 
     def write(path, content):
@@ -202,7 +210,7 @@ def scaffold(
     <link rel="icon" href="{{{{ static('images/logo.svg') }}}}" type="image/svg+xml">
     <title>{{% block title %}}{{% endblock %}} &mdash; {app_name}</title>
     <link rel="stylesheet" href="{{{{ static('{css_link}') }}}}">
-    <script defer src="{{{{ static('js/base.js') }}}}" nonce="{{{{ request.nonce }}}}"></script>
+    <script type="module" src="{{{{ static('js/base.js') }}}}" nonce="{{{{ request.nonce }}}}"></script>
 </head>
 <body>
     <main>{{% block main %}}{{% endblock %}}</main>
@@ -337,6 +345,9 @@ class User(Model):
     password = Field.Password()
     name = Field.String()
     is_admin = Field.Boolean(default=False)
+    totp_secret = Field.String(nullable=True, hidden=True)
+    totp_enabled = Field.Boolean(default=False)
+    backup_codes = Field.String(nullable=True, hidden=True)
     created_at = Field.CreatedAt()
 """,
         )
@@ -528,20 +539,21 @@ def tailwind_enable(root):
         f.write('@import "tailwindcss";\n')
     Style.success("Reset src/partials/css/base.css with Tailwind import")
 
-    # 2. Update src/partials/html/base.html to use base.build.css
-    base_html = os.path.join(root, "src/partials/html/base.html")
-    if os.path.isfile(base_html):
-        with open(base_html, "r", encoding="utf-8") as f:
-            html = f.read()
+    # 2. Update src/partials/html/base.html (or base.asok) to use base.build.css
+    for base_name in ("base.html", "base.asok"):
+        base_path = os.path.join(root, "src/partials/html", base_name)
+        if os.path.isfile(base_path):
+            with open(base_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
-        old_link = "href=\"{{ static('css/base.css') }}\""
-        new_link = "href=\"{{ static('css/base.build.css') }}\""
+            old_link = "href=\"{{ static('css/base.css') }}\""
+            new_link = "href=\"{{ static('css/base.build.css') }}\""
 
-        if old_link in html:
-            html = html.replace(old_link, new_link)
-            with open(base_html, "w", encoding="utf-8") as f:
-                f.write(html)
-            Style.success("Updated base.html to use compiled CSS")
+            if old_link in content:
+                content = content.replace(old_link, new_link)
+                with open(base_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                Style.success(f"Updated {base_name} to use compiled CSS")
 
     # 3. Install and build
     tailwind_install(root, verbose=True)
@@ -594,9 +606,57 @@ class User(Model):
     is_admin = Field.Boolean(default=False)
     totp_secret = Field.String(nullable=True, hidden=True)
     totp_enabled = Field.Boolean(default=False)
+    backup_codes = Field.String(nullable=True, hidden=True)
     created_at = Field.CreatedAt()
 """)
         Style.success("Created default User model in src/models/user.py")
+
+    # 3. Check for src/models/role.py
+    role_model = os.path.join(root, "src/models/role.py")
+    if not os.path.isfile(role_model):
+        os.makedirs(os.path.dirname(role_model), exist_ok=True)
+        with open(role_model, "w", encoding="utf-8") as f:
+            f.write("""from asok import Field, Model
+
+
+class Role(Model):
+    name = Field.String(unique=True, nullable=False)
+    label = Field.String()
+    permissions = Field.String(default="")
+    created_at = Field.CreatedAt()
+
+    def __str__(self):
+        return self.label or self.name
+""")
+        Style.success("Created default Role model in src/models/role.py")
+
+    # 4. Check for src/models/admin_log.py
+    log_model = os.path.join(root, "src/models/admin_log.py")
+    if not os.path.isfile(log_model):
+        os.makedirs(os.path.dirname(log_model), exist_ok=True)
+        with open(log_model, "w", encoding="utf-8") as f:
+            f.write("""from asok import Field, Model
+
+
+class AdminLog(Model):
+    user_id = Field.Integer(nullable=True)
+    action = Field.String(nullable=False)
+    entity = Field.String(nullable=False)
+    entity_id = Field.Integer(nullable=True)
+    changes = Field.String()
+    created_at = Field.CreatedAt()
+
+    class Admin:
+        label = "Audit logs"
+        slug = "logs"
+        list_display = ["id", "created_at", "user_id", "action", "entity", "entity_id"]
+        search_fields = ["action", "entity", "changes"]
+        list_filter = ["action", "entity"]
+        can_add = False
+        can_edit = False
+        can_delete = False
+""")
+        Style.success("Created default AdminLog model in src/models/admin_log.py")
 
     Style.info("Next steps:")
     print("  1. Run 'asok make migration add_admin' to detect new tables")
@@ -870,7 +930,7 @@ def get_last_mtime():
         ".asok",
         "deployment",
     }
-    watch_exts = (".py", ".html", ".json", ".css", ".js")
+    watch_exts = (".py", ".html", ".asok", ".json", ".css", ".js")
 
     for root, dirs, files in os.walk("."):
         # Prune ignored directories
@@ -1009,6 +1069,7 @@ def _kill_child(pid):
 
 
 def run_dev(port_arg=None):
+    """Start the Asok development server with auto-reloading and Tailwind CSS integration."""
     os.environ.pop("ASOK_CLI", None)
     sys.path.insert(0, os.getcwd())
     last_mtime = get_last_mtime()
@@ -1147,7 +1208,7 @@ def _minify_html(html):
     return minify_html(html)
 
 
-def run_build(root, keep_source=False, output=None):
+def run_build(root, keep_source=False, with_db=False, output=None):
     """Generate a production-ready optimized distribution."""
     import py_compile
 
@@ -1163,7 +1224,7 @@ def run_build(root, keep_source=False, output=None):
     Style.info(f"Cloning project to {Style.BOLD}{app_name}/{Style.RESET}...")
 
     # Exclude development-only files and folders
-    ignore = shutil.ignore_patterns(
+    ignore_list = [
         "build",
         "dist",
         "venv",
@@ -1174,9 +1235,16 @@ def run_build(root, keep_source=False, output=None):
         "__pycache__",
         "*.pyc",
         ".DS_Store",
-        "db.sqlite3*",
         "tests",
-    )
+    ]
+    if not with_db:
+        ignore_list.append("db.sqlite3*")
+
+    # Also ignore the output directory itself if it's inside the root
+    if app_name not in ignore_list:
+        ignore_list.append(app_name)
+
+    ignore = shutil.ignore_patterns(*ignore_list)
 
     shutil.copytree(root, build_root, ignore=ignore, dirs_exist_ok=True)
 
@@ -1199,11 +1267,21 @@ def run_build(root, keep_source=False, output=None):
                     os.remove(input_path)
                 Style.success("Tailwind CSS optimized and source removed.")
 
-    # 2. Assets Minification (Universal JS/CSS)
+    # 1b. Cleanup .gitignore in distribution (it often ignores built assets like base.build.css)
+    gitignore_path = os.path.join(build_root, ".gitignore")
+    if os.path.exists(gitignore_path):
+        try:
+            os.remove(gitignore_path)
+            Style.success("Cleaned up development .gitignore from distribution.")
+        except OSError:
+            pass
+
+    # 2. Assets Minification (Universal & Scoped Assets)
     bin_path = _esbuild_binary_path(root)
     if os.path.isfile(bin_path):
-        Style.info("Minifying JS and CSS assets...")
-        target_dir = os.path.join(build_root, "src/partials")
+        Style.info("Minifying JS and CSS assets (including scoped assets)...")
+        # Target everything in src/ to cover pages, components, and partials
+        target_dir = os.path.join(build_root, "src")
         if os.path.exists(target_dir):
             for r, d, files in os.walk(target_dir):
                 for f in files:
@@ -1236,7 +1314,7 @@ def run_build(root, keep_source=False, output=None):
     Style.info("Minifying HTML templates...")
     for r, d, files in os.walk(build_root):
         for f in files:
-            if f.endswith(".html"):
+            if f.endswith(".html") or f.endswith(".asok"):
                 path = os.path.join(r, f)
                 try:
                     with open(path, "r", encoding="utf-8") as f_in:
@@ -1253,6 +1331,10 @@ def run_build(root, keep_source=False, output=None):
     success_count = 0
     # Walk through EVERYTHING in the build root
     for r, d, files in os.walk(build_root):
+        # SKIP migrations directory for compilation as it needs to remain editable/readable in prod
+        if "src/migrations" in r.replace("\\", "/"):
+            continue
+
         for f in files:
             if f.endswith(".py"):
                 src = os.path.join(r, f)
@@ -1278,6 +1360,10 @@ def run_build(root, keep_source=False, output=None):
     # Final sanity check: remove ANY remaining .py file if keep_source is False
     if not keep_source:
         for r, d, files in os.walk(build_root):
+            # Do NOT remove migrations even if keep_source is False
+            if "src/migrations" in r.replace("\\", "/"):
+                continue
+
             for f in files:
                 if f.endswith(".py"):
                     try:
@@ -1314,6 +1400,7 @@ def run_build(root, keep_source=False, output=None):
     env_prod = os.path.join(build_root, ".env.production")
     with open(env_prod, "w") as f:
         f.write("DEBUG=false\n")
+        f.write("ASOK_BUILD=true\n")
         f.write("SECRET_KEY=change-me-for-production\n")
         f.write("ALLOWED_HOSTS=*\n")
         f.write("IMAGE_OPTIMIZATION=true\n")
@@ -1346,7 +1433,7 @@ def run_deploy(root):
     gunicorn_conf = f"""# Gunicorn configuration for {app_name}
 import multiprocessing
 
-bind = "127.0.0.1:8000"
+bind = "unix:{root}/{app_name}.sock"
 workers = multiprocessing.cpu_count() * 2 + 1
 worker_class = "sync"
 timeout = 30
@@ -1357,7 +1444,9 @@ loglevel = "info"
 """
     with open(os.path.join(deploy_dir, "gunicorn_conf.py"), "w") as f:
         f.write(gunicorn_conf)
-    print(f"  {Style.GREEN}✓{Style.RESET} Generated gunicorn_conf.py (Optimized)")
+    print(
+        f"  {Style.GREEN}✓{Style.RESET} Generated gunicorn_conf.py (Optimized Unix Socket)"
+    )
 
     # 2. Nginx Config (High Performance)
     nginx_conf = f"""server {{
@@ -1377,7 +1466,7 @@ loglevel = "info"
     gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss image/svg+xml;
 
     location / {{
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://unix:{root}/{app_name}.sock;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -1445,7 +1534,7 @@ sudo apt install -y nginx python3-pip python3-venv
 echo "[2/5] Setting up virtual environment..."
 python3 -m venv venv
 ./venv/bin/pip install --upgrade pip
-./venv/bin/pip install gunicorn
+./venv/bin/pip install gunicorn asok
 
 # Attempt to install requirements if they exist
 if [ -f "requirements.txt" ]; then
@@ -1455,6 +1544,8 @@ fi
 # 3. Permissions (Crucial for SQLite/Uploads)
 echo "[3/5] Setting up permissions for www-data..."
 sudo chown -R $USER:www-data .
+# Allow group write on the directory itself for SQLite WAL/SHM files
+sudo chmod 775 .
 sudo chmod -R 775 src/partials/uploads || true
 if [ -f "db.sqlite3" ]; then
     sudo chown www-data:www-data db.sqlite3
@@ -1536,6 +1627,7 @@ def run_migrate(rollback=False, status=False, fake=False):
                     pass
 
     from .orm import MODELS_REGISTRY, Migrations, Model
+
     Migrations.ensure_table()
 
     if MODELS_REGISTRY:
@@ -1549,7 +1641,9 @@ def run_migrate(rollback=False, status=False, fake=False):
         return
 
     # Load all migration files
-    mig_files = sorted([f for f in os.listdir(mig_dir) if f.endswith(".py") and f[:4].isdigit()])
+    mig_files = sorted(
+        [f for f in os.listdir(mig_dir) if f.endswith(".py") and f[:4].isdigit()]
+    )
     applied = Migrations.get_applied()
 
     if status:
@@ -1560,7 +1654,11 @@ def run_migrate(rollback=False, status=False, fake=False):
         for f in mig_files:
             name = f[:-3]
             is_applied = name in applied
-            mark = f"{Style.GREEN}[X]{Style.RESET}" if is_applied else f"{Style.YELLOW}[ ]{Style.RESET}"
+            mark = (
+                f"{Style.GREEN}[X]{Style.RESET}"
+                if is_applied
+                else f"{Style.YELLOW}[ ]{Style.RESET}"
+            )
             print(f"  {mark} {name}")
         return
 
@@ -1633,6 +1731,7 @@ def run_migrate(rollback=False, status=False, fake=False):
 
 
 def run_seed():
+    """Execute the project's seeding script (src/seeds.py) to populate the database."""
     Style.heading("SEEDING DATA")
     sys.path.insert(0, os.getcwd())
     seed_path = os.path.join(os.getcwd(), "src", "seeds.py")
@@ -1766,7 +1865,6 @@ def make_migration(name: str):
         if hasattr(app, "_admin"):
             app._admin._inject_user_methods()
 
-
     # Ensure migration dir exists
     mig_dir = os.path.join(root, "src/migrations")
     os.makedirs(mig_dir, exist_ok=True)
@@ -1826,7 +1924,10 @@ def make_migration(name: str):
             down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {table}')})")
         else:
             # Check for new columns
-            existing_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            existing_cols = {
+                r["name"]
+                for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
             for f_name, f_obj in model_cls._fields.items():
                 if f_name not in existing_cols:
                     Style.info(f"    + New column detected: {table}.{f_name}")
@@ -1842,7 +1943,9 @@ def make_migration(name: str):
                     sql_alter = f"ALTER TABLE {table} ADD COLUMN {col_sql}"
                     up_sql.append(f"conn.execute({repr(sql_alter)})")
                     # SQLite doesn't support DROP COLUMN on all versions, so we just log it or do nothing in down
-                    down_sql.append(f'# SQLite limited: cannot easily drop column {f_name} from {table}')
+                    down_sql.append(
+                        f"# SQLite limited: cannot easily drop column {f_name} from {table}"
+                    )
 
         # Check for BelongsToMany pivot tables
         processed_pivots = set()
@@ -1857,7 +1960,8 @@ def make_migration(name: str):
                 processed_pivots.add(pivot)
 
                 exists = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (pivot,)
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (pivot,),
                 ).fetchone()
 
                 if not exists:
@@ -1871,13 +1975,16 @@ def make_migration(name: str):
                         f"PRIMARY KEY ({pfk}, {pofk}))"
                     )
                     up_sql.append(f"conn.execute({repr(sql_pivot)})")
-                    down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {pivot}')})")
+                    down_sql.append(
+                        f"conn.execute({repr(f'DROP TABLE IF EXISTS {pivot}')})"
+                    )
 
         # Check for FTS tables and triggers
         if model_cls._search_fields:
             fts_table = f"{table}_fts"
             fts_exists = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (fts_table,)
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (fts_table,),
             ).fetchone()
             if not fts_exists:
                 Style.info(f"    + New FTS table detected: {fts_table}")
@@ -1893,9 +2000,9 @@ def make_migration(name: str):
                 f_new = ", ".join([f'new."{n}"' for n in model_cls._search_fields])
                 f_old = ", ".join([f'old."{n}"' for n in model_cls._search_fields])
 
-                ai = f"CREATE TRIGGER IF NOT EXISTS \"{table}_ai\" AFTER INSERT ON \"{table}\" BEGIN INSERT INTO \"{fts_table}\"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;"
-                ad = f"CREATE TRIGGER IF NOT EXISTS \"{table}_ad\" AFTER DELETE ON \"{table}\" BEGIN INSERT INTO \"{fts_table}\"(\"{fts_table}\", rowid, {f_quoted}) VALUES('delete', old.id, {f_old}); END;"
-                au = f"CREATE TRIGGER IF NOT EXISTS \"{table}_au\" AFTER UPDATE ON \"{table}\" BEGIN INSERT INTO \"{fts_table}\"(\"{fts_table}\", rowid, {f_quoted}) VALUES('delete', old.id, {f_old}); INSERT INTO \"{fts_table}\"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;"
+                ai = f'CREATE TRIGGER IF NOT EXISTS "{table}_ai" AFTER INSERT ON "{table}" BEGIN INSERT INTO "{fts_table}"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;'
+                ad = f'CREATE TRIGGER IF NOT EXISTS "{table}_ad" AFTER DELETE ON "{table}" BEGIN INSERT INTO "{fts_table}"("{fts_table}", rowid, {f_quoted}) VALUES(\'delete\', old.id, {f_old}); END;'
+                au = f'CREATE TRIGGER IF NOT EXISTS "{table}_au" AFTER UPDATE ON "{table}" BEGIN INSERT INTO "{fts_table}"("{fts_table}", rowid, {f_quoted}) VALUES(\'delete\', old.id, {f_old}); INSERT INTO "{fts_table}"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;'
 
                 up_sql.append(f"conn.execute({repr(ai)})")
                 up_sql.append(f"conn.execute({repr(ad)})")
@@ -2110,6 +2217,7 @@ def run_test(path=None):
 
 
 def run_createsuperuser(email=None, password=None):
+    """Interactively create a new administrative user for the project."""
     root = _find_project_root()
     if not root:
         print("Error: Not inside an Asok project (no wsgi.py/c found).")
@@ -2219,7 +2327,10 @@ def print_help():
                 "deploy",
                 "Generate production deployment configs (Gunicorn/Nginx/SystemD)",
             ),
-            ("build", "Generate a production-ready optimized build folder"),
+            (
+                "build",
+                "Generate an optimized production build (--with-db, --keep-source, -o)",
+            ),
         ],
     }
 
@@ -2251,6 +2362,7 @@ def main() -> None:
         # Sync ORM DB path if DATABASE_URL is set in .env
         if "DATABASE_URL" in os.environ:
             from .orm import Model
+
             Model._db_path = os.environ["DATABASE_URL"]
 
     os.environ["ASOK_CLI"] = "true"
@@ -2298,6 +2410,11 @@ def main() -> None:
     )
     build_parser.add_argument(
         "--output", "-o", default=None, help="Output directory name"
+    )
+    build_parser.add_argument(
+        "--with-db",
+        action="store_true",
+        help="Include current SQLite database in the build",
     )
 
     dev_parser = subparsers.add_parser("dev")
@@ -2403,7 +2520,12 @@ def main() -> None:
         if not root:
             Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
-        run_build(root, keep_source=args.keep_source, output=args.output)
+        run_build(
+            root,
+            keep_source=args.keep_source,
+            with_db=args.with_db,
+            output=args.output,
+        )
     elif args.command == "dev":
         run_dev(args.port)
     elif args.command == "preview":

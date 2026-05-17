@@ -35,23 +35,33 @@ def get_logger(
     level: Optional[str] = None,
     log_file: Optional[str] = None,
     json_format: Optional[bool] = None,
+    config: Optional[dict[str, Any]] = None,
 ) -> logging.Logger:
     """Create a configured logger instance.
 
     Args:
         name:        Logger name.
-        level:       Logging level (default: from LOG_LEVEL env or DEBUG).
-        log_file:    Optional file path (default: from LOG_FILE env).
-        json_format: Use structured JSON output (default: from LOG_FORMAT env).
+        level:       Logging level (prioritizes arg > config > env).
+        log_file:    Optional file path (prioritizes arg > config > env).
+        json_format: Use structured JSON output (prioritizes arg > config > env).
+        config:      Optional application config dictionary.
     """
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
 
+    # Resolve configuration (Priority: Argument > App Config > Environment > Default)
+    if config:
+        level = level or config.get("LOG_LEVEL")
+        log_file = log_file or config.get("LOG_FILE")
+        if json_format is None:
+            json_format = config.get("LOG_FORMAT", "").lower() == "json"
+
     level = level or os.environ.get("LOG_LEVEL", "DEBUG")
     log_file = log_file or os.environ.get("LOG_FILE")
     if json_format is None:
         json_format = os.environ.get("LOG_FORMAT", "").lower() == "json"
+
     logger.setLevel(getattr(logging, level.upper(), logging.DEBUG))
 
     if json_format:
@@ -67,16 +77,18 @@ def get_logger(
     logger.addHandler(console)
 
     if log_file:
-        # SECURITY: Use RotatingFileHandler to prevent log files from growing indefinitely
-        # Max 10MB per file, keep 5 backup files (total ~50MB)
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            encoding="utf-8",
-            maxBytes=10 * 1024 * 1024,  # 10MB
-            backupCount=5,
-        )
-        file_handler.setFormatter(fmt)
-        logger.addHandler(file_handler)
+        try:
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                encoding="utf-8",
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+            )
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+        except Exception as e:
+            # Fallback to console-only if file is not writable
+            logger.error(f"Could not initialize log file {log_file}: {e}")
 
     return logger
 
@@ -91,6 +103,11 @@ class RequestLogger:
     def __call__(self, request: Request, next_handler: Callable[[Request], Any]) -> Any:
         """Log request details and execution duration."""
         start = time.time()
+
+        # Use application logger if available
+        app = request.environ.get("asok.app")
+        logger = getattr(app, "logger", self.logger)
+
         try:
             result = next_handler(request)
             elapsed = (time.time() - start) * 1000
@@ -100,7 +117,7 @@ class RequestLogger:
             method = request.method.replace("\n", "").replace("\r", "")
             status = request.status.replace("\n", "").replace("\r", "")
 
-            self.logger.info(
+            logger.info(
                 "%s %s %s %.1fms",
                 method,
                 path,
@@ -117,7 +134,7 @@ class RequestLogger:
             return result
         except Exception as e:
             elapsed = (time.time() - start) * 1000
-            self.logger.error(
+            logger.error(
                 "%s %s 500 %.1fms — %s",
                 request.method,
                 request.path,

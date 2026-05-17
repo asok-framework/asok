@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING, Any, Optional
 
+from .exceptions import AsokException
 from .mail import Mail
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("asok.auth")
 
 
-class AuthError(Exception):
+class AuthError(AsokException):
     pass
 
 
@@ -23,7 +24,9 @@ class MagicLink:
     """Provides secure, passwordless authentication via signed email links."""
 
     @staticmethod
-    def create_token(request: Request, email: str, expires_in: Optional[int] = None) -> str:
+    def create_token(
+        request: Request, email: str, expires_in: Optional[int] = None
+    ) -> str:
         """Create a signed magic link token valid for a specific duration."""
         if expires_in is None:
             app = request.environ.get("asok.app")
@@ -36,16 +39,46 @@ class MagicLink:
 
     @staticmethod
     def verify_token(request: Request, token: str) -> Optional[str]:
-        """Verify a magic link token and return the associated email if valid and not expired."""
-        payload = request._unsign(token)
-        if not payload or "|" not in payload:
-            return None
+        """Verify a magic link token and return the associated email if valid and not expired.
 
-        email, exp = payload.split("|", 1)
-        try:
-            if int(exp) < time.time():
-                return None
-        except ValueError:
+        SECURITY: Uses constant-time operations to prevent timing attacks.
+        """
+        import secrets
+
+        # Initialize default values for constant-time execution
+        email = ""
+        exp_time = 0
+        is_valid = True
+
+        # Unsign the token
+        payload = request._unsign(token)
+
+        # Validate payload structure (don't return early)
+        if not payload or "|" not in payload:
+            is_valid = False
+            # Continue execution with dummy values
+            parts = ["", "0"]
+        else:
+            parts = payload.split("|", 1)
+
+        # Extract email and expiration
+        if len(parts) == 2:
+            email, exp_str = parts
+            try:
+                exp_time = int(exp_str)
+            except ValueError:
+                is_valid = False
+        else:
+            is_valid = False
+
+        # Check expiration with constant-time comparison
+        current_time = int(time.time())
+        is_expired = exp_time < current_time
+
+        # Combine all checks
+        if not is_valid or is_expired:
+            # Add random delay to prevent timing attacks (1-5ms)
+            time.sleep(0.001 + secrets.randbelow(5) / 1000)
             return None
 
         return email

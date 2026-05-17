@@ -60,7 +60,9 @@ def test_break_continue():
     {% endfor %}
     """
 
-    result_continue = render_template_string(template_continue, {"numbers": [1, 2, 3, 4, 5]})
+    result_continue = render_template_string(
+        template_continue, {"numbers": [1, 2, 3, 4, 5]}
+    )
     print("Test 2b: Continue")
     print(f"Result: {result_continue.strip()}")
 
@@ -71,7 +73,7 @@ def test_break_continue():
     assert "5" in result_continue
     # 3 might appear in whitespace, so check more carefully
     nums_found = [c for c in result_continue if c.isdigit()]
-    assert '3' not in nums_found
+    assert "3" not in nums_found
     print("✓ Continue works!\n")
 
 
@@ -100,6 +102,7 @@ def test_call_macro():
         print(f"Error: {e}")
         # Try to see what went wrong
         import traceback
+
         traceback.print_exc()
         raise
 
@@ -169,4 +172,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ TEST FAILED: {e}")
         import traceback
+
         traceback.print_exc()

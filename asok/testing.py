@@ -21,6 +21,7 @@ class TestResponse:
 
     @property
     def json(self):
+        """Parse the response body as JSON and return the resulting object."""
         return json.loads(self.text)
 
     def __contains__(self, item):

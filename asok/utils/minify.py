@@ -26,12 +26,18 @@ def minify_html(html: str) -> str:
         return placeholder
 
     # Tags to protect
+    # IMPORTANT: Use a robust pattern that finds the REAL closing tag.
+    # The naive r"<script.*?>.*?</script>" fails when the script content
+    # contains a literal "</script>" string (e.g. inside a JS regex literal
+    # like /<\/script>/gi used by the Asok directive runtime).
+    # Solution: match the closing tag only when it appears as an actual HTML
+    # tag (case-insensitive, not preceded by a backslash escape).
     sensitive_tags_patterns = [
-        r"<pre.*?>.*?</pre>",
-        r"<code.*?>.*?</code>",
-        r"<script.*?>.*?</script>",
-        r"<textarea.*?>.*?</textarea>",
-        r"<style.*?>.*?</style>",
+        r"<pre(?:\s[^>]*)?>.*?</pre\s*>",
+        r"<code(?:\s[^>]*)?>.*?</code\s*>",
+        r"<script(?:\s[^>]*)?>.*?</script\s*>",
+        r"<textarea(?:\s[^>]*)?>.*?</textarea\s*>",
+        r"<style(?:\s[^>]*)?>.*?</style\s*>",
     ]
 
     current_html = html
@@ -47,7 +53,7 @@ def minify_html(html: str) -> str:
         r"<!--(?!\s*\[if)(?!\s*block:)(?!\s*page-id:).*?-->",
         "",
         current_html,
-        flags=re.DOTALL
+        flags=re.DOTALL,
     )
 
     # Collapse multiple whitespaces/newlines into a single space everywhere
@@ -85,19 +91,23 @@ def minify_css(css: str) -> str:
 
 
 def minify_js(js: str) -> str:
-    """Safe but effective JS minification.
-    Removes comments and collapses whitespace/newlines.
+    """Minifies JavaScript content by removing comments and extra whitespace.
+    Safely handles string literals to avoid corrupting data.
     """
     if not js:
         return ""
-    # Remove multi-line comments
+
+    # 1. Remove multi-line comments
     js = re.sub(r"/\*.*?\*/", "", js, flags=re.DOTALL)
-    # Remove single-line comments safely
-    js = re.sub(r"(^|[^\\])//.*?\n", r"\1\n", js)
-    # Collapse multiple spaces
-    js = re.sub(r"[ \t]+", " ", js)
-    # Collapse newlines around symbols where safe
-    js = re.sub(r"\s*([{}()=;,:])\s*", r"\1", js)
-    # Remove redundant newlines
-    js = re.sub(r"\n+", "\n", js)
-    return js.strip()
+
+    # 2. Remove single-line comments, being careful not to match '//' inside strings or regex
+    # This is a simplified but safer version for template-injected scripts
+    lines = []
+    for line in js.splitlines():
+        # Strip trailing comments if they aren't preceded by a colon (url) or quote
+        stripped = re.sub(r"(?<![:\"'])//.*$", "", line)
+        lines.append(stripped.strip())
+
+    # 3. Collapse whitespace
+    js = " ".join(lines)
+    return re.sub(r"\s+", " ", js).strip()

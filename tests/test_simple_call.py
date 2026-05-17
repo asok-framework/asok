@@ -20,14 +20,15 @@ print("Preprocessed:")
 print(processed)
 print("\nContext after preprocessing:")
 print(f"Keys: {list(context.keys())}")
-print("\n" + "="*60 + "\n")
+print("\n" + "=" * 60 + "\n")
 
 # Try to compile
 try:
     result = list(_compile_and_run(processed, context))
     print("Result:")
-    print(''.join(result))
+    print("".join(result))
 except Exception as e:
     print(f"Error: {e}")
     import traceback
+
     traceback.print_exc()
