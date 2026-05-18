@@ -36,7 +36,7 @@ src/pages/blog/[slug]/page.py  →  /blog/hello-world
 
 # Reactive components out of the box
 <div asok-state="{ count: 0 }">
-  <button asok-on:click="count++">{{ count }}</button>
+  <button asok-on:click="count++" asok-text="count"></button>
 </div>
 
 # Admin interface in 2 lines
