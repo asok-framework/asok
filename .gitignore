@@ -18,6 +18,7 @@ env/
 .DS_Store
 
 .asok.egg-info/
+.asok/
 
 .claude/
 .gemini/
