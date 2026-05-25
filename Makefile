@@ -1,15 +1,17 @@
 .PHONY: install dev test coverage build clean lint format compile
 
+PYTHON ?= python3
+
 # Default command
 all: lint test
 
 # Compile core assets with esbuild
 compile:
-	python3 scripts/compile_assets.py
+	$(PYTHON) scripts/compile_assets.py
 
 # Install the framework in development mode
 install:
-	python3 -m pip install -e .
+	$(PYTHON) -m pip install -e .
 
 # Run the development server (assumes you are in an Asok project directory)
 dev:
@@ -17,23 +19,23 @@ dev:
 
 # Run all tests
 test:
-	python3 -m pytest tests/ -v
+	$(PYTHON) -m pytest tests/ -v
 
 # Run tests with coverage report
 coverage:
-	python3 -m pytest tests/ --cov=asok --cov-report=term-missing
+	$(PYTHON) -m pytest tests/ --cov=asok --cov-report=term-missing
 
 # Lint the code using Ruff
 lint:
-	python3 -m ruff check asok/ tests/
+	$(PYTHON) -m ruff check asok/ tests/
 
 # Format the code using Ruff
 format:
-	python3 -m ruff format asok/ tests/
+	$(PYTHON) -m ruff format asok/ tests/
 
 # Build the distribution packages (.whl and .tar.gz)
 build: clean compile
-	python3 -m build
+	$(PYTHON) -m build
 
 # Clean generated files and caches
 clean:
