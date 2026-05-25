@@ -8,7 +8,8 @@
     <h1 class="page-title">{{ title }}</h1>
   </div>
   <div class="page-actions">
-    {% if item and item.id %}
+    {# SECURITY: History (audit logs) reserved for admins only #}
+    {% if item and item.id and request.user and request.user.is_admin %}
       <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/history"
          class="btn btn-ghost btn-sm" data-spa title="{{ t('History') }}">
         {{ icon('history', 14) }} <span style="margin-left:4px">{{ t('History') }}</span>

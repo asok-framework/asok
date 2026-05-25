@@ -155,6 +155,8 @@ def cache_page(
     """
     Decorator to cache the HTTP response of a view function.
     Only caches GET requests.
+
+    SECURITY: Cache key length limits prevent DoS.
     """
 
     def decorator(func):
@@ -167,6 +169,13 @@ def cache_page(
             # Provide a safe fallback if request doesn't have path for some reason
             path = getattr(request, "path", "")
             qs = getattr(request, "query_string", "")
+
+            # SECURITY: Limit path and query string length to prevent DoS (max 2000 chars each)
+            if len(path) > 2000:
+                path = path[:2000]
+            if len(qs) > 2000:
+                qs = qs[:2000]
+
             full_path = f"{path}?{qs}" if qs else path
             cache_key = f"{key_prefix}{full_path}"
 

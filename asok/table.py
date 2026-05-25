@@ -149,13 +149,26 @@ class Table:
         return self
 
     def _get_data(self) -> dict[str, Any]:
-        """Process the query with search, filters, and pagination."""
+        """Process the query with search, filters, and pagination.
+
+        SECURITY: Search query length limits prevent LIKE query DoS.
+        """
         if isinstance(self.query, (list, dict)):
             if isinstance(self.query, dict) and "items" in self.query:
+                # SECURITY: Limit number of items to prevent DoS (max 10,000)
+                items = self.query.get("items", [])
+                if isinstance(items, list) and len(items) > 10_000:
+                    items = items[:10_000]
+                    self.query["items"] = items
                 return self.query
+            # SECURITY: Limit list size to prevent DoS (max 10,000)
+            if isinstance(self.query, list) and len(self.query) > 10_000:
+                limited_query = self.query[:10_000]
+            else:
+                limited_query = self.query
             return {
-                "items": self.query,
-                "total": len(self.query),
+                "items": limited_query,
+                "total": len(limited_query),
                 "pages": 1,
                 "current_page": 1,
             }
@@ -166,6 +179,10 @@ class Table:
         # 1. Apply Search
         search_query = self.request.get("search") if self.request else None
         if search_query and self._search_fields:
+            # SECURITY: Limit search query length to prevent LIKE DoS (max 200 chars)
+            if len(search_query) > 200:
+                search_query = search_query[:200]
+
             for i, field in enumerate(self._search_fields):
                 if i == 0:
                     q = q.where(field, "LIKE", f"%{search_query}%")

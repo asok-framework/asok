@@ -184,6 +184,25 @@ class SessionStore:
             return entry["data"]
 
     def _save_memory(self, sid, data):
+        """Save session data to memory.
+
+        SECURITY: Session data size limits prevent DoS.
+        """
+        # SECURITY: Limit session data size to prevent DoS (max 100KB per session)
+        try:
+            data_str = json.dumps(data)
+            if len(data_str) > 100_000:
+                import logging
+
+                logging.getLogger("asok.session").warning(
+                    "Session data too large (%d bytes), truncating", len(data_str)
+                )
+                # Truncate to first 1000 items if dict
+                if isinstance(data, dict) and len(data) > 1000:
+                    data = dict(list(data.items())[:1000])
+        except (TypeError, ValueError):
+            pass
+
         with self._lock:
             self._memory[sid] = {"data": dict(data), "ts": time.time()}
             # Evict oldest sessions if over capacity
@@ -228,20 +247,47 @@ class SessionStore:
             return None
 
     def _save_file(self, sid, data):
+        """Save session data to file.
+
+        SECURITY: Session data size limits prevent DoS.
+        """
+        # SECURITY: Limit session data size to prevent DoS (max 100KB per session)
+        try:
+            data_str = json.dumps(data)
+            if len(data_str) > 100_000:
+                import logging
+
+                logging.getLogger("asok.session").warning(
+                    "Session data too large (%d bytes), truncating", len(data_str)
+                )
+                # Truncate to first 1000 items if dict
+                if isinstance(data, dict) and len(data) > 1000:
+                    data = dict(list(data.items())[:1000])
+        except (TypeError, ValueError):
+            pass
+
         fpath = self._session_file(sid)
         # Use os.open with restrictive mode (0600) before writing
         try:
             fd = os.open(fpath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({"data": dict(data), "ts": time.time()}, f)
-        except OSError:
+        except OSError as e:
             # Fallback for systems that don't support os.open securely
+            import logging
+            logger = logging.getLogger("asok.session")
+            logger.warning(f"Failed to create session file with secure permissions: {e}")
+
             with open(fpath, "w") as f:
                 json.dump({"data": dict(data), "ts": time.time()}, f)
             try:
                 os.chmod(fpath, 0o600)
-            except OSError:
-                pass
+            except OSError as chmod_err:
+                # SECURITY: Log if chmod fails - session file may be world-readable!
+                logger.error(
+                    f"SECURITY WARNING: Failed to set secure permissions (0600) on session file {fpath}: {chmod_err}. "
+                    "Session data may be exposed to other users on the system!"
+                )
 
     def _delete_file(self, sid):
         fpath = self._session_file(sid)

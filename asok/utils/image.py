@@ -59,12 +59,27 @@ def optimize_image(
     if not os.path.exists(bin_path):
         return None
 
+    # SECURITY: Validate input filepath before subprocess execution
+    if not os.path.exists(filepath):
+        logger.warning(f"Input file does not exist: {filepath}")
+        return None
+
+    if not os.path.isfile(filepath):
+        logger.warning(f"Input path is not a file: {filepath}")
+        return None
+
+    # SECURITY: Validate filepath doesn't contain shell metacharacters or traversal
+    abs_filepath = os.path.abspath(filepath)
+    if ".." in abs_filepath or any(c in filepath for c in [";", "&", "|", "`", "$", "(", ")"]):
+        logger.warning(f"Suspicious characters detected in filepath: {filepath}")
+        return None
+
     output_path = filepath + ".webp"
 
     # Run cwebp
     try:
-        cmd = [bin_path, "-q", "80", filepath, "-o", output_path]
-        subprocess.run(cmd, check=True, capture_output=True)
+        cmd = [bin_path, "-q", "80", abs_filepath, "-o", output_path]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
 
         if not keep_original:
             try:

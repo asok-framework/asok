@@ -192,3 +192,19 @@ class TestHttpVerbs:
     def test_patch_request(self, client):
         resp = client.patch("/resource/1")
         assert isinstance(resp.status_code, int)
+
+
+class TestErrorPageRendering:
+    def test_request_status_code_in_error_rendering(self):
+        from asok.core import Asok
+        from asok.request import Request
+        app = Asok()
+        req = Request(make_env("GET", "/some-route"))
+        assert req.status_code() == 200
+
+        # Render a 404 error page via the app's error renderer
+        app._render_error_page(req, 404, "Page not found")
+
+        # Verify request status_code is updated
+        assert req.status_code() == 404
+        assert req.status == "404 Not Found"

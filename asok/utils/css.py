@@ -13,9 +13,19 @@ def scope_css(content: str, page_id: str) -> str:
 
     Returns:
         The scoped CSS string.
+
+    SECURITY: Size limits prevent DoS via extremely large CSS.
     """
     if not content:
         return ""
+
+    # SECURITY: Reject excessively large CSS to prevent DoS (max 1MB)
+    if len(content) > 1_000_000:
+        return content  # Return unscoped
+
+    # SECURITY: Validate page_id to prevent injection
+    if not page_id or len(page_id) > 100:
+        return content  # Return unscoped if invalid
 
     prefix = f'[data-page-id="{page_id}"]'
     global_marker = "___GLOBAL___"

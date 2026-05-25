@@ -1,3 +1,4 @@
+import os
 import re
 import unicodedata
 from typing import Optional
@@ -12,9 +13,21 @@ def secure_filename(filename: str) -> str:
     - Converts to ASCII.
     - Keeps only alphanumeric, dots, dashes, and underscores.
     - Removes leading/trailing dots and spaces.
+    - Limits length to prevent filesystem issues.
+
+    SECURITY: Length limits prevent DoS and filesystem errors.
     """
     if not filename:
         return "unnamed_file"
+
+    # SECURITY: Limit filename length to prevent DoS (max 255 chars, typical filesystem limit)
+    if len(filename) > 255:
+        # Keep extension if present
+        name, ext = os.path.splitext(filename)
+        if ext:
+            filename = name[:250 - len(ext)] + ext
+        else:
+            filename = filename[:255]
 
     # 1. Normalize and convert to ASCII
     filename = (
@@ -33,6 +46,14 @@ def secure_filename(filename: str) -> str:
 
     if not filename:
         return "unnamed_file"
+
+    # SECURITY: Final length check after sanitization
+    if len(filename) > 255:
+        name, ext = os.path.splitext(filename)
+        if ext:
+            filename = name[:250 - len(ext)] + ext
+        else:
+            filename = filename[:255]
 
     return filename
 
@@ -54,10 +75,16 @@ def is_safe_url(url: str, allowed_host: Optional[str] = None) -> bool:
     if "://" in url:
         if not allowed_host:
             return False
-        # Ensure it starts with http://host or https://host
         from urllib.parse import urlparse
 
         parsed = urlparse(url)
+
+        # Validate scheme (only http/https allowed)
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        # Compare the full authority, including the port when present.
+        # This prevents redirects to the same host on a different port.
         return parsed.netloc == allowed_host
 
     # Relative URL check
@@ -82,8 +109,21 @@ def internal_only(fn):
         origin = request.headers.get("Origin", "")
 
         is_same_origin = False
-        if host and ((referer and host in referer) or (origin and host in origin)):
-            is_same_origin = True
+        if host:
+            # SECURITY: Parse URLs properly to extract netloc, prevent substring bypass
+            # e.g., Host: example.com shouldn't match Referer: https://attacker.com/example.com
+            from urllib.parse import urlparse
+
+            if referer:
+                parsed_referer = urlparse(referer)
+                # Compare netloc (domain:port) exactly
+                if parsed_referer.netloc == host:
+                    is_same_origin = True
+
+            if origin and not is_same_origin:
+                parsed_origin = urlparse(origin)
+                if parsed_origin.netloc == host:
+                    is_same_origin = True
 
         if not (is_ajax and is_same_origin):
             return request.api_error(

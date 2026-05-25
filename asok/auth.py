@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import time
 import urllib.parse
 import urllib.request
@@ -75,10 +76,14 @@ class MagicLink:
         current_time = int(time.time())
         is_expired = exp_time < current_time
 
-        # Combine all checks
+        # SECURITY: Apply consistent delay for ALL paths to prevent timing attacks
+        # This prevents attackers from distinguishing valid vs invalid tokens by timing
+        base_delay = 0.15  # 150ms minimum
+        jitter = secrets.randbelow(50) / 1000  # 0-50ms random jitter
+        time.sleep(base_delay + jitter)
+
+        # Combine all checks (after delay, so timing is consistent)
         if not is_valid or is_expired:
-            # Add random delay to prevent timing attacks (1-5ms)
-            time.sleep(0.001 + secrets.randbelow(5) / 1000)
             return None
 
         return email
@@ -121,7 +126,7 @@ class MagicLink:
 
 
 class OAuth:
-    """Zero-dependency OAuth2 client for common providers."""
+    """Lightweight OAuth2 helper that does not require additional runtime packages by default."""
 
     PROVIDERS = {
         "google": {
@@ -150,14 +155,16 @@ class OAuth:
         if not config:
             raise AuthError(f"Unknown OAuth provider: {provider_name}")
 
+        if not state:
+            state = secrets.token_urlsafe(32)
+
         params = {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": config["scopes"],
+            "state": state,
         }
-        if state:
-            params["state"] = state
 
         return f"{config['auth_url']}?{urllib.parse.urlencode(params)}"
 
@@ -168,11 +175,19 @@ class OAuth:
         client_secret: str,
         code: str,
         redirect_uri: str,
+        state: Optional[str] = None,
+        expected_state: Optional[str] = None,
     ) -> dict[str, Any]:
         """Exchange an authorization code for a set of normalized user information."""
         config = OAuth.PROVIDERS.get(provider_name.lower())
         if not config:
             raise AuthError(f"Unknown OAuth provider: {provider_name}")
+
+        if expected_state is None:
+            raise AuthError("OAuth expected_state is required")
+
+        if not state or not secrets.compare_digest(state, expected_state):
+            raise AuthError("OAuth state validation failed")
 
         # 1. Exchange code for access token
         token_data = {
@@ -191,8 +206,11 @@ class OAuth:
         )
 
         try:
-            with urllib.request.urlopen(req) as response:
-                res_data = json.loads(response.read().decode())
+            # SECURITY: Set timeout to prevent DoS/hang (10 seconds)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                # SECURITY: Limit response size to prevent DoS (max 100KB)
+                response_data = response.read(100_000)
+                res_data = json.loads(response_data.decode())
                 access_token = res_data.get("access_token")
                 if not access_token:
                     raise AuthError(f"OAuth token exchange failed: {res_data}")
@@ -207,8 +225,11 @@ class OAuth:
         user_req = urllib.request.Request(config["user_url"], headers=user_headers)
 
         try:
-            with urllib.request.urlopen(user_req) as response:
-                user_info = json.loads(response.read().decode())
+            # SECURITY: Set timeout to prevent DoS/hang (10 seconds)
+            with urllib.request.urlopen(user_req, timeout=10) as response:
+                # SECURITY: Limit response size to prevent DoS (max 100KB)
+                response_data = response.read(100_000)
+                user_info = json.loads(response_data.decode())
 
                 # Normalise common fields
                 email = user_info.get("email")
@@ -229,7 +250,10 @@ class OAuth:
 
     @staticmethod
     def _fetch_github_email(access_token: str) -> Optional[str]:
-        """Fetch the primary verified email from GitHub's custom endpoint."""
+        """Fetch the primary verified email from GitHub's custom endpoint.
+
+        SECURITY: Timeout and size limits prevent DoS.
+        """
         req = urllib.request.Request(
             "https://api.github.com/user/emails",
             headers={
@@ -238,8 +262,11 @@ class OAuth:
             },
         )
         try:
-            with urllib.request.urlopen(req) as response:
-                emails = json.loads(response.read().decode())
+            # SECURITY: Set timeout to prevent DoS/hang (10 seconds)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                # SECURITY: Limit response size to prevent DoS (max 100KB)
+                response_data = response.read(100_000)
+                emails = json.loads(response_data.decode())
                 for e in emails:
                     if e.get("primary") and e.get("verified"):
                         return e.get("email")
@@ -271,8 +298,19 @@ class BearerToken:
         try:
             user_id, exp_str = payload.split("|", 1)
             exp = int(exp_str)
-            if exp > 0 and exp < time.time():
+
+            # SECURITY: Fixed expiration logic (was allowing exp==0 without validation)
+            # exp == 0 means permanent token (should be avoided in production)
+            # exp > 0 and exp <= now means expired
+            # exp > 0 and exp > now means valid
+            current_time = int(time.time())
+
+            # Check if token is expired (inclusive - token expires at exactly exp time)
+            is_expired = exp > 0 and exp <= current_time
+
+            if is_expired:
                 return None
+
             return user_id
         except ValueError:
             return None

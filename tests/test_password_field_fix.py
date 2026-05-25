@@ -9,6 +9,8 @@ from asok.orm import Field, Model
 class TestUser(Model):
     """Test user model with password field."""
 
+    __test__ = False
+
     email = Field.Email(unique=True, nullable=False)
     password = Field.Password(nullable=False)
     name = Field.String(max_length=100)

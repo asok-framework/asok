@@ -48,12 +48,36 @@ class Mail:
                 raise MailError(f"Failed to send email: {e}") from e
 
     @staticmethod
+    def _validate_email(email: str) -> str:
+        """Validate and sanitize email address to prevent header injection.
+
+        SECURITY: Strict email validation prevents SMTP header injection attacks
+        via malformed email addresses containing CRLF, spaces, or control chars.
+        """
+        import re
+
+        # Remove any whitespace
+        email = email.strip()
+
+        # SECURITY: Strict email format validation
+        # Must be: alphanumeric + allowed chars @ domain.tld
+        email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+        if not email_pattern.match(email):
+            raise ValueError(f"Invalid email address: {email}")
+
+        # Additional check for control characters
+        if any(ord(c) < 32 or ord(c) == 127 for c in email):
+            raise ValueError(f"Email contains control characters: {email}")
+
+        return email
+
+    @staticmethod
     def _sanitize(val: Union[str, list[str]]) -> Any:
         """Strip control characters (CR/LF) from header values to prevent injection."""
         if isinstance(val, list):
-            return [v.replace("\n", "").replace("\r", "") for v in val]
+            return [v.replace("\n", "").replace("\r", "").strip() for v in val]
         if isinstance(val, str):
-            return val.replace("\n", "").replace("\r", "")
+            return val.replace("\n", "").replace("\r", "").strip()
         return val
 
     @staticmethod
@@ -70,6 +94,8 @@ class Mail:
         """Send an email (in a background thread by default).
 
         Returns the thread instance if async, or None if sync.
+
+        SECURITY: Limits on recipients and content size prevent abuse.
         """
         host = Mail._cfg("MAIL_HOST", "localhost")
         port = int(Mail._cfg("MAIL_PORT", "587"))
@@ -78,15 +104,35 @@ class Mail:
         sender = from_addr or Mail._cfg("MAIL_FROM", username or "noreply@localhost")
         use_tls = Mail._cfg("MAIL_TLS", "true").lower() != "false"
 
-        # Normalise and sanitize recipients
+        # SECURITY: Validate and sanitize all email addresses
         if isinstance(to, str):
             to = [to]
-        to = Mail._sanitize(to)
-        cc_list = Mail._sanitize([cc] if isinstance(cc, str) else (cc or []))
-        bcc_list = Mail._sanitize([bcc] if isinstance(bcc, str) else (bcc or []))
-        all_recipients = to + cc_list + bcc_list
 
-        sender = Mail._sanitize(sender)
+        # SECURITY: Limit number of recipients to prevent abuse (max 100 total)
+        if len(to) > 100:
+            to = to[:100]
+
+        # Validate all recipient emails
+        to = [Mail._validate_email(e) for e in to]
+        cc_list = [Mail._validate_email(e) for e in ([cc] if isinstance(cc, str) else (cc or []))]
+        bcc_list = [Mail._validate_email(e) for e in ([bcc] if isinstance(bcc, str) else (bcc or []))]
+
+        # SECURITY: Limit total recipients across to/cc/bcc (max 100)
+        all_recipients = (to + cc_list + bcc_list)[:100]
+
+        # Validate sender email
+        sender = Mail._validate_email(sender)
+
+        # SECURITY: Limit body and HTML content size (max 1MB each)
+        if len(body) > 1_000_000:
+            logger.warning("Email body too large (%d bytes), truncating", len(body))
+            body = body[:1_000_000] + "\n\n[Content truncated]"
+
+        if html and len(html) > 1_000_000:
+            logger.warning("Email HTML too large (%d bytes), truncating", len(html))
+            html = html[:1_000_000] + "\n\n<!-- Content truncated -->"
+
+        # Sanitize subject and other headers
         subject = Mail._sanitize(subject)
 
         msg = MIMEMultipart("alternative") if html else MIMEMultipart()

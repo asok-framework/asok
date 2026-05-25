@@ -13,18 +13,25 @@
     </p>
   </div>
   <div class="page-actions">
-    {% if has_soft_delete and not trash %}
+    {% if has_soft_delete and not trash and user_can_delete %}
       <a href="{{ admin_prefix }}/{{ slug }}/trash" class="btn btn-ghost btn-sm" data-spa>
         {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Trash') }}</span>
       </a>
     {% endif %}
+    {# SECURITY: Export requires export permission #}
+    {% if user_can_export %}
     <a href="{{ export_url }}" class="btn btn-default btn-sm" title="{{ t('Export CSV') }}">
       {{ icon('download', 14) }}
     </a>
+    {% endif %}
+    {# SECURITY: Import requires add permission #}
+    {% if user_can_add and not trash %}
     <a href="{{ admin_prefix }}/{{ slug }}/import" class="btn btn-default btn-sm" title="{{ t('Import CSV') }}" data-spa>
       {{ icon('upload', 14) }}
     </a>
-    {% if can_add and not trash %}
+    {% endif %}
+    {# SECURITY: New requires add permission #}
+    {% if user_can_add and not trash %}
       <a href="{{ admin_prefix }}/{{ slug }}/new" class="btn btn-primary btn-sm" data-spa>
         {{ icon('plus', 14) }} <span style="margin-left:4px">{{ t('New') }}</span>
       </a>
@@ -177,7 +184,15 @@
                     </button>
                   </form>
                   {% endif %}
-                  {% if can_edit %}
+                  {# View button - always show if user has view permission #}
+                  {% if user_can_view and not trash %}
+                  <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}/view"
+                     class="btn btn-ghost btn-icon" data-spa title="{{ t('View details') }}">
+                    {{ icon('search', 16) }}
+                  </a>
+                  {% endif %}
+                  {# Edit button - only show if user has edit permission #}
+                  {% if user_can_edit and not trash %}
                   <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}"
                      class="btn btn-ghost btn-icon" data-spa title="{{ t('Edit') }}">
                     {{ icon('edit', 16) }}
@@ -191,7 +206,8 @@
                         {{ icon('restore', 16) }}
                       </button>
                     </form>
-                  {% elif can_delete %}
+                  {# Delete button - only show if user has delete permission #}
+                  {% elif user_can_delete %}
                     <form method="post" action="{{ admin_prefix }}/{{ slug }}/{{ row.id }}/delete"
                           data-block="#row-{{ row.id }}" data-swap="delete"
                           data-confirm="{{ t('Delete this record?') }}" style="display:inline">
@@ -216,10 +232,10 @@
       </div>
       <div class="pagination-btns">
         {% if page > 1 %}
-          <a href="{{ admin_prefix }}/{{ slug }}{{ prev_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ icon('chevron', 14, 'rot-180') }} {{ t('Previous') }}</a>
+          <a href="{{ prev_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ icon('arrow-left', 14) }} {{ t('Previous') }}</a>
         {% endif %}
         {% if page < pages %}
-          <a href="{{ admin_prefix }}/{{ slug }}{{ next_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ t('Next') }} {{ icon('chevron', 14) }}</a>
+          <a href="{{ next_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ t('Next') }} {{ icon('arrow-right', 14) }}</a>
         {% endif %}
       </div>
     </div>

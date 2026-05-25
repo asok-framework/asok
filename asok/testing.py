@@ -11,6 +11,8 @@ from .core import Asok
 class TestResponse:
     """Wraps a WSGI response for easy assertions during testing."""
 
+    __test__ = False
+
     def __init__(self, status: str, headers: Iterable[tuple[str, str]], body: bytes):
         """Initialize the test response wrapper."""
         self.status = status
@@ -30,6 +32,8 @@ class TestResponse:
 
 class TestClient:
     """WSGI test client that allows making requests directly to the app without a running server."""
+
+    __test__ = False
 
     def __init__(self, app: Asok):
         """Initialize the test client with an Asok application instance."""

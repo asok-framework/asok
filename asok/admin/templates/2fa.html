@@ -14,7 +14,7 @@
   <title>{{ t('Two-factor authentication') }} — {{ admin_site_name }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ admin_prefix }}/static/admin.css">
+  <link rel="stylesheet" href="{{ static('admin.css') }}">
   {% if admin_favicon %}
   <link rel="icon" type="image/x-icon" href="{{ static(admin_favicon) }}">
   {% else %}
@@ -76,7 +76,7 @@
     </div>
   </div>
 
-  <script src="{{ admin_prefix }}/static/admin.js"></script>
+  <script src="{{ static('admin.js') }}"></script>
 </body>
 
 </html>

@@ -1,7 +1,22 @@
 recursive-include asok/admin/templates *.html
-recursive-include asok/admin/static *
+recursive-include asok/admin/static *.min.js *.min.css *.svg
 recursive-include asok/assets *
 recursive-include asok/api/templates *.html
-recursive-include asok/api/static *
-recursive-include asok/toolbar/static *
+recursive-include asok/api/static *.min.js *.min.css *.svg
+recursive-include asok/toolbar/static *.min.js *.min.css
 recursive-include asok/toolbar/templates *.html
+recursive-include asok/core/assets *.min.js *.min.css
+
+# Exclude Python cache and compiled files
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude *.dylib
+global-exclude .DS_Store
+global-exclude *.egg-info
+
+# Exclude development and test files
+recursive-exclude tests *
+recursive-exclude scripts *
+exclude .gitignore
+exclude .asok

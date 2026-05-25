@@ -13,18 +13,30 @@ def time_ago(dt: Union[datetime.datetime, str, None]) -> str:
 
     Returns:
         A relative string like "3 minutes ago" or "2 days ago".
+
+    SECURITY: Handles extreme dates to prevent errors.
     """
     if not dt:
         return ""
     if isinstance(dt, str):
+        # SECURITY: Limit string length to prevent DoS
+        if len(dt) > 100:
+            return "invalid date"
         try:
             dt = datetime.datetime.fromisoformat(dt.replace("Z", "+00:00"))
-        except ValueError:
-            return dt
+        except (ValueError, TypeError):
+            return dt if isinstance(dt, str) else ""
 
-    now = datetime.datetime.now(dt.tzinfo) if dt.tzinfo else datetime.datetime.now()
-    diff = now - dt
-    seconds = diff.total_seconds()
+    try:
+        now = datetime.datetime.now(dt.tzinfo) if dt.tzinfo else datetime.datetime.now()
+        diff = now - dt
+        seconds = diff.total_seconds()
+    except (ValueError, OverflowError, AttributeError):
+        return "invalid date"
+
+    # SECURITY: Prevent overflow with extremely large time differences
+    if abs(seconds) > 3_155_760_000:  # > 100 years
+        return "a very long time ago" if seconds > 0 else "in the distant future"
 
     if seconds < 0:
         return "in the future"
@@ -58,14 +70,26 @@ def file_size(size_bytes: int) -> str:
 
     Returns:
         A formatted string with the appropriate unit (KB, MB, etc.).
+
+    SECURITY: Handles edge cases to prevent errors with invalid inputs.
     """
+    # SECURITY: Handle negative and invalid values
+    if size_bytes < 0:
+        return "0 B"
     if size_bytes == 0:
         return "0 B"
+
     size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
-    i = int(math.floor(math.log(size_bytes, 1024)))
-    p = math.pow(1024, i)
-    s = round(size_bytes / p, 2)
-    return f"{s} {size_name[i]}"
+    try:
+        i = int(math.floor(math.log(size_bytes, 1024)))
+        # SECURITY: Prevent index out of bounds
+        if i >= len(size_name):
+            i = len(size_name) - 1
+        p = math.pow(1024, i)
+        s = round(size_bytes / p, 2)
+        return f"{s} {size_name[i]}"
+    except (ValueError, OverflowError):
+        return f"{size_bytes} B"
 
 
 def intcomma(value: Union[int, float, str]) -> Union[str, Any]:

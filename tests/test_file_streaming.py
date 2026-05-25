@@ -63,3 +63,47 @@ def get(request):
     # (Checking internal environ flag if possible, but TestClient might hide it)
     # Actually, TestClient calls the app, so we can check if it returned a generator
     # but TestClient's get() method consumes the generator.
+
+
+def test_file_streaming_subfolder(tmp_path):
+    app = Asok()
+    app.config["DEBUG"] = True
+
+    # Mock the uploads directory
+    uploads_dir = tmp_path / "src" / "partials" / "uploads"
+    images_dir = uploads_dir / "images"
+    images_dir.mkdir(parents=True)
+
+    # Write a test SVG file inside images sub-folder
+    logo_file = images_dir / "logo.svg"
+    logo_content = b"<svg></svg>"
+    logo_file.write_bytes(logo_content)
+
+    app.root_dir = str(tmp_path)
+    client = TestClient(app)
+
+    # Create a page.py to handle the download from subfolder
+    download_dir = tmp_path / "src" / "pages" / "logo"
+    download_dir.mkdir(parents=True)
+    page_py = download_dir / "page.py"
+    page_py.write_text("""
+def get(request):
+    return request.send_file("images/logo.svg")
+""")
+
+    response = client.get("/logo")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == "image/svg+xml"
+    assert response.body == logo_content
+
+    # Test path traversal attack rejection
+    escape_dir = tmp_path / "src" / "pages" / "escape"
+    escape_dir.mkdir(parents=True)
+    escape_page = escape_dir / "page.py"
+    escape_page.write_text("""
+def get(request):
+    return request.send_file("../../../etc/passwd")
+""")
+
+    response = client.get("/escape")
+    assert response.status_code == 403

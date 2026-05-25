@@ -1,7 +1,11 @@
-.PHONY: install dev test coverage build clean lint format
+.PHONY: install dev test coverage build clean lint format compile
 
 # Default command
 all: lint test
+
+# Compile core assets with esbuild
+compile:
+	python3 scripts/compile_assets.py
 
 # Install the framework in development mode
 install:
@@ -28,7 +32,7 @@ format:
 	python3 -m ruff format asok/ tests/
 
 # Build the distribution packages (.whl and .tar.gz)
-build: clean
+build: clean compile
 	python3 -m build
 
 # Clean generated files and caches

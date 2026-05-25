@@ -32,27 +32,45 @@ class ScheduledTask:
 
     @staticmethod
     def _parse_interval(interval_str: str) -> float:
-        """Parse interval strings like '5m', '1h', '1w', '1mo', '1y' into seconds."""
+        """Parse interval strings like '5m', '1h', '1w', '1mo', '1y' into seconds.
+
+        SECURITY: Validates interval bounds to prevent DoS with extreme values.
+        """
         s = interval_str.lower().strip()
+
+        # SECURITY: Limit input string length to prevent parsing DoS
+        if len(s) > 20:
+            return 60.0
+
         try:
             # Multi-character suffixes (mo)
             if s.endswith("mo"):
                 val = float(s[:-2])
-                return val * 30 * 86400
+                result = val * 30 * 86400
+            else:
+                # Single-character suffixes
+                val = float(s[:-1])
+                unit = s[-1]
+                multiplier = {
+                    "s": 1,
+                    "m": 60,
+                    "h": 3600,
+                    "d": 86400,
+                    "w": 7 * 86400,
+                    "y": 365 * 86400,
+                }.get(unit, 1)
+                result = val * multiplier
 
-            # Single-character suffixes
-            val = float(s[:-1])
-            unit = s[-1]
-            multiplier = {
-                "s": 1,
-                "m": 60,
-                "h": 3600,
-                "d": 86400,
-                "w": 7 * 86400,
-                "y": 365 * 86400,
-            }.get(unit, 1)
-            return val * multiplier
-        except (ValueError, IndexError):
+            # SECURITY: Validate interval bounds
+            # Minimum: 1 second (prevent tight loops)
+            # Maximum: 1 year (prevent overflow and unreasonable schedules)
+            if result < 1.0:
+                return 60.0
+            if result > 365 * 86400:  # 1 year max
+                return 60.0
+
+            return result
+        except (ValueError, IndexError, OverflowError):
             return 60.0
 
     def _run(self) -> None:

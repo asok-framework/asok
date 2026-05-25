@@ -22,8 +22,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ admin_prefix }}/static/admin.css">
-  <link rel="stylesheet" href="{{ admin_prefix }}/static/quill.snow.css">
+  <link rel="stylesheet" href="{{ static('admin.css') }}">
+  <link rel="stylesheet" href="{{ static('quill.snow.css') }}">
   {% if admin_favicon %}
   <link rel="icon" type="image/x-icon" href="{{ static(admin_favicon) }}">
   {% else %}
@@ -219,8 +219,8 @@
   </div>
 </div>
 
-<script src="{{ admin_prefix }}/static/quill.js"></script>
-<script src="{{ admin_prefix }}/static/admin.js"></script>
+<script src="{{ static('quill.js') }}"></script>
+<script src="{{ static('admin.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

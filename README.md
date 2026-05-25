@@ -14,7 +14,7 @@
 
 ---
 
-**Asok** is a cohesive, full-stack Python web framework designed for developer speed, elegant architecture, and production-grade security. Built with a "zero-dependency" philosophy, it unifies server-side logic and client-side reactivity into a single, high-performance package, offering a streamlined and secure development experience from the first line of code.
+**Asok** is a cohesive, full-stack Python web framework designed for developer speed, elegant architecture, and security-conscious defaults. Built around a "zero-runtime-dependency" philosophy, it unifies server-side logic and client-side reactivity into a single, high-performance package, offering a streamlined development experience from the first line of code.
 
 🌐 **[Official Website & Documentation](https://asok-framework.com)** | 📖 **[Quick Start Guide](https://asok-framework.com/docs/01-getting-started)** | 💬 **[Join Discord](https://discord.com/invite/aYYkuPT3qR)** | 🎥 **[YouTube Tutorials](https://www.youtube.com/@asok-framework)**
 
@@ -22,43 +22,43 @@
 
 ## 🎯 Why Asok?
 
-### Zero Dependencies, Maximum Power
-Unlike other Python frameworks, Asok requires **zero external dependencies** - just Python 3.10+. No Werkzeug, no Jinja2, no SQLAlchemy. Everything is built from the Python standard library, making it:
+### Zero Runtime Dependencies, Maximum Power
+Asok requires **no external runtime dependencies** - just Python 3.10+. No Werkzeug, no Jinja2, no SQLAlchemy. The core framework is built from the Python standard library, making it:
 - ✅ **Extremely lightweight** (~360KB, ~20K lines of code)
-- ✅ **Dead simple to audit** (security teams love it)
-- ✅ **Forever stable** (no dependency hell)
-- ✅ **Fast to install** (< 1 second)
+- ✅ **Easy to audit** (everything in one codebase, no hidden dependencies)
+- ✅ **Forever stable** (no dependency hell or supply chain risks)
 
 ### Modern Developer Experience
 ```python
 # File-based routing like Next.js
 src/pages/blog/[slug]/page.py  →  /blog/hello-world
 
-# Reactive components out of the box
+# Client-side Reactivity
 <div asok-state="{ count: 0 }">
   <button asok-on:click="count++" asok-text="count"></button>
 </div>
 
+# WebSocket Sync
+class Counter(Component):
+    count = 0
+
+    @exposed
+    def increment(self):
+        self.count += 1
+
+    def render(self):
+        return self.html("counter.html")
+
 # Admin interface in 2 lines
 admin = Admin(app)
 ```
-
-### Production-Ready Security
-- 🔒 **OWASP Top 10** protections built-in
-- 🔒 **Automatic CSRF** tokens with rotation
-- 🔒 **SQL injection** prevention via parameterized queries
-- 🔒 **XSS protection** with auto-escaping templates
-- 🔒 **Secure sessions** (HttpOnly, SameSite=Strict, HMAC-signed)
-- 🔒 **10/10 security score** in comprehensive audits
 
 ---
 
 ## ✨ Key Features
 
 ### Core Framework
-- 🚀 **Zero Dependencies** - Pure Python stdlib, no external packages
 - 💎 **Full Type Hints** - Complete PEP 484 support for IDE autocomplete
-- 📦 **Tiny Footprint** - ~360KB, ~20K lines of code
 - ⌨️ **Powerful CLI** - Scaffolding, migrations, dev server, production builds
 - 🛣️ **File-based Routing** - Next.js-style routing (`src/pages/` → URLs)
 - ⛓️ **Dynamic Routes** - Parameters via `[id]`, `[slug:slug]` patterns
@@ -66,7 +66,7 @@ admin = Admin(app)
 ### Database & ORM
 - 🗄️ **Built-in ORM** - SQLite with relations, migrations, soft deletes
 - 🔍 **Full-Text Search** - FTS5 integration for lightning-fast search
-- 🔐 **Auto Password Hashing** - PBKDF2-SHA256 with **600,000 iterations** (OWASP 2023 compliant)
+- 🔐 **Auto Password Hashing** - PBKDF2-SHA256 with **600,000 iterations**
 - 📊 **Query Builder** - Fluent API with eager loading
 
 ### Templates & Frontend
@@ -83,15 +83,16 @@ admin = Admin(app)
 - ⚡ **Optimized JSON** - High-speed serialization for high-throughput services
 - 📑 **Live Documentation** - Interactive API explorer (Swagger UI) included
 
-### Security (10/10 Score)
+### Security
 - 🔒 **CSRF Protection** - Auto-rotation, HMAC validation, SameSite=Strict
 - 🔒 **XSS Prevention** - Auto-escaping templates, CSP nonces
 - 🔒 **SQL Injection** - Parameterized queries, column validation
 - 🔒 **Secure Sessions** - HttpOnly, Secure flags, HMAC-signed
 - 🔒 **Path Traversal** - Absolute path validation
+- 🔒 **OWASP Top 10** - Built-in protections for common web vulnerabilities
 
 ### Admin & Developer Tools
-- 👨‍💼 **Auto Admin** - Django-style admin in 2 lines of code
+- 👨‍💼 **Auto Admin** - Django-inspired admin in 2 lines of code
 - 🌍 **i18n Ready** - Multi-language support with JSON translations
 - 📧 **Email Service** - SMTP integration with templates
 - 📦 **Production Build** - Bytecode compilation, minification, WebP conversion
@@ -99,26 +100,21 @@ admin = Admin(app)
 
 ---
 
-## ⚖️ Philosophy & Positioning
+## 💭 Philosophy
 
-Asok is built for the modern era of web development, where the boundary between frontend and backend is fluid. While it shares some values with other frameworks, it carves out its own path by providing a unified environment that eliminates the need for a complex "Franken-stack" of multiple tools and dependencies.
+Asok is designed for developers who want to build modern web applications without managing a complex stack of dependencies. It's a **cohesive toolkit** where everything works together out of the box—from database to real-time features—while remaining simple enough to understand and audit.
 
-| Feature | Asok | Flask | Django |
-|---|---|---|---|
-| **External Dependencies** | **0 (Zero)** | ~6 (Werkzeug, Jinja...) | ~3 (asgiref, sqlparse...) |
-| **Philosophy** | Batteries Included + Modern | Micro-framework | Megalo-framework |
-| **Routing System** | **File-based** (`src/pages/`) | Decorators (`@app.route`) | Centralized (`urls.py`) |
-| **Built-in ORM** | Yes (AsokDB - optimized SQLite) | No (SQLAlchemy required) | Yes (Full-featured, multi-DB) |
-| **Generated Admin** | Yes, 100% automatic and reactive | No (Flask-Admin required) | Yes, historical and heavy |
-| **Real-time (WebSockets)** | **Native** (Alive Engine) | No (Flask-SocketIO required) | Complex (Django Channels) |
-| **Reactive Components** | **Native** (Live Components) | No | No |
-| **Ideal for** | Fast projects, Modern SaaS, Zero devops | Simple APIs, Microservices | Large legacy architectures |
+**Core Principles:**
+- **Cohesion over Composition**: All components are designed to work together seamlessly
+- **Simplicity over Magic**: Clear, readable code with minimal abstraction layers
+- **Security by Default**: Strong security defaults are built in, with additional production hardening available through configuration
+- **Developer Joy**: Fast feedback loops, intuitive APIs, excellent error messages
+
+Asok doesn't aim to replace existing frameworks—it offers a different approach for teams who value simplicity, security, and rapid development in a unified environment.
 
 ---
 
 ## 🛠️ Installation & Setup
-
-> **💡 Note for VS Code Users:** For the best developer experience, we highly recommend installing the official **[Asok VS Code Extension](https://marketplace.visualstudio.com/items?itemName=AsokFramework.asok-vscode)**. It provides native autocompletion, reactive snippets, and integrated CLI commands directly in your editor.
 
 ### 1. Installation
 You can install Asok via pip:
@@ -286,7 +282,7 @@ In production (`DEBUG=False`), Asok enforces strict security checks:
 
 ### 2. Secure Defaults
 - **DEBUG**: Default is `False`. You must explicitly set `DEBUG=True` in your `.env` for development.
-- **Password Hashing**: PBKDF2-SHA256 with **600,000 iterations** (OWASP 2023 compliant).
+- **Password Hashing**: PBKDF2-SHA256 with **600,000 iterations**.
 - **Security Headers**: HSTS (1 year), CSP (with nonces), X-Frame-Options (DENY), and X-Content-Type-Options (nosniff) are enabled by default.
 
 ### 3. Recommended .env for Production
@@ -327,7 +323,7 @@ source venv/bin/activate  # or `venv\Scripts\activate` on Windows
 # 3. Install dependencies (dev mode)
 pip install -e .
 
-# 4. Run the test suite (353 tests should pass!)
+# 4. Run the test suite
 python -m pytest
 
 # 5. Create a branch for your feature
@@ -353,30 +349,23 @@ Thanks to all our amazing contributors! 🎉
 
 ---
 
-## 🌐 Ecosystem
-
-Explore the Asok ecosystem:
-- ⚡ **[Asok VS Code Extension](https://marketplace.visualstudio.com/items?itemName=AsokFramework.asok-vscode)** - Official editor toolkit (autocompletion, snippets, CLI)
-- 🛠️ **[Asok Examples](https://github.com/asok-framework/asok-examples)** - Ready-to-use projects and templates
-- 🧪 **[Asok Lab](https://github.com/asok-framework/asok-lab)** - Experimental features, benchmarks, playground
-- 📖 **[Asok Docs](https://github.com/asok-framework/asok-docs)** - Documentation and website source
-- 🎓 **[Asok Tutorials](https://www.youtube.com/@asok-framework)** - Step-by-step learning paths
-
----
-
-## 💬 Community & Support
-
-Join our growing community:
-
-- 💬 **[Discord Server](https://discord.gg/asok)** - Real-time chat, help, and discussions
-- 🐦 **[Twitter/X](https://twitter.com/asok_framework)** - News and updates
-- 📖 **[GitHub Discussions](https://github.com/asok-framework/asok/discussions)** - Q&A, feature requests, show & tell
-- 🎥 **[YouTube Channel](https://www.youtube.com/@asok-framework)** - Tutorials and demos
+## 💬 Support & Resources
 
 **Need help?**
-- 📚 Check the [documentation](https://asok-framework.com/docs)
+- 📚 Read the [documentation](https://asok-framework.com/docs)
 - 🔍 Search [existing issues](https://github.com/asok-framework/asok/issues)
-- 💬 Ask in [Discord](https://discord.com/invite/aYYkuPT3qR) or [Discussions](https://github.com/asok-framework/asok/discussions)
+- 💬 Ask in [GitHub Discussions](https://github.com/asok-framework/asok/discussions)
+- 🐛 Report bugs via [GitHub Issues](https://github.com/asok-framework/asok/issues/new)
+
+**Documentation & Resources:**
+- 📖 [Complete Framework Guide](https://asok-framework.com/docs)
+- 📖 [Documentation Source](https://github.com/asok-framework/asok-docs) - Contribute to the docs
+- 🛠️ [Code Examples](https://github.com/asok-framework/asok-examples) - Ready-to-use projects and templates
+- 📖 [CHANGELOG](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md) - See what's new in each release
+
+**Stay updated:**
+- ⭐ Star the repo to follow development
+- 👀 Watch releases for new versions
 
 ---
 
@@ -384,25 +373,41 @@ Join our growing community:
 
 Asok is actively developed with exciting features planned:
 
-**v0.2.0 (Q2 2026)** - Enterprise Features
-- PostgreSQL & MySQL support, advanced ORM relationships
+**v0.2.0** - Enterprise Features
+- PostgreSQL & MySQL support
+- Advanced ORM relationships (many-to-many improvements)
 - WebSocket rooms for real-time collaboration
 - Background job queue system
 - Plugin ecosystem & CLI enhancements
 
-**v0.3.0 (Q3 2026)** - Modern Stack
+**v0.3.0** - Modern Stack
 - GraphQL API support with auto-generated schemas
 - Server-side rendering (SSR) & static site generation
 - Built-in monitoring & observability tools
 - Full async/await support (ASGI)
 
-See the **[detailed roadmap](ROADMAP.md)** for complete feature lists, timelines, and how to contribute to planning.
+**Note:** Timelines are subject to change based on community feedback and development priorities.
 
 ---
 
-## ⭐ Star History
+## 🏭 Production Status
 
-[![Star History Chart](https://api.star-history.com/svg?repos=asok-framework/asok&type=Date)](https://star-history.com/#asok-framework/asok&Date)
+Asok v0.1.x is **early-stage software** under active development. It's suitable for:
+
+**✅ Recommended for:**
+- Personal projects and MVPs
+- Internal tools and admin dashboards
+- Rapid prototyping and experimentation
+- Learning full-stack Python development
+- Projects where dependency auditing is critical
+
+**⚠️ Current Limitations:**
+- **Database**: SQLite only (PostgreSQL/MySQL planned for v0.2.0)
+- **Concurrency**: WSGI only, no async/await yet (ASGI planned for v0.3.0)
+- **Ecosystem**: Early-stage community, limited third-party plugins
+- **Maturity**: v0.1.x - APIs may evolve before v1.0
+
+**For mission-critical production applications**, consider your specific requirements and evaluate if Asok's current feature set meets your needs.
 
 ---
 

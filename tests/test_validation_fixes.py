@@ -240,5 +240,70 @@ def test_enum_nullable_form_integration():
     Task.close_connections()
 
 
+def test_form_from_model_dropdown_and_toggle():
+    """Test that Form.from_model handles Dropdown and Boolean toggle fields without duplicate argument errors."""
+    class Project(Model):
+        _db_path = ":memory:"
+        status = Field.Dropdown(
+            choices=[("active", "Active"), ("archived", "Archived")],
+            option__class="text-indigo-600 font-medium",
+            menu__class="shadow-2xl rounded-xl border-none"
+        )
+        is_public = Field.Boolean(
+            form_type="toggle",
+            slider__class="bg-indigo-500",
+            container__class="p-4 bg-gray-50 rounded-lg"
+        )
+
+    Project.create_table()
+    try:
+        # This call should not raise TypeError: FormField.__init__() got multiple values for argument 'choices'
+        form = Form.from_model(Project)
+        assert form is not None
+        assert hasattr(form, "status")
+        assert hasattr(form, "is_public")
+        assert form.status.choices == [("active", "Active"), ("archived", "Archived")]
+        assert form.status.attrs.get("option__class") == "text-indigo-600 font-medium"
+        assert form.status.attrs.get("menu__class") == "shadow-2xl rounded-xl border-none"
+        assert form.is_public.attrs.get("slider__class") == "bg-indigo-500"
+        assert form.is_public.attrs.get("container__class") == "p-4 bg-gray-50 rounded-lg"
+
+        # Check rendered HTML outputs
+        status_html = str(form.status)
+        assert 'asok-class:rotate-180="open"' in status_html
+        assert 'text-indigo-600 font-medium' in status_html
+        assert 'shadow-2xl rounded-xl border-none' in status_html
+
+        is_public_html = str(form.is_public)
+        assert 'peer sr-only' in is_public_html
+        assert 'bg-indigo-500' in is_public_html
+        assert 'p-4 bg-gray-50 rounded-lg' in is_public_html
+    finally:
+        Project.close_connections()
+def test_toggle_assets_injection():
+    """Test that toggle fields automatically trigger the injection of the directives stylesheet,
+    even when no other reactive directives are present in the HTML.
+    """
+    from asok.core import Asok, Request
+    app = Asok()
+    app.config["DEBUG"] = True
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "HTTP_HOST": "localhost:8000",
+        "PATH_INFO": "/test",
+    }
+    request = Request(environ)
+
+    # HTML containing only a toggle field (represented by its CSS class class="asok-toggle")
+    content = "<html><head></head><body><div class=\"asok-toggle\">Toggle content</div></body></html>"
+    result = app._inject_assets(content, request, "testnonce123")
+
+    # The directives stylesheet content should be injected in a <style> block because "asok-toggle" was detected
+    assert "[asok-cloak]" in result or ".asok-toggle-slider" in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

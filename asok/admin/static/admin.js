@@ -1,5 +1,5 @@
 /**
- * ASOK Reactive Runtime v0.1.6
+ * ASOK Reactive Runtime v0.1.7
  * - Full implementation of the Asok SPA spec
  * - Event-driven, attribute-based reactivity
  * - Support for OOB swaps, SSE, and complex triggers
@@ -103,6 +103,14 @@
         const indicator = el.getAttribute('data-indicator') === '' ? el : document.querySelector(el.getAttribute('data-indicator'));
         if (indicator) indicator.classList.add('is-loading');
 
+        // Safety timeout: remove loading state after 30 seconds to prevent stuck spinners
+        const loadingTimeout = setTimeout(() => {
+            if (indicator && indicator.classList.contains('is-loading')) {
+                indicator.classList.remove('is-loading');
+                console.warn('[Asok] Loading timeout reached (30s) - removing spinner');
+            }
+        }, 30000);
+
         const disable = el.hasAttribute('data-disable');
         const disableNodes = disable ? (el.tagName === 'FORM' ? el.querySelectorAll('button, input[type="submit"]') : [el]) : [];
         disableNodes.forEach(n => n.disabled = true);
@@ -153,6 +161,16 @@
             const response = await fetch(finalUrl, fetchOptions);
             const html = await response.text();
 
+            // SECURITY FIX: Ne pas exécuter data-swap="delete" si la requête a échoué (403, 500, etc.)
+            // Vérifier response.ok (status 200-299) avant de traiter la réponse
+            if (!response.ok) {
+                // La réponse est une erreur (403, 404, 500, etc.)
+                // Afficher la page d'erreur au lieu de faire le swap
+                const finalTarget = '#page-body';
+                processResponse(html, finalTarget, 'innerHTML');
+                return;
+            }
+
             // If we redirected, ensure we update the URL
             const shouldPush = el.hasAttribute('data-push-url') || el.hasAttribute('data-spa') || (target && target.includes('#page-body'));
 
@@ -168,6 +186,7 @@
         } catch (err) {
             console.error('[Asok] Action failed:', err);
         } finally {
+            clearTimeout(loadingTimeout);
             if (indicator) indicator.classList.remove('is-loading');
             disableNodes.forEach(n => n.disabled = false);
         }
@@ -520,7 +539,30 @@
 
             // Individual permission checkboxes
             document.querySelectorAll('.perm-cb').forEach(cb => {
-                cb.addEventListener('change', updatePermissions);
+                cb.addEventListener('change', (e) => {
+                    // PERMISSION DEPENDENCY: view is required for all other permissions
+                    const perm = cb.dataset.perm;
+                    if (cb.checked && perm) {
+                        const [slug, verb] = perm.split('.');
+                        // If checking add/edit/delete/export, auto-check view
+                        if (verb && verb !== 'view') {
+                            const viewCheckbox = document.querySelector(`.perm-cb[data-perm="${slug}.view"]`);
+                            if (viewCheckbox && !viewCheckbox.checked) {
+                                viewCheckbox.checked = true;
+                            }
+                        }
+                    }
+                    // If unchecking view, uncheck all other permissions for this model
+                    if (!cb.checked && perm && perm.endsWith('.view')) {
+                        const slug = perm.replace('.view', '');
+                        document.querySelectorAll(`.perm-cb[data-perm^="${slug}."]`).forEach(otherCb => {
+                            if (otherCb !== cb) {
+                                otherCb.checked = false;
+                            }
+                        });
+                    }
+                    updatePermissions();
+                });
             });
 
             // Row "select all" checkboxes
@@ -531,6 +573,13 @@
                     document.querySelectorAll(`.perm-cb[data-perm^="${slug}."]`).forEach(cb => {
                         cb.checked = checked;
                     });
+                    // PERMISSION DEPENDENCY: Ensure "view" is always checked when "All" is checked
+                    if (checked) {
+                        const viewCheckbox = document.querySelector(`.perm-cb[data-perm="${slug}.view"]`);
+                        if (viewCheckbox) {
+                            viewCheckbox.checked = true;
+                        }
+                    }
                     updatePermissions();
                 });
             });

@@ -1,3 +1,3 @@
-# Asok Framework is zero-dependency.
-# No external packages are required to run the framework.
+# Asok Framework aims for minimal external dependencies.
+# Some optional features may require third-party packages; see requirements-dev.txt for development tools.
 # For development tools, see requirements-dev.txt

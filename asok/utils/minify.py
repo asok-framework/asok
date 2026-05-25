@@ -12,9 +12,15 @@ def minify_html(html: str) -> str:
 
     Returns:
         The minified HTML string.
+
+    SECURITY: Size limits prevent DoS via extremely large HTML.
     """
     if not html:
         return ""
+
+    # SECURITY: Reject excessively large HTML to prevent DoS (max 10MB)
+    if len(html) > 10_000_000:
+        return html  # Return unminified to avoid processing attack
 
     # 1. Protect whitespace-sensitive tags
     # We use a placeholder to avoid affecting code snippets or template-injected scripts
@@ -78,9 +84,16 @@ def minify_html(html: str) -> str:
 def minify_css(css: str) -> str:
     """Minifies CSS content using regex.
     Removes comments and collapses all unnecessary whitespace.
+
+    SECURITY: Size limits prevent DoS via extremely large CSS.
     """
     if not css:
         return ""
+
+    # SECURITY: Reject excessively large CSS to prevent DoS (max 5MB)
+    if len(css) > 5_000_000:
+        return css  # Return unminified
+
     # Remove comments
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
     # Collapse all whitespace into a single space
@@ -93,15 +106,20 @@ def minify_css(css: str) -> str:
 def minify_js(js: str) -> str:
     """Minifies JavaScript content by removing comments and extra whitespace.
     Safely handles string literals to avoid corrupting data.
+
+    SECURITY: Size limits prevent DoS via extremely large JS.
     """
     if not js:
         return ""
+
+    # SECURITY: Reject excessively large JS to prevent DoS (max 5MB)
+    if len(js) > 5_000_000:
+        return js  # Return unminified
 
     # 1. Remove multi-line comments
     js = re.sub(r"/\*.*?\*/", "", js, flags=re.DOTALL)
 
     # 2. Remove single-line comments, being careful not to match '//' inside strings or regex
-    # This is a simplified but safer version for template-injected scripts
     lines = []
     for line in js.splitlines():
         # Strip trailing comments if they aren't preceded by a colon (url) or quote
@@ -110,4 +128,6 @@ def minify_js(js: str) -> str:
 
     # 3. Collapse whitespace
     js = " ".join(lines)
-    return re.sub(r"\s+", " ", js).strip()
+    js = re.sub(r"\s+", " ", js).strip()
+
+    return js

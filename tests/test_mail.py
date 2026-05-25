@@ -140,15 +140,31 @@ class TestMailFormatting:
 
 
 class TestMailSecurity:
-    def test_header_injection_sanitization(self, mock_do_send):
-        """Line breaks in subject or emails must be stripped to prevent injection."""
+    def test_header_injection_rejected(self, mock_do_send):
+        """SECURITY: Emails with line breaks must be REJECTED, not sanitized.
+
+        Previous behavior: Line breaks were stripped (vulnerable to edge cases).
+        New behavior: Invalid emails raise ValueError immediately.
+        """
+        with pytest.raises(ValueError, match="Invalid email"):
+            Mail.send(
+                to="a@test.com\nBcc: hacker@test.com",
+                subject="Hello",
+                body="Body",
+                sync=True,
+            )
+
+        # No email should have been sent
+        assert len(mock_do_send) == 0
+
+    def test_subject_sanitization(self, mock_do_send):
+        """Subject line breaks are still sanitized (not rejected)."""
         Mail.send(
-            to="a@test.com\nBcc: hacker@test.com",
+            to="valid@test.com",
             subject="Hello\r\nInject: Yes",
             body="Body",
             sync=True,
         )
         msg = mock_do_send[0]["msg"]
-        assert "hacker@test.com" not in mock_do_send[0]["recipients"]
-        # The newlines should have been stripped by _sanitize
+        # The newlines in subject should have been stripped by _sanitize
         assert "HelloInject: Yes" in msg

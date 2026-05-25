@@ -17,7 +17,7 @@
 
 <div class="dashboard-grid">
 
-  <form method="post" enctype="multipart/form-data" id="import-form"
+  <form method="post" action="{{ admin_prefix }}/{{ slug }}/import" enctype="multipart/form-data" id="import-form"
         data-block="#page-body" data-push-url data-disable data-indicator="#top-loader">
     {{ request.csrf_input() }}
     <div class="card" style="overflow:hidden">

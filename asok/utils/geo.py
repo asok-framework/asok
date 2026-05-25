@@ -10,7 +10,7 @@ logger = logging.getLogger("asok.utils.geo")
 
 
 class IPLocation:
-    """Zero-dependency IP-to-Location lookup engine.
+    """Lightweight IP-to-Location lookup engine using local CSV data.
 
     Uses binary search for high performance on local CSV databases.
     Supported format: .asok/geo.csv (ip_from_int, ip_to_int, city, country, lat, lon)
@@ -37,7 +37,10 @@ class IPLocation:
             return 0
 
     def _load_data(self) -> None:
-        """Load and parse the local CSV database if it exists."""
+        """Load and parse the local CSV database if it exists.
+
+        SECURITY: Size and line limits prevent DoS via large CSV files.
+        """
         if self._loaded:
             return
 
@@ -45,9 +48,27 @@ class IPLocation:
             self._loaded = True
             return
 
+        # SECURITY: Check file size before loading (max 100MB)
         try:
+            file_size = os.path.getsize(self.db_path)
+            if file_size > 100_000_000:
+                logger.warning(f"GeoIP database too large ({file_size} bytes), skipping")
+                self._loaded = True
+                return
+        except OSError:
+            self._loaded = True
+            return
+
+        try:
+            line_count = 0
+            max_lines = 1_000_000  # SECURITY: Limit number of lines
+
             with open(self.db_path, "r", encoding="utf-8") as f:
                 for line in f:
+                    line_count += 1
+                    if line_count > max_lines:
+                        logger.warning(f"GeoIP database has too many lines (>{max_lines}), truncating")
+                        break
                     parts = line.strip().split(",")
                     if len(parts) >= 6:
                         try:

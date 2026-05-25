@@ -58,7 +58,10 @@ class Component(metaclass=ComponentMeta):
         pass
 
     def html(self, name: str) -> str:
-        """Load a raw HTML template file relative to the component's file location."""
+        """Load a raw HTML template file relative to the component's file location.
+
+        SECURITY: File size limits prevent DoS via extremely large templates.
+        """
         import inspect
 
         module = inspect.getmodule(self.__class__)
@@ -102,6 +105,14 @@ class Component(metaclass=ComponentMeta):
 
             if not resolved:
                 return f"<!-- Template {name} not found in {dir_path} -->"
+
+        # SECURITY: Limit template file size to prevent DoS (max 1MB)
+        try:
+            file_size = os.path.getsize(path)
+            if file_size > 1_000_000:
+                return "<!-- Template file too large -->"
+        except OSError:
+            return "<!-- Error reading template -->"
 
         with open(path, "r", encoding="utf-8") as f:
             return f.read()

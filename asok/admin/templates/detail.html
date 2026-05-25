@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ title }}</h1>
+  </div>
+  <div class="page-actions">
+    {% if can_edit %}
+      <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}"
+         class="btn btn-primary btn-sm" data-spa>
+        {{ icon('edit', 14) }} <span style="margin-left:4px">{{ t('Edit') }}</span>
+      </a>
+    {% endif %}
+    {# SECURITY: History (audit logs) reserved for admins only #}
+    {% if request.user and request.user.is_admin %}
+    <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/history"
+       class="btn btn-ghost btn-sm" data-spa title="{{ t('History') }}">
+      {{ icon('history', 14) }} <span style="margin-left:4px">{{ t('History') }}</span>
+    </a>
+    {% endif %}
+    <a href="{{ admin_prefix }}/{{ slug }}"
+       class="btn btn-default btn-sm" data-spa>
+      {{ icon('arrow-left', 14) }} <span style="margin-left:4px">{{ t('Back to list') }}</span>
+    </a>
+  </div>
+</div>
+
+<div class="detail-view">
+  <div style="display:flex;flex-direction:column;gap:32px">
+
+    {# Field groups #}
+    {% for group in field_groups %}
+      <div class="detail-section">
+        {% if group.label %}
+          <h3 class="detail-section-title">{{ group.label }}</h3>
+        {% endif %}
+        <div class="detail-grid">
+          {% for pair in group.fields %}
+            {% set field = pair.f %}
+            {% set model_field = pair.m %}
+            {# SECURITY: Skip password fields - never show passwords #}
+            {% if model_field and model_field.is_password %}
+              {# Don't display password fields in detail view #}
+            {% else %}
+            <div class="detail-field"{% if model_field and (model_field.is_text or model_field.wysiwyg) %} style="grid-column: 1 / -1"{% endif %}>
+              <div class="detail-field-label">{{ field.label }}</div>
+              <div class="detail-field-value">
+                {% if model_field and model_field.name %}
+                  {% set value = item[model_field.name] if item else none %}
+                  {% if value is none or value == '' %}
+                    <span class="detail-field-empty">—</span>
+                  {# Check for boolean fields by name pattern #}
+                  {% elif model_field.name in ['is_admin', 'is_active', 'verified', 'totp_enabled'] %}
+                    {% if value == 1 or value == '1' or value == true %}
+                      <span class="detail-badge detail-badge-success">{{ icon('check', 14) }} {{ t('Yes') }}</span>
+                    {% else %}
+                      <span class="detail-badge detail-badge-muted">{{ icon('x', 14) }} {{ t('No') }}</span>
+                    {% endif %}
+                  {% elif model_field and model_field.wysiwyg %}
+                    <div class="detail-wysiwyg-content">{{ value | safe }}</div>
+                  {% elif model_field and model_field.is_text %}
+                    <div style="white-space: pre-wrap">{{ value }}</div>
+                  {% elif model_field and model_field.is_date %}
+                    {{ value }}
+                  {% elif model_field and model_field.is_datetime %}
+                    {{ value.strftime('%Y-%m-%d %H:%M:%S') if value else '—' }}
+                  {% elif model_field and (model_field.is_file or model_field.is_image) %}
+                    {% if value %}
+                      <a href="{{ value }}" target="_blank" class="detail-link">
+                        {{ icon('download', 14) }} {{ value.split('/')[-1] }}
+                      </a>
+                    {% else %}
+                      <span class="detail-field-empty">—</span>
+                    {% endif %}
+                  {% elif model_field and model_field.is_fk %}
+                    {% if value %}
+                      <a href="{{ admin_prefix }}/{{ model_field.fk_model_slug }}/{{ value.id }}/view"
+                         class="detail-link" data-spa>
+                        {{ value }}
+                      </a>
+                    {% else %}
+                      <span class="detail-field-empty">—</span>
+                    {% endif %}
+                  {% else %}
+                    {{ value }}
+                  {% endif %}
+                {% else %}
+                  <span class="detail-field-empty">—</span>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+
+    {# Permission matrix (read-only for Role) #}
+    {% if permission_matrix %}
+      <div class="detail-section" style="padding-top:24px; border-top:1px solid var(--border)">
+        <h3 class="detail-section-title">
+          {{ icon('shield', 18) }} {{ t('Permissions') }}
+        </h3>
+
+        {% if permission_matrix.wildcard %}
+          <div class="detail-alert detail-alert-info">
+            {{ icon('shield', 16) }} <strong>{{ t('Superuser') }}</strong> — {{ t('Full access to all resources. Bypasses matrix below.') }}
+          </div>
+        {% endif %}
+
+        <div class="table-wrap" style="box-shadow:none; margin-top:16px">
+          <table class="perm-matrix">
+            <thead>
+              <tr>
+                <th style="padding-left:16px">{{ t('Model') }}</th>
+                {% for v in permission_matrix.verbs %}<th>{{ t(v) }}</th>{% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in permission_matrix.rows %}
+                <tr>
+                  <td style="font-weight:600; padding-left:16px">{{ row.label }}</td>
+                  {% for cell in row.cells %}
+                    <td style="text-align:center">
+                      {% if cell.checked %}
+                        <span class="detail-perm-check">{{ icon('check', 14) }}</span>
+                      {% else %}
+                        <span class="detail-perm-empty">—</span>
+                      {% endif %}
+                    </td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+
+    {# M2M Relations #}
+    {% for m2m in m2m_fields %}
+      <div class="detail-section" style="padding-top:24px; border-top:1px solid var(--border)">
+        <h3 class="detail-section-title">{{ m2m.label }}</h3>
+        {% if m2m.current %}
+          <div class="detail-tags">
+            {% for opt in m2m.current %}
+              <span class="detail-tag">{{ opt.label }}</span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state" style="padding:20px">
+            <p class="empty-text">{{ t('No related records') }}</p>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+
+    {# Inline relations #}
+    {% for inline in inlines %}
+      <div class="detail-section" style="padding-top:24px; border-top:1px solid var(--border)">
+        <h3 class="detail-section-title">{{ inline.label }}</h3>
+        {% if inline.rows %}
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  {% for col in inline.columns %}<th>{{ col }}</th>{% endfor %}
+                  <th style="width:60px"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in inline.rows %}
+                  <tr>
+                    {% for col in inline.columns %}<td>{{ row[col] }}</td>{% endfor %}
+                    <td style="text-align:right">
+                      {% if inline.target_slug %}
+                        <a href="{{ admin_prefix }}/{{ inline.target_slug }}/{{ row.id }}/view"
+                           class="btn btn-ghost btn-icon" data-spa title="{{ t('View') }}">
+                          {{ icon('search', 16) }}
+                        </a>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="empty-state" style="padding:40px 20px">
+            <p class="empty-text">{{ t('No related records') }}</p>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+
+    {# Action buttons #}
+    <div style="margin-top:40px; padding-top:24px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
+      <div style="display:flex; gap:12px">
+        {% if can_edit %}
+          <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}"
+             class="btn btn-primary" data-spa>
+            {{ icon('edit', 14) }} <span style="margin-left:4px">{{ t('Edit') }}</span>
+          </a>
+        {% endif %}
+        <a href="{{ admin_prefix }}/{{ slug }}"
+           class="btn btn-default" data-spa>
+          {{ icon('arrow-left', 14) }} <span style="margin-left:4px">{{ t('Back to list') }}</span>
+        </a>
+      </div>
+      <div>
+        {% if item and item.id and can_delete %}
+          <form method="post"
+                action="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/delete"
+                style="display:inline"
+                data-block="#page-body"
+                data-push-url
+                data-confirm="{{ t('Delete this record?') }}">
+            {{ request.csrf_input() }}
+            <button type="submit" class="btn btn-ghost text-danger">
+              {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Delete') }}</span>
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<style>
+.detail-view {
+  max-width: 1000px;
+}
+
+.detail-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 24px;
+}
+
+.detail-section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 20px;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-field-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.detail-field-value {
+  font-size: 0.95rem;
+  color: var(--fg);
+  word-break: break-word;
+}
+
+.detail-wysiwyg-content {
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+.detail-wysiwyg-content p {
+  margin: 0 0 12px 0;
+}
+
+.detail-wysiwyg-content p:last-child {
+  margin-bottom: 0;
+}
+
+.detail-wysiwyg-content ul {
+  list-style-type: disc;
+  padding-left: 24px;
+  margin: 0 0 12px 0;
+}
+
+.detail-wysiwyg-content ol {
+  list-style-type: decimal;
+  padding-left: 24px;
+  margin: 0 0 12px 0;
+}
+
+.detail-wysiwyg-content li {
+  margin-bottom: 4px;
+}
+
+.detail-wysiwyg-content h1,
+.detail-wysiwyg-content h2,
+.detail-wysiwyg-content h3,
+.detail-wysiwyg-content h4,
+.detail-wysiwyg-content h5,
+.detail-wysiwyg-content h6 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.detail-wysiwyg-content h1 { font-size: 1.5rem; }
+.detail-wysiwyg-content h2 { font-size: 1.3rem; }
+.detail-wysiwyg-content h3 { font-size: 1.15rem; }
+
+.detail-wysiwyg-content blockquote {
+  border-left: 4px solid var(--border);
+  padding-left: 16px;
+  margin: 0 0 12px 0;
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.detail-wysiwyg-content pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: var(--r);
+  overflow-x: auto;
+  font-family: monospace;
+  font-size: 0.9rem;
+  margin: 0 0 12px 0;
+}
+
+.detail-field-empty {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.detail-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.detail-badge-success {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.detail-badge-muted {
+  background: var(--surface-2);
+  color: var(--fg-3);
+}
+
+.detail-link {
+  color: var(--primary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.detail-link:hover {
+  text-decoration: underline;
+}
+
+.detail-alert {
+  padding: 12px 16px;
+  border-radius: var(--r);
+  border: 1px solid;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  margin-bottom: 16px;
+}
+
+.detail-alert-info {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #2563eb;
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-tag {
+  display: inline-block;
+  padding: 6px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--fg-2);
+}
+
+.detail-perm-check {
+  color: #16a34a;
+}
+
+.detail-perm-empty {
+  color: var(--fg-3);
+}
+
+@media (max-width: 768px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+
+{% endblock %}

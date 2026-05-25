@@ -1,7 +1,7 @@
 [project]
 name = "asok"
-version = "0.1.6"
-description = "A minimalist, zero-dependency Python web framework."
+version = "0.1.7"
+description = "A minimalist Python web framework with minimal external dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -9,7 +9,7 @@ authors = [
   { name="Mpia Mimpiya PULUDISU", email="asok-framework@outlook.com" },
   { name="Asok Maintainers" },
 ]
-keywords = ["web", "framework", "zero-dependency", "minimalist", "orm", "wsgi"]
+keywords = ["web", "framework", "minimalist", "orm", "wsgi"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 
     "Operating System :: OS Independent",
@@ -34,19 +35,27 @@ asok = "asok.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["asok*"]
+exclude = ["tests*", "scripts*"]
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.package-data]
 asok = [
-    "assets/*.svg", 
-    "admin/templates/*.html", 
-    "admin/static/*",
+    "assets/*.svg",
+    "admin/templates/*.html",
+    "admin/static/*.min.js",
+    "admin/static/*.min.css",
+    "admin/static/*.svg",
     "api/templates/*.html",
-    "api/static/*",
-    "toolbar/static/*",
-    "toolbar/templates/*"
+    "api/static/*.min.js",
+    "api/static/*.min.css",
+    "api/static/*.svg",
+    "toolbar/static/*.min.js",
+    "toolbar/static/*.min.css",
+    "toolbar/templates/*",
+    "core/assets/*.min.js",
+    "core/assets/*.min.css"
 ]
 
 [build-system]

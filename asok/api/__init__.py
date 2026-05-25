@@ -76,7 +76,6 @@ def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
     # Support custom doc paths via config
     docs_path = app.config.get("DOCS_PATH", "/docs")
     spec_path = app.config.get("OPENAPI_PATH", "/openapi.json")
-    css_path = "/asok-api/docs.css"
 
     if path == spec_path or path == docs_path:
         gen = OpenAPIGenerator(app)
@@ -97,11 +96,23 @@ def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
             # Fallback for when templates aren't in the expected spot
             return None
 
+        # SECURITY: Limit template file size to prevent DoS (max 1MB)
+        try:
+            file_size = os.path.getsize(template_path)
+            if file_size > 1_000_000:
+                return None
+        except OSError:
+            return None
+
         with open(template_path) as f:
             content = f.read()
 
         # Render using the app's engine
         from ..templates import render_template_string
+
+        # Always use minified assets (package only contains .min files)
+        css_url = "/asok-api/docs.min.css"
+        js_url = "/asok-api/docs.min.js"
 
         return render_template_string(
             content,
@@ -112,17 +123,38 @@ def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
                     "API_TITLE", app.config.get("PROJECT_NAME", spec["info"]["title"])
                 ),
                 "api_logo": app.config.get("API_LOGO", app.config.get("SITE_LOGO")),
+                "css_url": css_url,
+                "js_url": js_url,
             },
         )
 
-    if path == css_path or path == "/asok-api/logo.svg":
+    # Serve static assets (CSS, JS, SVG)
+    static_paths = {
+        "/asok-api/docs.css": ("docs.css", "text/css"),
+        "/asok-api/docs.min.css": ("docs.min.css", "text/css"),
+        "/asok-api/docs.js": ("docs.js", "application/javascript"),
+        "/asok-api/docs.min.js": ("docs.min.js", "application/javascript"),
+        "/asok-api/logo.svg": ("logo.svg", "image/svg+xml"),
+    }
+
+    if path in static_paths:
+        filename, content_type = static_paths[path]
         current_dir = os.path.dirname(__file__)
-        filename = "docs.css" if path == css_path else "logo.svg"
         file_path = os.path.join(current_dir, "static", filename)
+
         if not os.path.exists(file_path):
             return None
+
+        # SECURITY: Limit static file size to prevent DoS (max 5MB)
+        try:
+            file_size = os.path.getsize(file_path)
+            if file_size > 5_000_000:
+                return None
+        except OSError:
+            return None
+
         with open(file_path, "rb") as f:
-            request.content_type = "text/css" if path == css_path else "image/svg+xml"
+            request.content_type = content_type
             return f.read()
 
     return None

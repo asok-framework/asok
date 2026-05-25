@@ -195,5 +195,43 @@ def test_checkbox_truthiness_edge_cases():
     assert (1 if None == "1" else 0) == 0
 
 
+def test_toggle_post_binding():
+    """Test that toggle POST binding behaves exactly like checkbox (creates '0' or '1' strings)."""
+    # Unchecked toggle (not in form data)
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "CONTENT_TYPE": "application/x-www-form-urlencoded",
+        "CONTENT_LENGTH": "0",
+        "wsgi.input": BytesIO(b""),
+    }
+    request = Request(environ)
+
+    # Optional toggle: should bind to "0" and pass validation
+    schema_opt = {"notifications": Form.toggle("Enable Notifications", "")}
+    form_opt = Form(schema_opt, request)
+    assert form_opt.notifications.value == "0"
+    assert form_opt.validate(csrf=False) is True
+
+    # Required toggle: should bind to "0" but fail validation since it's not checked
+    schema_req = {"notifications": Form.toggle("Enable Notifications", "required")}
+    form_req = Form(schema_req, request)
+    assert form_req.notifications.value == "0"
+    assert form_req.validate(csrf=False) is False
+
+    # Checked toggle
+    environ2 = {
+        "REQUEST_METHOD": "POST",
+        "CONTENT_TYPE": "application/x-www-form-urlencoded",
+        "CONTENT_LENGTH": "16",
+        "wsgi.input": BytesIO(b"notifications=on"),
+    }
+    request2 = Request(environ2)
+
+    form2 = Form(schema_req, request2)
+
+    assert form2.notifications.value == "1"
+    assert form2.validate(csrf=False) is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
