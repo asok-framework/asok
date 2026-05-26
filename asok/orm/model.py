@@ -10,30 +10,22 @@ import json
 import logging
 import os
 import secrets
-import sqlite3
-import struct
 import uuid
 import warnings
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from ..events import events
+from .engines import get_engine
 from .exceptions import ModelError
 from .field import Field
 from .fileref import FileRef
 from .list import ModelList
-from .proxy import ConnectionProxy
 from .relation import Relation
 from .utils import (
     _RE_EMAIL,
-    _RE_NOT_NULL,
     _RE_TEL,
-    _RE_UNIQUE,
     MODELS_REGISTRY,
-    _asok_cosine_similarity,
-    _asok_euclidean_distance,
-    _local,
     _pluralize,
-    _Transaction,
     slugify,
     validate_sql_identifier,
 )
@@ -91,7 +83,7 @@ class ModelMeta(type):
         # Use explicit __tablename__ if provided, otherwise auto-pluralize
         attrs["_table"] = attrs.get("__tablename__", _pluralize(name))
         attrs["_model_name"] = name
-        attrs["_conn_attr"] = f"conn_{attrs.get('_db_path', 'db.sqlite3')}"
+        attrs["_conn_attr"] = f"conn_{attrs.get('_db_path') or 'db.sqlite3'}"
 
         relations = {k: v for k, v in attrs.items() if isinstance(v, Relation)}
         attrs["_relations"] = relations
@@ -161,16 +153,22 @@ class ModelMeta(type):
                         return []
                     # SECURITY: _pivot_info validates identifiers
                     pivot, pfk, pofk = self._pivot_info(rel)
+
+                    engine = self.get_engine()
+                    q_target = engine.quote_identifier(target_model._table)
+                    q_pivot = engine.quote_identifier(pivot)
+                    q_pfk = engine.quote_identifier(pfk)
+                    q_pofk = engine.quote_identifier(pofk)
+
                     # SECURITY: Quote all table and column names to prevent SQL injection
                     sql = (
-                        f'SELECT t.* FROM "{target_model._table}" t '
-                        f'JOIN "{pivot}" p ON p."{pofk}" = t.id '
-                        f'WHERE p."{pfk}" = ?'
+                        f"SELECT t.* FROM {q_target} t "
+                        f"JOIN {q_pivot} p ON p.{q_pofk} = t.id "
+                        f"WHERE p.{q_pfk} = ?"
                     )
-                    with self._get_conn() as conn:
-                        rows = conn.execute(sql, (self.id,)).fetchall()
+                    rows = engine.execute(sql, (self.id,))
                     return ModelList(
-                        (target_model(**dict(row)) for row in rows),
+                        (target_model(**row) for row in rows),
                         sql=sql,
                         args=[self.id],
                     )
@@ -188,9 +186,16 @@ class ModelMeta(type):
 
 
 class Model(metaclass=ModelMeta):
-    """Base class for all ORM models."""
+    _db_path: str | None = (os.getenv("DATABASE_URL") or "").strip() or None
 
-    _db_path: str = os.getenv("DATABASE_URL", "db.sqlite3")
+    @classmethod
+    def get_engine(cls):
+        cached_engine = getattr(cls, "_cached_engine", None)
+        cached_path = getattr(cls, "_cached_path", None)
+        if cached_engine is None or cached_path != cls._db_path:
+            cls._cached_path = cls._db_path
+            cls._cached_engine = get_engine(cls._db_path)
+        return cls._cached_engine
 
     def __init__(self, _trust: bool = False, **kwargs: Any):
         self.id: Optional[int] = kwargs.get("id")
@@ -242,26 +247,8 @@ class Model(metaclass=ModelMeta):
                     except Exception as e:
                         # Log enum conversion errors for debugging
                         logger.debug("Failed to convert Enum field '%s': %s", name, e)
-                elif hasattr(field, "is_vector") and isinstance(
-                    val, (bytes, bytearray)
-                ):
-                    try:
-                        # SECURITY: Validate vector byte length is divisible by 4 (size of float)
-                        if len(val) % 4 != 0:
-                            logger.warning(
-                                "Vector field '%s' has invalid byte length %d (not divisible by 4)",
-                                name,
-                                len(val),
-                            )
-                            val = []
-                        else:
-                            val = list(struct.unpack(f"{len(val) // 4}f", val))
-                    except Exception as e:
-                        # Log deserialization errors for debugging
-                        logger.warning(
-                            "Failed to deserialize vector field '%s': %s", name, e
-                        )
-                        val = []
+                elif hasattr(field, "is_vector"):
+                    val = self.get_engine().deserialize_value(field, val)
 
                 # Automatic SafeString for WYSIWYG content
                 if getattr(field, "wysiwyg", False) and isinstance(val, str):
@@ -326,50 +313,12 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def _get_conn(cls):
-        attr = cls._conn_attr
-        conn = getattr(_local, attr, None)
-        if conn is not None:
-            return conn
-        try:
-            # Use mode=rw to prevent automatic file creation during runtime.
-            # The file should only be created by 'asok migrate' or 'asok make migration'.
-            conn = sqlite3.connect(f"file:{cls._db_path}?mode=rw", uri=True)
-        except sqlite3.OperationalError:
-            # Database file does not exist yet. Return an in-memory connection
-            # to prevent file creation and allow read operations to fail gracefully (no such table).
-            conn = sqlite3.connect(":memory:")
-
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA journal_mode = WAL;")
-
-        # ASOK VECTOR EXTENSION
-        conn.create_function("cosine_similarity", 2, _asok_cosine_similarity)
-        conn.create_function("euclidean_distance", 2, _asok_euclidean_distance)
-
-        # SQL LOGGING FOR DEVELOPER TOOLBAR
-        conn = ConnectionProxy(conn)
-
-        setattr(_local, attr, conn)
-        # Track for cleanup
-        if not hasattr(_local, "_all_conns"):
-            _local._all_conns = []
-        _local._all_conns.append(conn)
-        return conn
+        return cls.get_engine().get_connection()
 
     @classmethod
     def close_connections(cls):
-        """Close all SQLite connections held by the current thread."""
-        for conn in getattr(_local, "_all_conns", []):
-            try:
-                conn.close()
-            except Exception as e:
-                # Log connection close errors for debugging
-                logger.debug("Error closing database connection: %s", e)
-        _local._all_conns = []
-        for attr in list(vars(_local)):
-            if attr.startswith("conn_"):
-                delattr(_local, attr)
+        """Close all database connections held by the current thread."""
+        cls.get_engine().close_connections()
 
     @classmethod
     def create_table(cls):
@@ -377,11 +326,19 @@ class Model(metaclass=ModelMeta):
         # SECURITY: Validate table name to prevent SQL injection
         validate_sql_identifier(cls._table, "table name")
 
-        f_defs = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
+        engine = cls.get_engine()
+
+        # Use engine-specific primary key definition
+        pk_def = getattr(engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT")
+        if hasattr(engine, "primary_key_def"):
+            pk_def = engine.primary_key_def
+        f_defs = [pk_def]
+
         for name, f in cls._fields.items():
             # SECURITY: Validate column name to prevent SQL injection
             validate_sql_identifier(name, "column name")
-            def_str = f"{name} {f.sql_type}"
+            col_type = engine.get_column_type(f)
+            def_str = f"{name} {col_type}"
             if f.unique:
                 def_str += " UNIQUE"
             if not f.nullable:
@@ -396,132 +353,104 @@ class Model(metaclass=ModelMeta):
                 def_str += f" DEFAULT {d}"
             f_defs.append(def_str)
 
-        sql = f"CREATE TABLE IF NOT EXISTS {cls._table} ({', '.join(f_defs)})"
-        with cls._get_conn() as conn:
-            conn.execute(sql)
+        sql = f"CREATE TABLE IF NOT EXISTS {engine.quote_identifier(cls._table)} ({', '.join(f_defs)})"
+        engine.execute(sql)
 
-            # ── AUTO-MIGRATION: Add missing columns ──
-            existing_cols = [
-                row[1]
-                for row in conn.execute(f"PRAGMA table_info({cls._table})").fetchall()
-            ]
-            for name, f in cls._fields.items():
-                if name not in existing_cols:
-                    # SECURITY: Validate column name (already validated above, but double-check for migrations)
-                    validate_sql_identifier(name, "column name")
-                    def_str = f"{name} {f.sql_type}"
-                    if f.unique:
-                        def_str += " UNIQUE"
-                    if not f.nullable:
-                        def_str += " NOT NULL"
-                    if f.default is not None:
-                        if isinstance(f.default, bool):
-                            d = str(f.default).lower()
-                        elif isinstance(f.default, (int, float)):
-                            d = str(f.default)
-                        else:
-                            d = "'" + str(f.default).replace("'", "''") + "'"
-                        def_str += f" DEFAULT {d}"
+        # ── AUTO-MIGRATION: Add missing columns ──
+        existing_cols = engine.get_table_columns(cls._table)
+        for name, f in cls._fields.items():
+            if name not in existing_cols:
+                # SECURITY: Validate column name
+                validate_sql_identifier(name, "column name")
+                col_type = engine.get_column_type(f)
+                def_str = f"{name} {col_type}"
+                if f.unique:
+                    def_str += " UNIQUE"
+                if not f.nullable:
+                    def_str += " NOT NULL"
+                if f.default is not None:
+                    if isinstance(f.default, bool):
+                        d = str(f.default).lower()
+                    elif isinstance(f.default, (int, float)):
+                        d = str(f.default)
+                    else:
+                        d = "'" + str(f.default).replace("'", "''") + "'"
+                    def_str += f" DEFAULT {d}"
 
-                    logger.info("Migrating %s: Adding column %s", cls._table, name)
-                    try:
-                        conn.execute(f"ALTER TABLE {cls._table} ADD COLUMN {def_str}")
-                    except Exception as e:
-                        logger.error(
-                            "Failed to migrate %s (adding %s): %s", cls._table, name, e
-                        )
-
-            if cls._search_fields:
-                # SECURITY: Validate all searchable field names before using in SQL
-                for field_name in cls._search_fields:
-                    cls._valid_column(field_name)
-
-                # SECURITY: Quote column names to prevent SQL injection
-                f_names_quoted = ", ".join([f'"{n}"' for n in cls._search_fields])
-                f_names_new = ", ".join([f"new.{n}" for n in cls._search_fields])
-                f_names_old = ", ".join([f"old.{n}" for n in cls._search_fields])
-
-                # Create FTS5 virtual table with quoted column names
-                fts_sql = f'CREATE VIRTUAL TABLE IF NOT EXISTS "{cls._table}_fts" USING fts5({f_names_quoted}, content="{cls._table}", content_rowid="id")'
-                conn.execute(fts_sql)
-
-                # Triggers to keep FTS in sync (with quoted table and column names)
-                ai = f"""CREATE TRIGGER IF NOT EXISTS "{cls._table}_ai" AFTER INSERT ON "{cls._table}" BEGIN
-                    INSERT INTO "{cls._table}_fts"(rowid, {f_names_quoted}) VALUES (new.id, {f_names_new});
-                END;"""
-                ad = f"""CREATE TRIGGER IF NOT EXISTS "{cls._table}_ad" AFTER DELETE ON "{cls._table}" BEGIN
-                    INSERT INTO "{cls._table}_fts"("{cls._table}_fts", rowid, {f_names_quoted}) VALUES('delete', old.id, {f_names_old});
-                END;"""
-                au = f"""CREATE TRIGGER IF NOT EXISTS "{cls._table}_au" AFTER UPDATE ON "{cls._table}" BEGIN
-                    INSERT INTO "{cls._table}_fts"("{cls._table}_fts", rowid, {f_names_quoted}) VALUES('delete', old.id, {f_names_old});
-                    INSERT INTO "{cls._table}_fts"(rowid, {f_names_quoted}) VALUES (new.id, {f_names_new});
-                END;"""
-                conn.execute(ai)
-                conn.execute(ad)
-                conn.execute(au)
-
-                # Auto-rebuild if FTS is empty but source has data
+                logger.info("Migrating %s: Adding column %s", cls._table, name)
                 try:
-                    source_count = conn.execute(
-                        f"SELECT COUNT(*) FROM {cls._table}"
-                    ).fetchone()[0]
-                    fts_count = conn.execute(
-                        f"SELECT COUNT(*) FROM {cls._table}_fts"
-                    ).fetchone()[0]
-                    if source_count > 0 and fts_count == 0:
-                        conn.execute(
-                            f'INSERT INTO "{cls._table}_fts"("{cls._table}_fts") VALUES(\'rebuild\')'
-                        )
+                    engine.execute(f"ALTER TABLE {engine.quote_identifier(cls._table)} ADD COLUMN {def_str}")
                 except Exception as e:
-                    # Log FTS5 rebuild errors for debugging
-                    logger.warning(
-                        "Failed to rebuild FTS5 index for %s: %s", cls._table, e
+                    logger.error(
+                        "Failed to migrate %s (adding %s): %s", cls._table, name, e
                     )
 
-            # Create pivot tables for BelongsToMany relationships
-            if hasattr(cls, "_relations"):
-                for rel_name, rel in cls._relations.items():
-                    if rel.type == "BelongsToMany":
-                        # Compute pivot table name and foreign keys
-                        a = cls.__name__.lower()
-                        b = rel.target_model_name.lower()
-                        pivot_table = rel.pivot_table or "_".join(sorted([a, b]))
-                        pivot_fk = rel.pivot_fk or f"{a}_id"
-                        pivot_other_fk = rel.pivot_other_fk or f"{b}_id"
+        # Create pivot tables for BelongsToMany relationships
+        if hasattr(cls, "_relations"):
+            for rel_name, rel in cls._relations.items():
+                if rel.type == "BelongsToMany":
+                    # Compute pivot table name and foreign keys
+                    a = cls.__name__.lower()
+                    b = rel.target_model_name.lower()
+                    pivot_table = rel.pivot_table or "_".join(sorted([a, b]))
+                    pivot_fk = rel.pivot_fk or f"{a}_id"
+                    pivot_other_fk = rel.pivot_other_fk or f"{b}_id"
 
-                        # SECURITY: Validate all identifiers to prevent SQL injection
-                        validate_sql_identifier(pivot_table, "pivot table name")
-                        validate_sql_identifier(pivot_fk, "pivot foreign key")
-                        validate_sql_identifier(pivot_other_fk, "pivot foreign key")
+                    # SECURITY: Validate all identifiers to prevent SQL injection
+                    validate_sql_identifier(pivot_table, "pivot table name")
+                    validate_sql_identifier(pivot_fk, "pivot foreign key")
+                    validate_sql_identifier(pivot_other_fk, "pivot foreign key")
 
-                        # Create the pivot table
-                        pivot_sql = f"""
-                        CREATE TABLE IF NOT EXISTS {pivot_table} (
-                            {pivot_fk} INTEGER NOT NULL,
-                            {pivot_other_fk} INTEGER NOT NULL,
-                            PRIMARY KEY ({pivot_fk}, {pivot_other_fk}),
-                            FOREIGN KEY ({pivot_fk}) REFERENCES {cls._table}(id) ON DELETE CASCADE,
-                            FOREIGN KEY ({pivot_other_fk}) REFERENCES {_pluralize(b)}(id) ON DELETE CASCADE
-                        )
-                        """
-                        conn.execute(pivot_sql)
+                    q_pivot = engine.quote_identifier(pivot_table)
+                    q_pfk = engine.quote_identifier(pivot_fk)
+                    q_pofk = engine.quote_identifier(pivot_other_fk)
+                    q_table = engine.quote_identifier(cls._table)
+                    q_other_table = engine.quote_identifier(_pluralize(b))
 
-            # Create indexes for fields marked with index=True
-            for field_name, field in cls._fields.items():
-                if getattr(field, "index", False) and not field.unique:
-                    # SECURITY: Validate identifiers (field_name already validated above)
-                    index_name = f"idx_{cls._table}_{field_name}"
-                    validate_sql_identifier(index_name, "index name")
-                    index_sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {cls._table}({field_name})"
-                    try:
-                        conn.execute(index_sql)
-                        logger.info(
-                            "Created index %s on %s.%s",
-                            index_name,
-                            cls._table,
-                            field_name,
-                        )
-                    except Exception as e:
+                    # Create the pivot table
+                    pivot_sql = f"""
+                    CREATE TABLE IF NOT EXISTS {q_pivot} (
+                        {q_pfk} INTEGER NOT NULL,
+                        {q_pofk} INTEGER NOT NULL,
+                        PRIMARY KEY ({q_pfk}, {q_pofk}),
+                        FOREIGN KEY ({q_pfk}) REFERENCES {q_table}(id) ON DELETE CASCADE,
+                        FOREIGN KEY ({q_pofk}) REFERENCES {q_other_table}(id) ON DELETE CASCADE
+                    )
+                    """
+                    engine.execute(pivot_sql)
+
+        # Create indexes for fields marked with index=True
+        for field_name, field in cls._fields.items():
+            if getattr(field, "index", False) and not field.unique:
+                # SECURITY: Validate identifiers (field_name already validated above)
+                index_name = f"idx_{cls._table}_{field_name}"
+                validate_sql_identifier(index_name, "index name")
+
+                q_index = engine.quote_identifier(index_name)
+                q_table = engine.quote_identifier(cls._table)
+                q_field = engine.quote_identifier(field_name)
+
+                index_sql = f"CREATE INDEX {q_index} ON {q_table}({q_field})"
+
+                # Check index existence or try-catch for dialect differences (like MySQL lack of IF NOT EXISTS)
+                # In sqlite/postgres, we can prefix CREATE INDEX with IF NOT EXISTS.
+                from .engines import MySQLEngine
+                if not isinstance(engine, MySQLEngine):
+                    index_sql = f"CREATE INDEX IF NOT EXISTS {q_index} ON {q_table}({q_field})"
+
+                try:
+                    engine.execute(index_sql)
+                    logger.info(
+                        "Created index %s on %s.%s",
+                        index_name,
+                        cls._table,
+                        field_name,
+                    )
+                except Exception as e:
+                    # Ignore duplicate key error for MySQL (1061) or general issues if already exists
+                    if "Duplicate key name" in str(e) or "already exists" in str(e) or "1061" in str(e):
+                        pass
+                    else:
                         logger.error(
                             "Failed to create index %s on %s.%s: %s",
                             index_name,
@@ -530,8 +459,8 @@ class Model(metaclass=ModelMeta):
                             e,
                         )
 
-            # Commit all schema changes (explicit commit like in save())
-            conn.commit()
+        # Delegate FTS and engine-specific setups
+        engine.post_create_table(cls)
 
     @classmethod
     def create(cls: type[T], _trust: bool = False, **kwargs: Any) -> T:
@@ -593,8 +522,7 @@ class Model(metaclass=ModelMeta):
         if not self._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
         sql = f"UPDATE {self._table} SET {column} = {column} + ? WHERE id = ?"
-        with self._get_conn() as conn:
-            conn.execute(sql, (amount, self.id))
+        self.get_engine().execute(sql, (amount, self.id))
         return self.refresh()
 
     def decrement(self, column, amount=1):
@@ -706,9 +634,9 @@ class Model(metaclass=ModelMeta):
                         raise ModelError(
                             f"Vector field '{f}' expects {field.dimensions} dims, got {len(val)}"
                         )
-                    values.append(struct.pack(f"{len(val)}f", *val))
+                    values.append(self.get_engine().prepare_value(field, val))
             else:
-                values.append(val)
+                values.append(self.get_engine().prepare_value(field, val))
 
         if self.id:
             set_str = ", ".join([f"{f} = ?" for f in fields])
@@ -719,28 +647,15 @@ class Model(metaclass=ModelMeta):
             sql = f"INSERT INTO {self._table} ({', '.join(fields)}) VALUES ({placeholders})"
             args = values
 
-        with self._get_conn() as conn:
-            try:
-                cursor = conn.execute(sql, args)
-                conn.commit()
-            except sqlite3.IntegrityError as e:
-                conn.rollback()
-                msg = str(e)
-                m = _RE_UNIQUE.search(msg)
-                if m:
-                    field = m.group(1)
-                    raise ModelError(
-                        f"{field} already exists", field=field, original=e
-                    ) from None
-                m = _RE_NOT_NULL.search(msg)
-                if m:
-                    field = m.group(1)
-                    raise ModelError(
-                        f"{field} is required", field=field, original=e
-                    ) from None
-                raise ModelError(msg, original=e) from None
-            if not self.id:
-                self.id = cursor.lastrowid
+        try:
+            self.get_engine().execute(sql, args)
+        except Exception as e:
+            raise self.get_engine().handle_exception(e)
+
+        if not self.id:
+            if self.get_engine().lastrowid_query:
+                res_id = self.get_engine().execute(self.get_engine().lastrowid_query)
+                self.id = list(res_id[0].values())[0] if res_id else None
 
         if is_new:
             self.after_create()
@@ -763,7 +678,7 @@ class Model(metaclass=ModelMeta):
                 user.save()
                 profile.save()
         """
-        return _Transaction(cls._get_conn())
+        return cls.get_engine().transaction()
 
     @classmethod
     def _valid_column(cls, col):
@@ -828,11 +743,11 @@ class Model(metaclass=ModelMeta):
             sql += " LIMIT ?"
             args.append(limit)
 
-        with cls._get_conn() as conn:
-            rows = conn.execute(sql, args).fetchall()
-            return ModelList(
-                (cls(_trust=True, **dict(row)) for row in rows), sql=sql, args=args
-            )
+        engine = cls.get_engine()
+        rows = engine.execute(sql, args)
+        return ModelList(
+            (cls(_trust=True, **row) for row in rows), sql=sql, args=args
+        )
 
     @classmethod
     def count(cls, **kwargs):
@@ -841,7 +756,13 @@ class Model(metaclass=ModelMeta):
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
         wheres = [f"{k} = ?" for k in kwargs]
-        args = list(kwargs.values())
+        engine = cls.get_engine()
+        args = []
+        for k, v in kwargs.items():
+            field = cls._fields.get(k)
+            if field:
+                v = engine.prepare_value(field, v)
+            args.append(v)
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
@@ -849,8 +770,8 @@ class Model(metaclass=ModelMeta):
             sql = f"SELECT COUNT(*) FROM {cls._table} WHERE {' AND '.join(wheres)}"
         else:
             sql = f"SELECT COUNT(*) FROM {cls._table}"
-        with cls._get_conn() as conn:
-            return conn.execute(sql, args).fetchone()[0]
+        rows = engine.execute(sql, args)
+        return list(rows[0].values())[0] if rows else 0
 
     @classmethod
     def exists(cls, **kwargs):
@@ -859,13 +780,19 @@ class Model(metaclass=ModelMeta):
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
         wheres = [f"{k} = ?" for k in kwargs]
-        args = list(kwargs.values())
+        engine = cls.get_engine()
+        args = []
+        for k, v in kwargs.items():
+            field = cls._fields.get(k)
+            if field:
+                v = engine.prepare_value(field, v)
+            args.append(v)
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
         sql = f"SELECT 1 FROM {cls._table} WHERE {' AND '.join(wheres)} LIMIT 1"
-        with cls._get_conn() as conn:
-            return conn.execute(sql, args).fetchone() is not None
+        rows = engine.execute(sql, args)
+        return len(rows) > 0
 
     @classmethod
     def search(
@@ -875,56 +802,36 @@ class Model(metaclass=ModelMeta):
         if not cls._search_fields:
             return ModelList()
 
+        engine = cls.get_engine()
+        from .engines import SQLiteEngine
+        is_sqlite = isinstance(engine, SQLiteEngine)
+
         # SECURITY: Validate and quote soft delete field name
         sd_where = ""
         if cls._soft_delete_field:
             cls._valid_column(cls._soft_delete_field)
-            sd_where = f'AND t."{cls._soft_delete_field}" IS NULL'
+            q_sd = engine.quote_identifier(cls._soft_delete_field)
+            sd_where = f" AND t.{q_sd} IS NULL"
 
-        # Preparation du terme pour FTS5 (prefix search par defaut sur chaque mot)
-        if term and "*" not in term:
+        # SQLite FTS5 uses prefix wildcards (term*); MySQL FULLTEXT handles this natively
+        if is_sqlite and term and "*" not in term:
             term = " ".join([f"{t}*" for t in term.split() if t])
 
-        # SECURITY: Quote all table and column names in FTS queries
-        # Try FTS5 specific query first
-        sql_fts5 = f"""
-            SELECT t.* FROM "{cls._table}" t
-            JOIN "{cls._table}_fts" f ON t.id = f.rowid
-            WHERE f."{cls._table}_fts" MATCH ? {sd_where}
-            ORDER BY rank
-            LIMIT ? OFFSET ?
-        """
+        q_table = engine.quote_identifier(cls._table)
+        where_clause, search_args = engine.search_sql(cls._table, cls._search_fields, term)
+        sql = f"SELECT * FROM {q_table} WHERE {where_clause}{sd_where} LIMIT ? OFFSET ?"
+        all_args = search_args + [limit, offset]
 
-        # Fallback for FTS4 or other issues
-        sql_fallback = f"""
-            SELECT t.* FROM "{cls._table}" t
-            JOIN "{cls._table}_fts" f ON t.id = f.rowid
-            WHERE f."{cls._table}_fts" MATCH ? {sd_where}
-            LIMIT ? OFFSET ?
-        """
-
-        sql_used = sql_fts5
-        with cls._get_conn() as conn:
-            try:
-                # Try FTS5
-                rows = conn.execute(sql_fts5, (term, limit, offset)).fetchall()
-            except sqlite3.OperationalError:
-                # If it's just a syntax error in FTS5 or missing rank, try fallback
-                sql_used = sql_fallback
-                try:
-                    rows = conn.execute(sql_fallback, (term, limit, offset)).fetchall()
-                except sqlite3.OperationalError as e2:
-                    logger.error(
-                        "FTS search failed for %s: fallback also failed: %s",
-                        cls._table,
-                        e2,
-                    )
-                    return ModelList()
+        try:
+            rows = engine.execute(sql, all_args)
+        except Exception as e:
+            logger.error("FTS search failed for %s: %s", cls._table, e)
+            return ModelList()
 
         return ModelList(
-            (cls(_trust=True, **dict(row)) for row in rows),
-            sql=sql_used,
-            args=[term, limit, offset],
+            (cls(_trust=True, **row) for row in rows),
+            sql=sql,
+            args=all_args,
         )
 
     @classmethod
@@ -991,10 +898,10 @@ class Model(metaclass=ModelMeta):
                 )
                 break
 
-        with cls._get_conn() as conn:
-            rows = conn.execute(sql, args or []).fetchall()
+        engine = cls.get_engine()
+        rows = engine.execute(sql, args or [])
         return ModelList(
-            (cls(_trust=True, **dict(row)) for row in rows), sql=sql, args=args or []
+            (cls(_trust=True, **row) for row in rows), sql=sql, args=args or []
         )
 
     @classmethod
@@ -1004,14 +911,19 @@ class Model(metaclass=ModelMeta):
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
         wheres = [f"{k} = ?" for k in kwargs]
-        args = list(kwargs.values())
+        engine = cls.get_engine()
+        args = []
+        for k, v in kwargs.items():
+            field = cls._fields.get(k)
+            if field:
+                v = engine.prepare_value(field, v)
+            args.append(v)
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
         sql = f"SELECT * FROM {cls._table} WHERE {' AND '.join(wheres)} LIMIT 1"
-        with cls._get_conn() as conn:
-            row = conn.execute(sql, args).fetchone()
-            return cls(_trust=True, **dict(row)) if row else None
+        rows = engine.execute(sql, args)
+        return cls(_trust=True, **rows[0]) if rows else None
 
     @classmethod
     def destroy(cls, **kwargs: Any) -> int:
@@ -1042,15 +954,11 @@ class Model(metaclass=ModelMeta):
         self.before_delete()
         if self._soft_delete_field:
             setattr(self, self._soft_delete_field, datetime.datetime.now().isoformat())
-            sql = f"UPDATE {self._table} SET {self._soft_delete_field} = ? WHERE id = ?"
-            with self._get_conn() as conn:
-                conn.execute(sql, (getattr(self, self._soft_delete_field), self.id))
-                conn.commit()
+            sql = f'UPDATE "{self._table}" SET "{self._soft_delete_field}" = ? WHERE id = ?'
+            self.get_engine().execute(sql, (getattr(self, self._soft_delete_field), self.id))
         else:
-            sql = f"DELETE FROM {self._table} WHERE id = ?"
-            with self._get_conn() as conn:
-                conn.execute(sql, (self.id,))
-                conn.commit()
+            sql = f'DELETE FROM "{self._table}" WHERE id = ?'
+            self.get_engine().execute(sql, (self.id,))
         self.after_delete()
 
     def force_delete(self):
@@ -1058,14 +966,8 @@ class Model(metaclass=ModelMeta):
         if not self.id:
             return
         self.before_delete()
-        sql = f"DELETE FROM {self._table} WHERE id = ?"
-        with self._get_conn() as conn:
-            try:
-                conn.execute(sql, (self.id,))
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        sql = f'DELETE FROM "{self._table}" WHERE id = ?'
+        self.get_engine().execute(sql, (self.id,))
         self.after_delete()
 
     def restore(self):
@@ -1076,13 +978,7 @@ class Model(metaclass=ModelMeta):
         self._valid_column(self._soft_delete_field)
         setattr(self, self._soft_delete_field, None)
         sql = f'UPDATE "{self._table}" SET "{self._soft_delete_field}" = NULL WHERE id = ?'
-        with self._get_conn() as conn:
-            try:
-                conn.execute(sql, (self.id,))
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        self.get_engine().execute(sql, (self.id,))
 
     def _pivot_info(self, rel):
         """Compute pivot table name and FK column names for BelongsToMany.
@@ -1112,16 +1008,18 @@ class Model(metaclass=ModelMeta):
         pivot, pfk, pofk = self._pivot_info(rel)
         if not isinstance(ids, (list, tuple, set)):
             ids = [ids]
-        # SECURITY: Quote all identifiers to prevent SQL injection
-        sql = f'INSERT OR IGNORE INTO "{pivot}" ("{pfk}", "{pofk}") VALUES (?, ?)'
-        with self._get_conn() as conn:
-            try:
-                for tid in ids:
-                    conn.execute(sql, (self.id, tid))
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        engine = self.get_engine()
+        q_pivot = engine.quote_identifier(pivot)
+        q_pfk = engine.quote_identifier(pfk)
+        q_pofk = engine.quote_identifier(pofk)
+
+        select_sql = f"SELECT 1 FROM {q_pivot} WHERE {q_pfk} = ? AND {q_pofk} = ?"
+        insert_sql = f"INSERT INTO {q_pivot} ({q_pfk}, {q_pofk}) VALUES (?, ?)"
+
+        for tid in ids:
+            exists = engine.execute(select_sql, (self.id, tid))
+            if not exists:
+                engine.execute(insert_sql, (self.id, tid))
 
     def detach(self, relation_name, ids=None):
         """Remove pivot rows. If ids is None, removes all."""
@@ -1129,23 +1027,21 @@ class Model(metaclass=ModelMeta):
         if not rel or rel.type != "BelongsToMany":
             raise ValueError(f"No BelongsToMany relation: {relation_name}")
         pivot, pfk, pofk = self._pivot_info(rel)
-        with self._get_conn() as conn:
-            try:
-                # SECURITY: Quote all identifiers to prevent SQL injection
-                if ids is None:
-                    conn.execute(f'DELETE FROM "{pivot}" WHERE "{pfk}" = ?', (self.id,))
-                else:
-                    if not isinstance(ids, (list, tuple, set)):
-                        ids = [ids]
-                    placeholders = ", ".join(["?"] * len(ids))
-                    conn.execute(
-                        f'DELETE FROM "{pivot}" WHERE "{pfk}" = ? AND "{pofk}" IN ({placeholders})',
-                        [self.id] + list(ids),
-                    )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        engine = self.get_engine()
+        q_pivot = engine.quote_identifier(pivot)
+        q_pfk = engine.quote_identifier(pfk)
+        q_pofk = engine.quote_identifier(pofk)
+
+        if ids is None:
+            engine.execute(f"DELETE FROM {q_pivot} WHERE {q_pfk} = ?", (self.id,))
+        else:
+            if not isinstance(ids, (list, tuple, set)):
+                ids = [ids]
+            placeholders = ", ".join(["?"] * len(ids))
+            engine.execute(
+                f"DELETE FROM {q_pivot} WHERE {q_pfk} = ? AND {q_pofk} IN ({placeholders})",
+                [self.id] + list(ids),
+            )
 
     def sync(self, relation_name, ids):
         """Replace all pivot rows for this relation with the given ids."""
@@ -1153,21 +1049,18 @@ class Model(metaclass=ModelMeta):
         if not rel or rel.type != "BelongsToMany":
             raise ValueError(f"No BelongsToMany relation: {relation_name}")
         pivot, pfk, pofk = self._pivot_info(rel)
-        with self._get_conn() as conn:
-            try:
-                # SECURITY: Quote all identifiers to prevent SQL injection
-                conn.execute(f'DELETE FROM "{pivot}" WHERE "{pfk}" = ?', (self.id,))
-                if ids:
-                    if not isinstance(ids, (list, tuple, set)):
-                        ids = [ids]
-                    values = [(self.id, tid) for tid in set(ids)]
-                    conn.executemany(
-                        f'INSERT INTO "{pivot}" ("{pfk}", "{pofk}") VALUES (?, ?)', values
-                    )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        engine = self.get_engine()
+        q_pivot = engine.quote_identifier(pivot)
+        q_pfk = engine.quote_identifier(pfk)
+        q_pofk = engine.quote_identifier(pofk)
+
+        engine.execute(f"DELETE FROM {q_pivot} WHERE {q_pfk} = ?", (self.id,))
+        if ids:
+            if not isinstance(ids, (list, tuple, set)):
+                ids = [ids]
+            insert_sql = f"INSERT INTO {q_pivot} ({q_pfk}, {q_pofk}) VALUES (?, ?)"
+            for tid in set(ids):
+                engine.execute(insert_sql, (self.id, tid))
 
     @classmethod
     def with_trashed(cls):

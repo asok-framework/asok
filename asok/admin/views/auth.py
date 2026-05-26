@@ -248,11 +248,10 @@ class AuthViewsMixin:
 
                 # CRITICAL: Activate 2FA BEFORE showing backup codes (atomic SQL update)
                 User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
-                with User._get_conn() as conn:
-                    conn.execute(
-                        f"UPDATE {User._table} SET totp_secret = ?, totp_enabled = ?, backup_codes = ? WHERE id = ?",
-                        (encrypted_secret, 1, json.dumps(backup_codes_hashed), u.id),
-                    )
+                User.get_engine().execute(
+                    f"UPDATE {User._table} SET totp_secret = ?, totp_enabled = ?, backup_codes = ? WHERE id = ?",
+                    (encrypted_secret, 1, json.dumps(backup_codes_hashed), u.id),
+                )
 
                 try:
                     request.session.pop("pending_2fa_secret", None)
@@ -305,11 +304,10 @@ class AuthViewsMixin:
 
         # Disable 2FA and clear backup codes (atomic SQL update)
         User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
-        with User._get_conn() as conn:
-            conn.execute(
-                f"UPDATE {User._table} SET totp_secret = NULL, totp_enabled = 0, backup_codes = NULL WHERE id = ?",
-                (u.id,),
-            )
+        User.get_engine().execute(
+            f"UPDATE {User._table} SET totp_secret = NULL, totp_enabled = 0, backup_codes = NULL WHERE id = ?",
+            (u.id,),
+        )
 
         self._log(request, "2fa_disabled", "User", entity_id=u.id)
         request.flash("success", self.t(request, "Two-factor authentication disabled."))

@@ -3,13 +3,35 @@ from __future__ import annotations
 import getpass
 import importlib.util as _ilu
 import os
-import sqlite3
 import sys
 import traceback
 
 from ..orm import MODELS_REGISTRY, Migrations, Model
 from .server import _find_project_root
 from .style import Style
+
+
+class MigrationConnectionWrapper:
+    """Wrapper to make db connections look like sqlite3.Connection with execute/commit/rollback/close."""
+    def __init__(self, engine):
+        self.engine = engine
+        self.conn = engine.get_connection()
+
+    def execute(self, sql, *args, **kwargs):
+        # Flatten arguments if passed as a tuple inside a tuple
+        params = args[0] if args and isinstance(args[0], (tuple, list)) else args
+        return self.engine.execute(sql, params)
+
+    def commit(self):
+        if hasattr(self.conn, "commit"):
+            self.conn.commit()
+
+    def rollback(self):
+        if hasattr(self.conn, "rollback"):
+            self.conn.rollback()
+
+    def close(self):
+        pass
 
 
 def run_migrate(
@@ -35,8 +57,8 @@ def run_migrate(
             spec = _ilu.spec_from_file_location("_wsgi_mig", wsgi_path)
             mod = _ilu.module_from_spec(spec)
             spec.loader.exec_module(mod)
-        except Exception:
-            pass
+        except Exception as e:
+            Style.warn(f"Failed to load wsgi.py: {e}")
 
     model_dir = os.path.join(root, "src/models")
     if os.path.isdir(model_dir):
@@ -55,8 +77,8 @@ def run_migrate(
                     spec = _ilu.spec_from_file_location(mod_name, filepath)
                     mod = _ilu.module_from_spec(spec)
                     spec.loader.exec_module(mod)
-                except Exception:
-                    pass
+                except Exception as e:
+                    Style.warn(f"Failed to load model file {f}: {e}")
 
     Migrations.ensure_table()
 
@@ -106,7 +128,7 @@ def run_migrate(
             return
 
         Style.heading(f"ROLLBACK (Batch {Migrations.get_last_batch_number()})")
-        conn = sqlite3.connect(Model._db_path)
+        conn = MigrationConnectionWrapper(Model.get_engine())
         try:
             for name in last_batch_names:
                 filename = f"{name}.py"
@@ -140,7 +162,7 @@ def run_migrate(
 
     Style.heading("RUNNING MIGRATIONS")
     batch = Migrations.get_last_batch_number() + 1
-    conn = sqlite3.connect(Model._db_path)
+    conn = MigrationConnectionWrapper(Model.get_engine())
 
     try:
         for name in pending:
@@ -271,10 +293,13 @@ def run_createsuperuser(email: str | None = None, password: str | None = None) -
                     name="admin", label="Administrator", permissions="*"
                 )
                 Style.success("Created 'admin' role with full permissions.")
-            with User._get_conn() as conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO role_user (role_id, user_id) VALUES (?, ?)",
-                    (admin_role.id, user.id),
-                )
+            engine = User.get_engine()
+            q_role_user = engine.quote_identifier("role_user")
+            q_role_id = engine.quote_identifier("role_id")
+            q_user_id = engine.quote_identifier("user_id")
+
+            exists = engine.execute(f"SELECT 1 FROM {q_role_user} WHERE {q_role_id} = ? AND {q_user_id} = ?", (admin_role.id, user.id))
+            if not exists:
+                engine.execute(f"INSERT INTO {q_role_user} ({q_role_id}, {q_user_id}) VALUES (?, ?)", (admin_role.id, user.id))
         except Exception as e:
             print(f"  ⚠ Could not attach admin role: {e}")

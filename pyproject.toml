@@ -24,6 +24,10 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: WSGI :: Application",
 ]
 
+[project.optional-dependencies]
+postgres = ["psycopg>=3.0.0"]
+mysql = ["pymysql>=1.1.0"]
+
 [project.urls]
 Homepage = "https://github.com/asok-framework/asok"
 Repository = "https://github.com/asok-framework/asok"

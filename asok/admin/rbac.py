@@ -22,9 +22,9 @@ def _user_roles_accessor(self: Any) -> ModelList:
         f"JOIN role_user p ON p.role_id = r.id "
         f"WHERE p.user_id = ?"
     )
-    with self._get_conn() as conn:
-        rows = conn.execute(sql, (self.id,)).fetchall()
-    return ModelList(Role(**dict(row)) for row in rows)
+    engine = self.get_engine()
+    rows = engine.execute(sql, (self.id,))
+    return ModelList(Role(**row) for row in rows)
 
 
 def _user_role_ids(self: Any) -> list[int]:

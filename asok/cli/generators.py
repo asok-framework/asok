@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util as _ilu
 import os
-import sqlite3
 import sys
 import time
 
@@ -140,8 +139,8 @@ def make_migration(name: str) -> None:
             spec = _ilu.spec_from_file_location("_wsgi_mig", wsgi_path)
             wsgi_mod = _ilu.module_from_spec(spec)
             spec.loader.exec_module(wsgi_mod)
-        except Exception:
-            pass
+        except Exception as e:
+            Style.warn(f"Failed to load wsgi.py: {e}")
 
     # 2. Scan src/models/ for any missed models
     model_dir = os.path.join(root, "src/models")
@@ -180,9 +179,9 @@ def make_migration(name: str) -> None:
         Style.info(f"Detected models: {', '.join(MODELS_REGISTRY.keys())}")
     else:
         Style.warn("No models registered. Check your model definitions.")
-    db_path = Model._db_path
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    engine = Model.get_engine()
+    from ..orm.engines import SQLiteEngine
+    is_sqlite = isinstance(engine, SQLiteEngine)
 
     # Analysis
     up_sql = []
@@ -192,9 +191,7 @@ def make_migration(name: str) -> None:
         table = model_cls._table
 
         # Check if table exists
-        exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
-        ).fetchone()
+        exists = engine.table_exists(table)
 
         if not exists:
             Style.info(f"  + New table detected: {table}")
@@ -202,14 +199,16 @@ def make_migration(name: str) -> None:
             fields = []
 
             # Ensure 'id' is always the first column if not explicitly defined
+            pk_def = getattr(engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT")
             if "id" not in model_cls._fields:
-                fields.append("id INTEGER PRIMARY KEY AUTOINCREMENT")
+                fields.append(pk_def)
 
             for f_name, f_obj in model_cls._fields.items():
                 if f_name == "id":
-                    col = "id INTEGER PRIMARY KEY AUTOINCREMENT"
+                    fields.append(pk_def)
                 else:
-                    col = f"{f_name} {f_obj.sql_type}"
+                    col_type = engine.get_column_type(f_obj)
+                    col = f"{f_name} {col_type}"
                     if f_obj.unique:
                         col += " UNIQUE"
                     if not f_obj.nullable:
@@ -221,20 +220,20 @@ def make_migration(name: str) -> None:
                             col += f" DEFAULT {str(f_obj.default).lower()}"
                         else:
                             col += f" DEFAULT '{f_obj.default}'"
-                fields.append(col)
-            sql_create = f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(fields)})"
+                    fields.append(col)
+
+            q_table = engine.quote_identifier(table)
+            sql_create = f"CREATE TABLE IF NOT EXISTS {q_table} ({', '.join(fields)})"
             up_sql.append(f"conn.execute({repr(sql_create)})")
-            down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {table}')})")
+            down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {q_table}')})")
         else:
             # Check for new columns
-            existing_cols = {
-                r["name"]
-                for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
+            existing_cols = set(engine.get_table_columns(table))
             for f_name, f_obj in model_cls._fields.items():
                 if f_name not in existing_cols:
                     Style.info(f"    + New column detected: {table}.{f_name}")
-                    col_sql = f"{f_name} {f_obj.sql_type}"
+                    col_type = engine.get_column_type(f_obj)
+                    col_sql = f"{f_name} {col_type}"
                     if f_obj.default is not None:
                         if isinstance(f_obj.default, (int, float)):
                             col_sql += f" DEFAULT {f_obj.default}"
@@ -243,11 +242,11 @@ def make_migration(name: str) -> None:
                         else:
                             col_sql += f" DEFAULT '{f_obj.default}'"
 
-                    sql_alter = f"ALTER TABLE {table} ADD COLUMN {col_sql}"
+                    q_table = engine.quote_identifier(table)
+                    sql_alter = f"ALTER TABLE {q_table} ADD COLUMN {col_sql}"
                     up_sql.append(f"conn.execute({repr(sql_alter)})")
-                    # SQLite doesn't support DROP COLUMN on all versions, so we just log it or do nothing in down
                     down_sql.append(
-                        f"# SQLite limited: cannot easily drop column {f_name} from {table}"
+                        f"# Column drop depends on DB: cannot easily drop column {f_name} from {table}"
                     )
 
         # Check for BelongsToMany pivot tables
@@ -262,67 +261,86 @@ def make_migration(name: str) -> None:
                     continue
                 processed_pivots.add(pivot)
 
-                exists = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                    (pivot,),
-                ).fetchone()
+                exists = engine.table_exists(pivot)
 
                 if not exists:
                     Style.info(f"    + New pivot table detected: {pivot}")
                     pfk = rel.pivot_fk or f"{a}_id"
                     pofk = rel.pivot_other_fk or f"{b}_id"
+
+                    q_pivot = engine.quote_identifier(pivot)
+                    q_pfk = engine.quote_identifier(pfk)
+                    q_pofk = engine.quote_identifier(pofk)
+
                     sql_pivot = (
-                        f"CREATE TABLE IF NOT EXISTS {pivot} ("
-                        f"{pfk} INTEGER NOT NULL, "
-                        f"{pofk} INTEGER NOT NULL, "
-                        f"PRIMARY KEY ({pfk}, {pofk}))"
+                        f"CREATE TABLE IF NOT EXISTS {q_pivot} ("
+                        f"{q_pfk} INTEGER NOT NULL, "
+                        f"{q_pofk} INTEGER NOT NULL, "
+                        f"PRIMARY KEY ({q_pfk}, {q_pofk}))"
                     )
                     up_sql.append(f"conn.execute({repr(sql_pivot)})")
                     down_sql.append(
-                        f"conn.execute({repr(f'DROP TABLE IF EXISTS {pivot}')})"
+                        f"conn.execute({repr(f'DROP TABLE IF EXISTS {q_pivot}')})"
                     )
 
-        # Check for FTS tables and triggers
+        # Check for FTS tables/indexes
         if model_cls._search_fields:
-            fts_table = f"{table}_fts"
-            fts_exists = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (fts_table,),
-            ).fetchone()
-            if not fts_exists:
-                Style.info(f"    + New FTS table detected: {fts_table}")
-                f_names = ", ".join(model_cls._search_fields)
-                sql_fts = f"CREATE VIRTUAL TABLE IF NOT EXISTS {fts_table} USING fts5({f_names}, content='{table}', content_rowid='id')"
-                up_sql.append(f"conn.execute({repr(sql_fts)})")
+            if is_sqlite:
+                # SQLite: FTS5 virtual table + triggers
+                fts_table = f"{table}_fts"
+                fts_exists = engine.table_exists(fts_table)
+                if not fts_exists:
+                    Style.info(f"    + New FTS table detected: {fts_table}")
+                    f_names = ", ".join(model_cls._search_fields)
+                    sql_fts = f"CREATE VIRTUAL TABLE IF NOT EXISTS {fts_table} USING fts5({f_names}, content='{table}', content_rowid='id')"
+                    up_sql.append(f"conn.execute({repr(sql_fts)})")
 
-                sql_rebuild = f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')"
-                up_sql.append(f"conn.execute({repr(sql_rebuild)})")
+                    sql_rebuild = f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')"
+                    up_sql.append(f"conn.execute({repr(sql_rebuild)})")
 
-                # Triggers to keep FTS in sync
-                f_quoted = ", ".join([f'"{n}"' for n in model_cls._search_fields])
-                f_new = ", ".join([f'new."{n}"' for n in model_cls._search_fields])
-                f_old = ", ".join([f'old."{n}"' for n in model_cls._search_fields])
+                    # Triggers to keep FTS in sync
+                    f_quoted = ", ".join([f'"{n}"' for n in model_cls._search_fields])
+                    f_new = ", ".join([f'new."{n}"' for n in model_cls._search_fields])
+                    f_old = ", ".join([f'old."{n}"' for n in model_cls._search_fields])
 
-                ai = f'CREATE TRIGGER IF NOT EXISTS "{table}_ai" AFTER INSERT ON "{table}" BEGIN INSERT INTO "{fts_table}"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;'
-                ad = f'CREATE TRIGGER IF NOT EXISTS "{table}_ad" AFTER DELETE ON "{table}" BEGIN INSERT INTO "{fts_table}"("{fts_table}", rowid, {f_quoted}) VALUES(\'delete\', old.id, {f_old}); END;'
-                au = f'CREATE TRIGGER IF NOT EXISTS "{table}_au" AFTER UPDATE ON "{table}" BEGIN INSERT INTO "{fts_table}"("{fts_table}", rowid, {f_quoted}) VALUES(\'delete\', old.id, {f_old}); INSERT INTO "{fts_table}"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;'
+                    ai = f'CREATE TRIGGER IF NOT EXISTS "{table}_ai" AFTER INSERT ON "{table}" BEGIN INSERT INTO "{fts_table}"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;'
+                    ad = f'CREATE TRIGGER IF NOT EXISTS "{table}_ad" AFTER DELETE ON "{table}" BEGIN INSERT INTO "{fts_table}"("{fts_table}", rowid, {f_quoted}) VALUES(\'delete\', old.id, {f_old}); END;'
+                    au = f'CREATE TRIGGER IF NOT EXISTS "{table}_au" AFTER UPDATE ON "{table}" BEGIN INSERT INTO "{fts_table}"("{fts_table}", rowid, {f_quoted}) VALUES(\'delete\', old.id, {f_old}); INSERT INTO "{fts_table}"(rowid, {f_quoted}) VALUES (new.id, {f_new}); END;'
 
-                up_sql.append(f"conn.execute({repr(ai)})")
-                up_sql.append(f"conn.execute({repr(ad)})")
-                up_sql.append(f"conn.execute({repr(au)})")
+                    up_sql.append(f"conn.execute({repr(ai)})")
+                    up_sql.append(f"conn.execute({repr(ad)})")
+                    up_sql.append(f"conn.execute({repr(au)})")
 
-                sql_drop_fts = f'DROP TABLE IF EXISTS "{fts_table}"'
-                down_sql.append(f"conn.execute({repr(sql_drop_fts)})")
+                    sql_drop_fts = f'DROP TABLE IF EXISTS "{fts_table}"'
+                    down_sql.append(f"conn.execute({repr(sql_drop_fts)})")
 
-                sql_ai = f'DROP TRIGGER IF EXISTS "{table}_ai"'
-                sql_ad = f'DROP TRIGGER IF EXISTS "{table}_ad"'
-                sql_au = f'DROP TRIGGER IF EXISTS "{table}_au"'
+                    sql_ai = f'DROP TRIGGER IF EXISTS "{table}_ai"'
+                    sql_ad = f'DROP TRIGGER IF EXISTS "{table}_ad"'
+                    sql_au = f'DROP TRIGGER IF EXISTS "{table}_au"'
 
-                down_sql.append(f"conn.execute({repr(sql_ai)})")
-                down_sql.append(f"conn.execute({repr(sql_ad)})")
-                down_sql.append(f"conn.execute({repr(sql_au)})")
-
-    conn.close()
+                    down_sql.append(f"conn.execute({repr(sql_ai)})")
+                    down_sql.append(f"conn.execute({repr(sql_ad)})")
+                    down_sql.append(f"conn.execute({repr(sql_au)})")
+            else:
+                # MySQL/Postgres: FULLTEXT INDEX via ALTER TABLE
+                from ..orm.engines import MySQLEngine
+                if isinstance(engine, MySQLEngine):
+                    index_name = f"idx_{table}_fts"
+                    cols = ", ".join([engine.quote_identifier(c) for c in model_cls._search_fields])
+                    q_table = engine.quote_identifier(table)
+                    q_index = engine.quote_identifier(index_name)
+                    # Check if FULLTEXT index already exists (use ? so translate_query handles dialect)
+                    idx_check = engine.execute(
+                        "SELECT COUNT(*) as cnt FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
+                        (table, index_name),
+                    )
+                    if not idx_check or idx_check[0].get("cnt", 0) == 0:
+                        Style.info(f"    + New FULLTEXT index detected: {index_name}")
+                        sql_ft = f"ALTER TABLE {q_table} ADD FULLTEXT INDEX {q_index} ({cols})"
+                        sql_drop_ft = f"ALTER TABLE {q_table} DROP INDEX {q_index}"
+                        up_sql.append(f"conn.execute({repr(sql_ft)})")
+                        down_sql.append(f"conn.execute({repr(sql_drop_ft)})")
 
     if not up_sql:
         Style.info("No changes detected in models.")

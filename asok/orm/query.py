@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-import struct
 from typing import Any, Generic, Optional, TypeVar, Union
 
 from .list import ModelList
@@ -83,7 +82,7 @@ class Query(Generic[T]):
                 if inner_strip == "*":
                     inner_validated = "*"
                 elif self.model._valid_column(inner_strip):
-                    inner_validated = f'"{inner_strip}"'
+                    inner_validated = self.model.get_engine().quote_identifier(inner_strip)
                 else:
                     raise ValueError(f"Invalid column in aggregate: {inner_strip}")
 
@@ -158,6 +157,9 @@ class Query(Generic[T]):
                 raise ValueError(f"Invalid operator: {op_or_val}")
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
+        field = self.model._fields.get(column)
+        if field:
+            val = self.model.get_engine().prepare_value(field, val)
         self._wheres.append(f"{column} {op} ?")
         self._args.append(val)
         return self
@@ -190,6 +192,11 @@ class Query(Generic[T]):
         if not values:
             self._wheres.append("0")
             return self
+
+        field = self.model._fields.get(column)
+        if field:
+            values = [self.model.get_engine().prepare_value(field, v) for v in values]
+
         placeholders = ", ".join(["?"] * len(values))
         self._wheres.append(f"{column} IN ({placeholders})")
         self._args.extend(values)
@@ -214,6 +221,10 @@ class Query(Generic[T]):
         if not self._wheres:
             return self.where(column, op, val)
 
+        field = self.model._fields.get(column)
+        if field:
+            val = self.model.get_engine().prepare_value(field, val)
+
         self._wheres.append(f"OR {column} {op} ?")
         self._args.append(val)
         return self
@@ -236,6 +247,10 @@ class Query(Generic[T]):
         """Filter rows where column value is between start and end."""
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
+        field = self.model._fields.get(column)
+        if field:
+            start = self.model.get_engine().prepare_value(field, start)
+            end = self.model.get_engine().prepare_value(field, end)
         self._wheres.append(f"{column} BETWEEN ? AND ?")
         self._args.extend([start, end])
         return self
@@ -247,15 +262,13 @@ class Query(Generic[T]):
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
 
-        # Serialize input vector to binary
-        blob = struct.pack(f"{len(vector)}f", *vector)
+        # Delegate vector serialization/preparation to the engine
+        field = self.model._fields.get(column)
+        prepared_val = self.model.get_engine().prepare_value(field, vector)
 
-        if metric == "cosine":
-            self._order = f"cosine_similarity({column}, ?) DESC"
-        else:
-            self._order = f"euclidean_distance({column}, ?) ASC"
-
-        self._args.append(blob)
+        # Let the engine build the similarity ordering expression
+        self._order = self.model.get_engine().vector_distance_sql(column, metric)
+        self._args.append(prepared_val)
         return self.limit(limit)
 
     def search(self, term: str) -> Query[T]:
@@ -263,12 +276,10 @@ class Query(Generic[T]):
         if not self.model._search_fields:
             return self
 
-        if term and "*" not in term:
-            term = " ".join([f"{t}*" for t in term.split() if t])
-
-        subquery = f"SELECT rowid FROM {self.model._table}_fts WHERE {self.model._table}_fts MATCH ?"
-        self._wheres.append(f"id IN ({subquery})")
-        self._args.append(term)
+        # Let the engine build the full text search clause
+        where_clause, args = self.model.get_engine().search_sql(self.model._table, self.model._search_fields, term)
+        self._wheres.append(where_clause)
+        self._args.extend(args)
         return self
 
     def order_by(self, column: str) -> Query[T]:
@@ -363,11 +374,13 @@ class Query(Generic[T]):
             sql = f"({sql}) INTERSECT ({intersect_sql})"
 
         # ORDER/LIMIT/OFFSET apply to the final result
-        if self._order:
+        # Aggregates like COUNT(*) do not allow ORDER BY without GROUP BY in strict SQL (PostgreSQL)
+        is_aggregate = select is not None and any(agg in select.upper() for agg in ["COUNT(", "SUM(", "AVG(", "MIN(", "MAX("])
+        if self._order and not (is_aggregate and not self._groups):
             sql += f" ORDER BY {self._order}"
-        if self._limit is not None:
+        if self._limit is not None and not is_aggregate:
             sql += f" LIMIT {self._limit}"
-        if self._offset is not None:
+        if self._offset is not None and not is_aggregate:
             sql += f" OFFSET {self._offset}"
         return sql
 
@@ -396,10 +409,9 @@ class Query(Generic[T]):
             if cached is not None:
                 return cached
 
-        with self.model._get_conn() as conn:
-            rows = conn.execute(sql, all_args).fetchall()
+        rows = self.model.get_engine().execute(sql, all_args)
         results = ModelList(
-            (self.model(_trust=True, **dict(row)) for row in rows),
+            (self.model(_trust=True, **row) for row in rows),
             sql=sql,
             args=all_args,
         )
@@ -464,16 +476,16 @@ class Query(Generic[T]):
     def count(self) -> int:
         """Return the number of records matching the query."""
         sql = self._build(select="COUNT(*)")
-        with self.model._get_conn() as conn:
-            return conn.execute(sql, self._args).fetchone()[0]
+        res = self.model.get_engine().execute(sql, self._args)
+        return list(res[0].values())[0] if res else 0
 
     def _aggregate(self, func: str, column: str) -> Any:
         """Perform a SQL aggregate function (SUM, AVG, etc.) on a column."""
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
         sql = self._build(select=f"{func}({column})")
-        with self.model._get_conn() as conn:
-            result = conn.execute(sql, self._args).fetchone()[0]
+        res = self.model.get_engine().execute(sql, self._args)
+        result = list(res[0].values())[0] if res else None
         return result if result is not None else 0
 
     def sum(self, column: str) -> Union[int, float]:
@@ -497,9 +509,8 @@ class Query(Generic[T]):
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
         sql = self._build(select=column)
-        with self.model._get_conn() as conn:
-            rows = conn.execute(sql, self._args).fetchall()
-        return [row[0] for row in rows]
+        rows = self.model.get_engine().execute(sql, self._args)
+        return [list(row.values())[0] for row in rows]
 
     def update(self, **values: Any) -> int:
         """Bulk update matching rows with the provided values."""
@@ -510,12 +521,15 @@ class Query(Generic[T]):
                 raise ValueError(f"Invalid column: {col}")
         set_str = ", ".join([f"{k} = ?" for k in values])
         sql = f"UPDATE {self.model._table} SET {set_str}"
-        args = list(values.values())
+        args = []
+        for k, v in values.items():
+            field = self.model._fields.get(k)
+            if field:
+                v = self.model.get_engine().prepare_value(field, v)
+            args.append(v)
         sql += self._build_where()
         args += self._args
-        with self.model._get_conn() as conn:
-            cursor = conn.execute(sql, args)
-            return cursor.rowcount
+        return self.model.get_engine().execute(sql, args)
 
     def exists(self) -> bool:
         """Return True if any records match the query."""
@@ -531,17 +545,13 @@ class Query(Generic[T]):
             )
         sql = f"DELETE FROM {self.model._table}"
         sql += self._build_where()
-        with self.model._get_conn() as conn:
-            cursor = conn.execute(sql, self._args)
-            return cursor.rowcount
+        return self.model.get_engine().execute(sql, self._args)
 
     def force_delete(self) -> int:
         """Bulk delete matching records permanently, bypassing soft delete."""
         sql = f"DELETE FROM {self.model._table}"
         sql += self._build_where()
-        with self.model._get_conn() as conn:
-            cursor = conn.execute(sql, self._args)
-            return cursor.rowcount
+        return self.model.get_engine().execute(sql, self._args)
 
     def paginate(self, page: int = 1, per_page: int = 10) -> dict[str, Any]:
         """Paginate the current query and return results with metadata.

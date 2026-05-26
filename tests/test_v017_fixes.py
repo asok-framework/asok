@@ -26,6 +26,9 @@ class MockUser(Model):
     __tablename__ = "mock_users"
     username = Field.String()
     is_admin = Field.Boolean(default=False)
+    totp_secret = Field.String(nullable=True)
+    totp_enabled = Field.Boolean(default=False)
+    backup_codes = Field.String(nullable=True)
 
 # Make sure Role and AdminLog exist in registry to bypass _ensure_model_file
 class Role(Model):
@@ -432,3 +435,57 @@ def test_impersonation_of_non_admin_does_not_redirect_to_login(tmp_path):
     MockUser.close_connections()
     Role.close_connections()
     AdminLog.close_connections()
+
+
+def test_user_roles_accessor_and_2fa_update_queries(tmp_path):
+    MockUser.create_table()
+    Role.create_table()
+    MockUser.get_engine().execute("DROP TABLE IF EXISTS role_user")
+    MockUser.get_engine().execute(
+        "CREATE TABLE role_user (role_id INTEGER, user_id INTEGER)"
+    )
+
+    app = DummyApp(root_dir=str(tmp_path))
+    admin_instance = Admin(app)  # binds roles property to MockUser
+
+    user = MockUser.create(username="test_user", is_admin=False)
+    user.email = "test@example.com"
+    user.totp_secret = "encrypted_secret"
+    user.totp_enabled = True
+    user.backup_codes = '["code1", "code2"]'
+    user.save()
+
+    # Verify that calling user.roles executes successfully and returns a ModelList
+    roles = user.roles
+    assert isinstance(roles, list)
+    assert len(roles) == 0
+
+    # Also test the twofa disable/setup updates query execution
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/admin/me/2fa/disable",
+        "QUERY_STRING": "",
+        "SERVER_NAME": "localhost",
+        "SERVER_PORT": "80",
+        "wsgi.input": None,
+    }
+    req = Request(environ)
+    req.user = user
+    req.form = {"current_password": "correct"}
+    req._flashes = []
+    req.flash = lambda c, m: None
+
+    # Mock check_password on user
+    user.check_password = lambda field, pw: True
+
+    # Call _twofa_disable. It should raise RedirectException because it redirects to /me
+    with pytest.raises(RedirectException):
+        admin_instance._twofa_disable(req)
+
+    # Let's check that the database values are updated/cleared
+    user = MockUser.find(id=user.id)
+    assert getattr(user, "totp_secret", None) is None
+    assert getattr(user, "totp_enabled", None) in (0, False, None)
+
+    MockUser.close_connections()
+    Role.close_connections()

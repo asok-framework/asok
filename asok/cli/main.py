@@ -124,7 +124,7 @@ def main() -> None:
         if "DATABASE_URL" in os.environ:
             from ..orm import Model
 
-            Model._db_path = os.environ["DATABASE_URL"]
+            Model._db_path = (os.environ["DATABASE_URL"] or "").strip() or None
 
     os.environ["ASOK_CLI"] = "true"
     parser = argparse.ArgumentParser(description="Asok Framework CLI", add_help=False)
