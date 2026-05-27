@@ -4,9 +4,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from asok.core.storage import S3Storage, get_storage, LocalStorage
+from asok.core.storage import LocalStorage, S3Storage, get_storage
 
 
 def test_local_storage(tmp_path, monkeypatch) -> None:
@@ -16,7 +14,7 @@ def test_local_storage(tmp_path, monkeypatch) -> None:
     storage = LocalStorage()
     filename = "test.txt"
     content = b"hello world"
-    
+
     # Save file
     dest = storage.save(filename, content)
     assert os.path.exists(dest)

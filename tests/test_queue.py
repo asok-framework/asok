@@ -5,8 +5,6 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from asok.background import background
 
 _dummy_task_executed = False
