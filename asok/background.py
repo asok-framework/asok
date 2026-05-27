@@ -74,9 +74,12 @@ def background(
         f.set_result(None)
         return f
 
-    def wrapper() -> None:
+    import contextvars
+    ctx = contextvars.copy_context()
+
+    def wrapper() -> Any:
         try:
-            fn(*args, **kwargs)
+            return ctx.run(fn, *args, **kwargs)
         except Exception as e:
             logger.error("Background task %s failed: %s", fn.__name__, e)
 

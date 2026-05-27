@@ -1068,7 +1068,7 @@ def render_signature(field: Any, val: str, merged: dict[str, Any]) -> str:
     canvas_attrs["height"] = height
     canvas_attrs["asok-ref"] = f"canvas_{field.name}"
 
-    # Handlers pour le dessin
+    # Handlers for drawing
     mousedown = f"Asok.startSignatureDrawing($event, $, $refs.canvas_{field.name})"
     mousemove = f"Asok.drawSignature($event, $, $refs.canvas_{field.name})"
     mouseup = f"Asok.stopSignatureDrawing($, $refs.canvas_{field.name}, $refs.hidden_{field.name})"

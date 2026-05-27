@@ -61,13 +61,31 @@ class Relation:
     def MorphTo(
         id_column: Optional[str] = None, type_column: Optional[str] = None
     ) -> Relation:
-        """Polymorphic belongs-to-like relationship."""
+        """Polymorphic belongs-to-like relationship.
+
+        Allows the model to belong to more than one other model type on a single association.
+        Usually requires two columns on the model's table: an ID column (default: {relation_name}_id)
+        and a type column (default: {relation_name}_type).
+
+        Example:
+            class Comment(Model):
+                commentable = Relation.MorphTo()
+        """
         return Relation("MorphTo", "", id_column, type_column)
 
     @staticmethod
     def MorphMany(
         target_model_name: str, relation_name: str
     ) -> Relation:
-        """Polymorphic has-many-like relationship."""
+        """Polymorphic has-many-like relationship.
+
+        Establish a one-to-many relationship with a child model that can be associated
+        with multiple different parent models.
+
+        Example:
+            class Article(Model):
+                comments = Relation.MorphMany("Comment", "commentable")
+        """
         return Relation("MorphMany", target_model_name, relation_name)
+
 

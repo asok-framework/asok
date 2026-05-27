@@ -139,112 +139,141 @@ def on_live_message(server: Any, conn: Any, text: str) -> None:
                 return
 
             cls, state_signed = conn._live_comps[cid]
-            comp = cls._from_signed_state(state_signed, server.secret_key, cid=cid)
-            if not comp:
-                return
 
-            # Inject session
+            # Construct a mock/dummy Request from the WebSocket connection's handshake properties
+            environ = {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": conn.path,
+                "HTTP_HOST": conn.headers.get("host", "localhost"),
+                "QUERY_STRING": "",
+                "wsgi.input": None,
+                "asok.app": server.app,
+                "asok.secret_key": server.secret_key,
+            }
+            # Copy all connection headers as HTTP_ headers
+            for k, v in conn.headers.items():
+                name = k.upper().replace("-", "_")
+                if name in ("CONTENT_TYPE", "CONTENT_LENGTH"):
+                    environ[name] = v
+                else:
+                    environ[f"HTTP_{name}"] = v
+
+            from ..context import request_context
+            from ..request import Request
+
+            req = Request(environ)
+            if conn.user:
+                req.user = conn.user
             if conn.session:
-                comp._session = conn.session
+                req._session = conn.session
 
-            if op == "call":
-                method_name = data.get("method")
-                val = data.get("val")
-
-                # SECURITY: Validate method name format and length
-                if not isinstance(method_name, str) or len(method_name) > 100:
-                    logger.warning("Invalid method name format in call")
+            with request_context(req):
+                comp = cls._from_signed_state(state_signed, server.secret_key, cid=cid)
+                if not comp:
                     return
-                if method_name and not method_name.startswith("_"):
-                    method = getattr(comp, method_name, None)
-                    # Security: only allow methods explicitly marked with @exposed
-                    if callable(method) and getattr(method, "_asok_exposed", False):
-                        # Pass val as arg if method accepts it
-                        sig = inspect.signature(method)
-                        if len(sig.parameters) > 0:
-                            method(val)
+
+                # Inject session
+                if conn.session:
+                    comp._session = conn.session
+
+                if op == "call":
+                    method_name = data.get("method")
+                    val = data.get("val")
+
+                    # SECURITY: Validate method name format and length
+                    if not isinstance(method_name, str) or len(method_name) > 100:
+                        logger.warning("Invalid method name format in call")
+                        return
+                    if method_name and not method_name.startswith("_"):
+                        method = getattr(comp, method_name, None)
+                        # Security: only allow methods explicitly marked with @exposed
+                        if callable(method) and getattr(method, "_asok_exposed", False):
+                            # Pass val as arg if method accepts it
+                            sig = inspect.signature(method)
+                            if len(sig.parameters) > 0:
+                                method(val)
+                            else:
+                                method()
                         else:
-                            method()
-                    else:
-                        logger.warning(
-                            "Attempted to call unexposed method '%s' on component '%s'",
-                            method_name,
-                            comp.__class__.__name__,
-                        )
+                            logger.warning(
+                                "Attempted to call unexposed method '%s' on component '%s'",
+                                method_name,
+                                comp.__class__.__name__,
+                            )
 
-            elif op == "sync":
-                prop = data.get("prop")
-                val = data.get("val")
+                elif op == "sync":
+                    prop = data.get("prop")
+                    val = data.get("val")
 
-                # SECURITY: Validate property name format and length
-                if not isinstance(prop, str) or len(prop) > 100:
-                    logger.warning("Invalid property name format in sync")
-                    return
-                if prop and not prop.startswith("_") and hasattr(comp, prop):
-                    # SECURITY: Require explicit _bindable whitelist (opt-in, not opt-out)
-                    # Components must declare _bindable = ["prop1", "prop2"] to allow sync
-                    bindable = getattr(comp.__class__, "_bindable", [])
-                    if prop not in bindable:
-                        logger.warning(
-                            "Blocked sync of non-bindable prop '%s' on '%s' (not in whitelist)",
-                            prop,
-                            comp.__class__.__name__,
-                        )
-                    else:
-                        setattr(comp, prop, val)
+                    # SECURITY: Validate property name format and length
+                    if not isinstance(prop, str) or len(prop) > 100:
+                        logger.warning("Invalid property name format in sync")
+                        return
+                    if prop and not prop.startswith("_") and hasattr(comp, prop):
+                        # SECURITY: Require explicit _bindable whitelist (opt-in, not opt-out)
+                        # Components must declare _bindable = ["prop1", "prop2"] to allow sync
+                        bindable = getattr(comp.__class__, "_bindable", [])
+                        if prop not in bindable:
+                            logger.warning(
+                                "Blocked sync of non-bindable prop '%s' on '%s' (not in whitelist)",
+                                prop,
+                                comp.__class__.__name__,
+                            )
+                        else:
+                            setattr(comp, prop, val)
 
-            # Persist session if modified
-            if conn.session and getattr(conn.session, "modified", False):
-                server.app._session_store.save(conn.session.sid, conn.session)
+                # Persist session if modified
+                if conn.session and getattr(conn.session, "modified", False):
+                    server.app._session_store.save(conn.session.sid, conn.session)
 
-            # Re-render and update stored signed state
-            secret = server.secret_key or os.getenv("SECRET_KEY")
-            if not secret:
-                raise RuntimeError(
-                    "SECRET_KEY is not configured. This should never happen if Asok() is properly initialized."
+                # Re-render and update stored signed state
+                secret = server.secret_key or os.getenv("SECRET_KEY")
+                if not secret:
+                    raise RuntimeError(
+                        "SECRET_KEY is not configured. This should never happen if Asok() is properly initialized."
+                    )
+                new_state_signed = comp._sign_state(secret)
+                conn._live_comps[cid] = (cls, new_state_signed)
+
+                # Persist updated state to session so page refresh restores it
+                if conn.session is not None:
+                    conn.session[f"_comp_{cid}"] = new_state_signed
+                    server.app._session_store.save(conn.session.sid, conn.session)
+
+                new_html = str(comp)
+
+                # Pre-compile directives for Zero-Eval Security
+                if server.app:
+                    new_html, registry = server.app._precompile_directives(new_html)
+                    # Convert registry functions to JS strings
+                    registry_js = {}
+                    if registry:
+                        for h, expr in registry.items():
+                            is_stmt = ";" in expr or "if " in expr or "return " in expr
+                            if expr.strip().startswith("{") and not is_stmt:
+                                expr = f"({expr})"
+                            body = f"return ({expr})" if not is_stmt else expr
+                            # Minify the function body to remove newlines/comments that break script injection
+                            body = minify_js(body)
+                            registry_js[h] = (
+                                "function($, $store, $el, $event, $refs, $nextTick) "
+                                f"{{ with($||{{}}) {{ {body} }} }}"
+                            )
+                else:
+                    registry_js = {}
+
+                # Invalidate SPA cache so navigation shows updated state
+                conn.send_json(
+                    {
+                        "op": "render",
+                        "cid": cid,
+                        "name": comp.__class__.__name__,
+                        "html": new_html,
+                        "registry": registry_js,
+                        "state": comp._get_state(),
+                        "invalidate_cache": True,
+                    }
                 )
-            new_state_signed = comp._sign_state(secret)
-            conn._live_comps[cid] = (cls, new_state_signed)
-
-            # Persist updated state to session so page refresh restores it
-            if conn.session is not None:
-                conn.session[f"_comp_{cid}"] = new_state_signed
-                server.app._session_store.save(conn.session.sid, conn.session)
-
-            new_html = str(comp)
-
-            # Pre-compile directives for Zero-Eval Security
-            if server.app:
-                new_html, registry = server.app._precompile_directives(new_html)
-                # Convert registry functions to JS strings
-                registry_js = {}
-                if registry:
-                    for h, expr in registry.items():
-                        is_stmt = ";" in expr or "if " in expr or "return " in expr
-                        if expr.strip().startswith("{") and not is_stmt:
-                            expr = f"({expr})"
-                        body = f"return ({expr})" if not is_stmt else expr
-                        # Minify the function body to remove newlines/comments that break script injection
-                        body = minify_js(body)
-                        registry_js[h] = (
-                            "function($, $store, $el, $event, $refs, $nextTick) "
-                            f"{{ with($||{{}}) {{ {body} }} }}"
-                        )
-            else:
-                registry_js = {}
-
-            # Invalidate SPA cache so navigation shows updated state
-            conn.send_json(
-                {
-                    "op": "render",
-                    "cid": cid,
-                    "name": comp.__class__.__name__,
-                    "html": new_html,
-                    "registry": registry_js,
-                    "state": comp._get_state(),
-                    "invalidate_cache": True,
-                }
-            )
 
     except Exception as e:
         logger.error(f"Error handling live message: {e}", exc_info=True)

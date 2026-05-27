@@ -15,6 +15,7 @@ from .background import background as background
 from .cache import Cache as Cache
 from .cache import cache_page as cache_page
 from .component import Component as Component
+from .context import current_request as current_request
 from .core import Asok as Asok
 from .exceptions import (
     AbortException as AbortException,

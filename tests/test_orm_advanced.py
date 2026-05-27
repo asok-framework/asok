@@ -275,3 +275,93 @@ def test_nested_transactions_full_rollback():
 
     # Verify nothing was saved
     assert Company.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 5. Test ORM Fixtures (dumpdata / loaddata)
+# ---------------------------------------------------------------------------
+
+
+class FixtureTestModel(Model):
+    name = Field.String()
+    data = Field("BLOB")
+
+
+def test_orm_fixtures(tmp_path, monkeypatch):
+    import json
+    import os
+
+    from asok.cli.database import run_dumpdata, run_loaddata
+
+    # Setup the dummy wsgi.py and project structure
+    (tmp_path / "wsgi.py").write_text("app = None\n")
+    # Change working directory so _find_project_root works
+    monkeypatch.chdir(tmp_path)
+
+    # Re-initialize/monkeypatch our models' db path
+    db_path = str(tmp_path / "test_fixtures.db")
+    FixtureTestModel.close_connections()
+    monkeypatch.setattr(FixtureTestModel, "_db_path", db_path)
+    FixtureTestModel.create_table()
+
+    # Insert initial test records
+    # Include binary data (bytes)
+    m1 = FixtureTestModel.create(name="BinaryRecord", data=b"\x00\x01\x02\x03\xff")
+    m2 = FixtureTestModel.create(name="SecondRecord", data=b"hello")
+
+    # 1. Test dumpdata
+    fixture_file = str(tmp_path / "fixture.json")
+    run_dumpdata(model_name="FixtureTestModel", output_file=fixture_file)
+
+    # Verify JSON structure
+    assert os.path.exists(fixture_file)
+    with open(fixture_file, "r") as f:
+        data = json.load(f)
+
+    assert len(data) == 2
+    assert data[0]["model"] == "FixtureTestModel"
+    assert data[0]["fields"]["name"] == "BinaryRecord"
+    # Verify binary data base64 format
+    assert data[0]["fields"]["data"].startswith("base64:")
+
+    # 2. Test loaddata (updating existing, inserting new)
+    # Let's modify the fixture file to:
+    # - Update m1's name and data
+    # - Add a new record with pk=3 (which doesn't exist)
+    data[0]["fields"]["name"] = "BinaryRecordUpdated"
+    data[0]["fields"]["data"] = "base64:c29tZXRoaW5nIG5ldw=="  # base64 for b"something new"
+    data.append({
+        "model": "FixtureTestModel",
+        "pk": 3,
+        "fields": {
+            "name": "ThirdRecord",
+            "data": "base64:dGVzdA=="  # base64 for b"test"
+        }
+    })
+
+    with open(fixture_file, "w") as f:
+        json.dump(data, f)
+
+    # Run loaddata
+    run_loaddata(fixture_file)
+
+    # Verify existing record (m1) was updated
+    m1_updated = FixtureTestModel.find(id=m1.id)
+    assert m1_updated is not None
+    assert m1_updated.name == "BinaryRecordUpdated"
+    assert m1_updated.data == b"something new"
+
+    # Verify new record (pk=3) was inserted and PK was preserved
+    m3 = FixtureTestModel.find(id=3)
+    assert m3 is not None
+    assert m3.name == "ThirdRecord"
+    assert m3.data == b"test"
+
+    # Verify other records (m2) were not broken
+    m2_check = FixtureTestModel.find(id=m2.id)
+    assert m2_check is not None
+    assert m2_check.name == "SecondRecord"
+    assert m2_check.data == b"hello"
+
+    FixtureTestModel.close_connections()
+

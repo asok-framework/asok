@@ -74,9 +74,9 @@ def _sanitize_filename(filename: str) -> str:
 class UploadedFile:
     """Wrapper for a file uploaded via multipart/form-data."""
 
-    # Magic bytes pour validation MIME
-    # Support des formats les plus courants : images, audio, vidéo, documents
-    # Note: RIFF et ftyp sont gérés spécialement dans validate_mime_type() car ambigus
+    # Magic bytes for MIME validation
+    # Support for the most common formats: images, audio, video, documents
+    # Note: RIFF and ftyp are handled specially in validate_mime_type() because they are ambiguous
     _MAGIC_BYTES = {
         # ── Images ──────────────────────────────────────
         b"\xff\xd8\xff": ("image/jpeg", [".jpg", ".jpeg"]),
@@ -91,19 +91,19 @@ class UploadedFile:
         b"<?xml": ("image/svg+xml", [".svg"]),  # SVG (XML)
         b"<svg": ("image/svg+xml", [".svg"]),  # SVG direct
         # ── Audio ───────────────────────────────────────
-        b"ID3": ("audio/mpeg", [".mp3"]),  # MP3 avec ID3v2
-        b"\xff\xfb": ("audio/mpeg", [".mp3"]),  # MP3 sans tag
+        b"ID3": ("audio/mpeg", [".mp3"]),  # MP3 with ID3v2
+        b"\xff\xfb": ("audio/mpeg", [".mp3"]),  # MP3 without tag
         b"\xff\xf3": ("audio/mpeg", [".mp3"]),  # MP3 MPEG-2.5
         b"\xff\xf2": ("audio/mpeg", [".mp3"]),  # MP3 MPEG-2
         b"fLaC": ("audio/flac", [".flac"]),  # FLAC
         b"OggS": ("audio/ogg", [".ogg", ".oga"]),  # OGG Vorbis/Opus
         b"\xff\xf1": ("audio/aac", [".aac"]),  # AAC (ADTS)
         b"\xff\xf9": ("audio/aac", [".aac"]),  # AAC
-        # ── Vidéo ───────────────────────────────────────
+        # ── Video ───────────────────────────────────────
         b"ftyp": (
             "video/mp4",
             [".mp4", ".m4a", ".mov", ".3gp"],
-        ),  # Ambigu - traité spécialement
+        ),  # Ambiguous - handled specially
         b"\x1aE\xdf\xa3": (
             "video/webm",
             [".webm", ".mkv"],
@@ -165,11 +165,11 @@ class UploadedFile:
         if not self.content:
             raise ValueError("Cannot validate empty file")
 
-        # Vérifier les magic bytes avec gestion des formats ambigus
+        # Verify magic bytes handling ambiguous formats
         detected_mime = None
         detected_exts = []
 
-        # RIFF est ambigu (WebP, WAV, AVI) - vérifier la sous-signature
+        # RIFF is ambiguous (WebP, WAV, AVI) - check sub-signature
         if self.content.startswith(b"RIFF") and len(self.content) >= 12:
             riff_type = self.content[8:12]
             if riff_type == b"WEBP":
@@ -182,11 +182,11 @@ class UploadedFile:
                 detected_mime = "video/avi"
                 detected_exts = [".avi"]
 
-        # ftyp est ambigu (MP4, MOV, M4A, 3GP) - vérifier le type
+        # ftyp is ambiguous (MP4, MOV, M4A, 3GP) - check type
         elif self.content.startswith(b"ftyp") or (
             len(self.content) >= 8 and self.content[4:8] == b"ftyp"
         ):
-            # Extraire le type ftyp (4 octets après "ftyp")
+            # Extract ftyp type (4 bytes after "ftyp")
             ftyp_start = self.content.find(b"ftyp")
             if ftyp_start != -1 and len(self.content) >= ftyp_start + 8:
                 ftyp_brand = self.content[ftyp_start + 4 : ftyp_start + 8]
@@ -225,7 +225,7 @@ class UploadedFile:
                 f"Allowed types: {', '.join(allowed_types)}"
             )
 
-        # Vérifier que l'extension correspond au type détecté
+        # Verify that the extension matches the detected type
         _, ext = os.path.splitext(self.filename.lower())
         if ext not in detected_exts:
             raise ValueError(
@@ -271,7 +271,7 @@ class UploadedFile:
                 "for secure file uploads."
             )
 
-        # Validation MIME type AVANT d'écrire sur disque
+        # MIME type validation BEFORE writing to disk
         if not validate:
             logging.getLogger(__name__).warning(
                 "SECURITY WARNING: File validation disabled (validate=False). "

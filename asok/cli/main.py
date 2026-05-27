@@ -6,7 +6,13 @@ import sys
 
 from .. import __version__
 from .build import run_build
-from .database import run_createsuperuser, run_migrate, run_seed
+from .database import (
+    run_createsuperuser,
+    run_dumpdata,
+    run_loaddata,
+    run_migrate,
+    run_seed,
+)
 from .deploy import run_deploy
 from .generators import (
     make_component,
@@ -62,6 +68,8 @@ def print_help() -> None:
             ("migrate", "Apply pending migrations (--rollback, --status)"),
             ("seed", "Run database seeders"),
             ("createsuperuser", "Create or update an administrative user"),
+            ("dumpdata", "Dump database records to a JSON fixture file"),
+            ("loaddata", "Load records from a JSON fixture file"),
         ],
         "Tools": [
             ("tailwind", "Manage Tailwind CSS (install/build/enable)"),
@@ -190,6 +198,13 @@ def main() -> None:
     migrate_parser.add_argument("--fake", action="store_true")
     migrate_parser.add_argument("--database", default=None, help="Database DSN or name to apply migrations to")
 
+    dumpdata_parser = subparsers.add_parser("dumpdata")
+    dumpdata_parser.add_argument("model", nargs="?", default=None, help="Specific model name to dump")
+    dumpdata_parser.add_argument("--output", default=None, help="Output JSON file path")
+
+    loaddata_parser = subparsers.add_parser("loaddata")
+    loaddata_parser.add_argument("file", help="Path to JSON fixture file")
+
     subparsers.add_parser("seed")
     subparsers.add_parser("routes")
     subparsers.add_parser("shell")
@@ -297,6 +312,10 @@ def main() -> None:
         run_preview(args.port)
     elif args.command == "migrate":
         run_migrate(rollback=args.rollback, status=args.status, fake=args.fake, database=args.database)
+    elif args.command == "dumpdata":
+        run_dumpdata(model_name=args.model, output_file=args.output)
+    elif args.command == "loaddata":
+        run_loaddata(file_path=args.file)
     elif args.command == "seed":
         run_seed()
     elif args.command == "routes":

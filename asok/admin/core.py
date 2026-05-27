@@ -402,9 +402,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         1. Explicit ?lang=xx
         2. Session 'admin_locale'
         3. Cookie 'asok_lang' (persists across logout)
-        4. Request.user's preferred language (not yet implemented)
-        5. Accept-Language header
-        6. Fallback to default_locale
+        4. Fallback to default_locale
         """
         # 1. Query param
         lang = request.args.get("lang")
@@ -421,16 +419,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if lang in MESSAGES:
             return lang
 
-        # 4. Accept-Language
-        header = request.environ.get("HTTP_ACCEPT_LANGUAGE", "")
-        if header:
-            # e.g. "fr-CH, fr;q=0.9, en;q=0.8, *;q=0.5"
-            for part in header.split(","):
-                code = part.split(";")[0].split("-")[0].strip().lower()
-                if code in MESSAGES:
-                    return code
-
-        # 5. Fallback
+        # 4. Fallback
         return self.default_locale
 
     def _set_locale(self, request: Any) -> str:

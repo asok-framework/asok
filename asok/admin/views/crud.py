@@ -646,9 +646,9 @@ class CRUDViewsMixin:
             self._build_permission_matrix(request, item) if is_role else None
         )
 
-        # SECURITY FIX: Vérifier les permissions RBAC pour le bouton delete
-        # Ne pas seulement vérifier entry["can_delete"] (option statique)
-        # mais aussi self._can() qui vérifie les permissions de l'utilisateur
+        # SECURITY FIX: Check RBAC permissions for the delete button
+        # Do not only check entry["can_delete"] (static option)
+        # but also self._can() which checks user permissions
         can_delete_permission = (
             entry["can_delete"]
             and not editing_self
