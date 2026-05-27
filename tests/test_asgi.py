@@ -145,3 +145,38 @@ def test_wsgi_handles_async_controller() -> None:
     resp = client.get("/async")
     assert resp.status_code == 200
     assert "Async response" in resp.text
+
+
+def test_asgi_middleware_does_not_create_event_loops() -> None:
+    async def run() -> None:
+        app = Asok()
+
+        app._resolve_route = MagicMock(return_value=("mock_async_page.py", {}))
+        app._load_module = MagicMock(return_value=DummyModuleAsync())
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/async",
+            "headers": [(b"host", b"localhost:8000")],
+            "http_version": "1.1",
+            "scheme": "http",
+        }
+
+        receive_events = [{"type": "http.request", "body": b"", "more_body": False}]
+        sent_messages = []
+
+        async def receive():
+            return receive_events.pop(0)
+
+        async def send(message):
+            sent_messages.append(message)
+
+        from unittest.mock import patch
+        with patch("asyncio.new_event_loop") as mock_new_loop, patch("asyncio.run") as mock_run:
+            await app(scope, receive, send)
+            # Ensure we did not spin up a brand new event loop on the worker threads
+            mock_new_loop.assert_not_called()
+            mock_run.assert_not_called()
+
+    asyncio.run(run())

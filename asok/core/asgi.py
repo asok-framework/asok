@@ -333,6 +333,11 @@ class ASGIMixin:
         if not self.middleware_handlers:
             return core_layer
 
+        try:
+            main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            main_loop = None
+
         chain = core_layer
         for mw_handle in reversed(self.middleware_handlers):
 
@@ -346,7 +351,7 @@ class ASGIMixin:
                 else:
                     # Sync middleware: must run in thread pool if next handler is async
                     def sync_wrapper(req):
-                        return mw(req, lambda r: async_to_sync(nxt(r)))
+                        return mw(req, lambda r: async_to_sync(nxt(r), loop=main_loop))
 
                     async def async_wrapper(req):
                         return await asyncio.to_thread(sync_wrapper, req)
@@ -357,7 +362,7 @@ class ASGIMixin:
         return chain
 
 
-def async_to_sync(awaitable: Any) -> Any:
+def async_to_sync(awaitable: Any, loop: Optional[asyncio.AbstractEventLoop] = None) -> Any:
     """Run an awaitable synchronously, starting a loop on a separate thread if needed."""
     if not inspect.isawaitable(awaitable):
         return awaitable
@@ -386,5 +391,8 @@ def async_to_sync(awaitable: Any) -> Any:
         t.join()
         return result_future.result()
     except RuntimeError:
-        # No loop is running in the current thread, run it directly using asyncio.run()
+        # No loop is running in the current thread, run thread-safely on target loop or fallback
+        if loop is not None and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+            return future.result()
         return asyncio.run(awaitable)
