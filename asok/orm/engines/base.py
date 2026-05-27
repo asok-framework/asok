@@ -86,3 +86,7 @@ class BaseEngine(ABC):
         """Query to retrieve the last inserted ID, or None if handled by the cursor/driver."""
         pass
 
+    def transaction(self) -> Any:
+        """Context manager for managing transactions."""
+        raise NotImplementedError("Transaction is not supported on this engine.")
+

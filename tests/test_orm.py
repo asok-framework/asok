@@ -233,3 +233,30 @@ class TestPost:
         Post.create(title="Post 1")
         Post.create(title="Post 2")
         assert Post.count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+
+
+class TestTransaction:
+    def test_transaction_commit(self):
+        with User.transaction():
+            u = create_user(name="TxCommit", email="txcommit@example.com")
+            assert u.id is not None
+            assert User.find(id=u.id) is not None
+
+        fetched = User.find(email="txcommit@example.com")
+        assert fetched is not None
+        assert fetched.name == "TxCommit"
+
+    def test_transaction_rollback(self):
+        try:
+            with User.transaction():
+                create_user(name="TxRollback", email="txrollback@example.com")
+                raise ValueError("Forced rollback")
+        except ValueError:
+            pass
+
+        assert User.find(email="txrollback@example.com") is None

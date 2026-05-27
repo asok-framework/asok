@@ -15,6 +15,24 @@ from .base import BaseEngine
 
 logger = logging.getLogger("asok.orm")
 
+
+class SQLiteTransaction:
+    """Transaction context manager for SQLite."""
+
+    def __init__(self, conn: Any):
+        self.conn = conn
+
+    def __enter__(self) -> SQLiteTransaction:
+        self.conn.execute("BEGIN;")
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is not None:
+            self.conn.rollback()
+        else:
+            self.conn.commit()
+
+
 class SQLiteEngine(BaseEngine):
     """SQLite engine backend using the standard library sqlite3 module."""
 
@@ -189,3 +207,6 @@ class SQLiteEngine(BaseEngine):
     @property
     def lastrowid_query(self) -> str | None:
         return "SELECT last_insert_rowid() AS id;"
+
+    def transaction(self) -> Any:
+        return SQLiteTransaction(self.get_connection())
