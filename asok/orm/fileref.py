@@ -70,10 +70,9 @@ class FileRef(str):
             cls._validate_path_component(name, "name")
             cls._validate_path_component(upload_to, "upload_to")
 
-            if upload_to:
-                instance = super().__new__(cls, f"/uploads/{upload_to}/{name}")
-            else:
-                instance = super().__new__(cls, f"/uploads/{name}")
+            from ..core.storage import get_storage
+            url = get_storage().url(name, upload_to)
+            instance = super().__new__(cls, url)
         instance.name = name
         return instance
 

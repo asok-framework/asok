@@ -193,6 +193,7 @@ def main() -> None:
     subparsers.add_parser("routes")
     subparsers.add_parser("shell")
     subparsers.add_parser("test").add_argument("path", nargs="?", default=None)
+    subparsers.add_parser("worker")
 
     make_parser = subparsers.add_parser("make")
     make_parser.add_argument(
@@ -303,6 +304,9 @@ def main() -> None:
         run_shell()
     elif args.command == "test":
         run_test(args.path)
+    elif args.command == "worker":
+        from .worker import run_worker
+        run_worker()
     elif args.command == "make":
         if args.type == "migration":
             make_migration(args.name or "auto_migration")

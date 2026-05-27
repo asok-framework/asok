@@ -280,6 +280,28 @@ class UploadedFile:
         elif not self._validated:
             self.validate_mime_type(allowed_types)
 
+        # Route to S3 Storage if configured
+        if os.environ.get("ASOK_STORAGE_BACKEND", "local").lower() == "s3":
+            from asok.core.storage import get_storage
+
+            is_dir = destination.endswith(("/", "\\"))
+            if secure_filename:
+                import uuid
+                _, ext = os.path.splitext(self.filename)
+                safe_name = f"{uuid.uuid4()}{ext.lower()}"
+            else:
+                from asok.utils.security import secure_filename as sanitize_filename
+                safe_name = sanitize_filename(self.filename)
+
+            if is_dir:
+                upload_to = destination.strip("/\\")
+            else:
+                upload_to = os.path.dirname(destination).strip("/\\")
+
+            url = get_storage().save(safe_name, self.content, upload_to)
+            self.filename = safe_name
+            return url
+
         # Detect if the user wants to save into a directory
         is_dir = destination.endswith(("/", "\\"))
 
