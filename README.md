@@ -278,9 +278,14 @@ The admin automatically detects the source of resources:
 ---
 
 ## 🚀 Towards Production
-Asok is WSGI compatible. You can use Gunicorn or any other WSGI server:
+Asok supports both **WSGI** and **ASGI**. Use Gunicorn for WSGI or Uvicorn for ASGI:
+
 ```bash
+# WSGI (Gunicorn)
 gunicorn wsgi:app
+
+# ASGI (Uvicorn) — for async/await support
+uvicorn asgi:app
 ```
 
 ---
@@ -398,7 +403,7 @@ Asok is actively developed with exciting features planned:
 - GraphQL API support with auto-generated schemas
 - Server-side rendering (SSR) & static site generation
 - Built-in monitoring & observability tools
-- Full async/await support (ASGI)
+- Full async/await support (ASGI) ✅ **Implemented in v0.2.x**
 
 **Note:** Timelines are subject to change based on community feedback and development priorities.
 
@@ -416,7 +421,6 @@ Asok v0.1.x is **early-stage software** under active development. It's suitable 
 - Projects where dependency auditing is critical
 
 **⚠️ Current Limitations:**
-- **Concurrency**: WSGI only, no async/await yet (ASGI planned for v0.3.0)
 - **Ecosystem**: Early-stage community, limited third-party plugins
 - **Maturity**: v0.1.x - APIs may evolve before v1.0
 
