@@ -74,3 +74,57 @@ def test_s3_storage_mocked() -> None:
 
             # Reset singleton
             asok.core.storage._storage_instance = None
+
+
+def test_static_helper_s3() -> None:
+    import asok.core.storage
+    from asok.request.template import TemplateMixin
+
+    class MockRequest(TemplateMixin):
+        def __init__(self, environ):
+            self.environ = environ
+
+    mock_app = MagicMock()
+    mock_app.config = {"DEBUG": True}
+    req = MockRequest({"asok.root": "/tmp", "asok.app": mock_app})
+
+    # Scenario 1: S3 static serving disabled (default)
+    with patch.dict(os.environ, {"ASOK_SERVE_STATIC_FROM_S3": "false"}):
+        url = req.static("css/app.css")
+        assert url.startswith("/css/app.css?v=")
+
+    # Scenario 2: S3 static serving enabled, but backend is local
+    with patch.dict(os.environ, {
+        "ASOK_SERVE_STATIC_FROM_S3": "true",
+        "ASOK_STORAGE_BACKEND": "local"
+    }):
+        # Reset storage instance
+        asok.core.storage._storage_instance = None
+        url = req.static("css/app.css")
+        assert url.startswith("/css/app.css?v=")
+
+    # Scenario 3: S3 static serving enabled and backend is S3
+    mock_boto3 = MagicMock()
+    mock_client = MagicMock()
+    mock_boto3.client.return_value = mock_client
+    mock_client.meta.region_name = "us-west-2"
+
+    with patch.dict(sys.modules, {"boto3": mock_boto3}):
+        with patch.dict(
+            os.environ,
+            {
+                "ASOK_SERVE_STATIC_FROM_S3": "true",
+                "ASOK_STORAGE_BACKEND": "s3",
+                "ASOK_S3_BUCKET": "static-bucket",
+                "ASOK_S3_REGION": "us-west-2",
+            },
+        ):
+            # Reset storage instance
+            asok.core.storage._storage_instance = None
+
+            url = req.static("css/app.css")
+            assert url.startswith("https://static-bucket.s3.us-west-2.amazonaws.com/css/app.css?v=")
+
+            # Reset singleton
+            asok.core.storage._storage_instance = None
+

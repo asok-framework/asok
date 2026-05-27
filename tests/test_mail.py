@@ -91,6 +91,42 @@ class TestMailDispatch:
         )
         assert mock_do_send[0]["sender"] == "custom@test.com"
 
+    def test_send_async_redis_backend(self, mock_do_send):
+        import json
+        import os
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        mock_redis = MagicMock()
+        mock_client = MagicMock()
+        mock_redis.Redis.from_url.return_value = mock_client
+
+        with patch.dict(sys.modules, {"redis": mock_redis}):
+            with patch.dict(
+                os.environ,
+                {
+                    "ASOK_QUEUE_BACKEND": "redis",
+                    "ASOK_REDIS_URL": "redis://localhost:6379/1",
+                },
+            ):
+                result = Mail.send(
+                    to="alice@example.com",
+                    subject="Redis Mail",
+                    body="Hello Redis",
+                )
+                assert result is None  # Async with Redis returns None
+
+                mock_client.lpush.assert_called_once()
+                called_args = mock_client.lpush.call_args[0]
+                assert called_args[0] == "asok:queue"
+
+                job = json.loads(called_args[1])
+                assert job["module"] == "asok.mail"
+                assert job["function"] == "_send_mail_task"
+                assert job["args"][0] == "default@test.com"
+                assert "alice@example.com" in job["args"][1]
+                assert "Redis Mail" in job["args"][2]
+
 
 # ---------------------------------------------------------------------------
 # Formatting and Recipients
