@@ -17,20 +17,39 @@ logger = logging.getLogger("asok.orm")
 
 
 class SQLiteTransaction:
-    """Transaction context manager for SQLite."""
+    """Transaction context manager for SQLite with nested transaction (SAVEPOINT) support."""
 
-    def __init__(self, conn: Any):
-        self.conn = conn
+    def __init__(self, engine: SQLiteEngine):
+        self.engine = engine
+        self.conn = engine.get_connection()
+        self.sp_name = None
 
     def __enter__(self) -> SQLiteTransaction:
-        self.conn.execute("BEGIN;")
+        if not hasattr(self.engine._local, "txn_level"):
+            self.engine._local.txn_level = 0
+        self.engine._local.txn_level += 1
+        level = self.engine._local.txn_level
+        if level == 1:
+            self.conn.execute("BEGIN;")
+        else:
+            self.sp_name = f"sp_{level}"
+            self.conn.execute(f"SAVEPOINT {self.sp_name};")
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        level = self.engine._local.txn_level
+        self.engine._local.txn_level -= 1
         if exc_type is not None:
-            self.conn.rollback()
+            if level == 1:
+                self.conn.execute("ROLLBACK;")
+            else:
+                self.conn.execute(f"ROLLBACK TO {self.sp_name};")
+                self.conn.execute(f"RELEASE SAVEPOINT {self.sp_name};")
         else:
-            self.conn.commit()
+            if level == 1:
+                self.conn.execute("COMMIT;")
+            else:
+                self.conn.execute(f"RELEASE SAVEPOINT {self.sp_name};")
 
 
 class SQLiteEngine(BaseEngine):
@@ -209,4 +228,4 @@ class SQLiteEngine(BaseEngine):
         return "SELECT last_insert_rowid() AS id;"
 
     def transaction(self) -> Any:
-        return SQLiteTransaction(self.get_connection())
+        return SQLiteTransaction(self)

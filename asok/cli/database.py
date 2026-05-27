@@ -35,7 +35,7 @@ class MigrationConnectionWrapper:
 
 
 def run_migrate(
-    rollback: bool = False, status: bool = False, fake: bool = False
+    rollback: bool = False, status: bool = False, fake: bool = False, database: str | None = None
 ) -> None:
     """Apply or rollback versioned database migrations."""
     root = _find_project_root()
@@ -80,7 +80,14 @@ def run_migrate(
                 except Exception as e:
                     Style.warn(f"Failed to load model file {f}: {e}")
 
-    Migrations.ensure_table()
+    # Determine target engine
+    if database:
+        from ..orm.engines import get_engine
+        engine = get_engine(database)
+    else:
+        engine = Model.get_engine()
+
+    Migrations.ensure_table(engine)
 
     if MODELS_REGISTRY:
         Style.info(f"Registered models: {', '.join(MODELS_REGISTRY.keys())}")
@@ -103,7 +110,7 @@ def run_migrate(
         if f.endswith(".py") and f[:4].isdigit():
             mig_files.append(f)
     mig_files = sorted(mig_files)
-    applied = Migrations.get_applied()
+    applied = Migrations.get_applied(engine)
 
     if status:
         Style.heading("MIGRATION STATUS")
@@ -122,13 +129,13 @@ def run_migrate(
         return
 
     if rollback:
-        last_batch_names = Migrations.get_last_batch()
+        last_batch_names = Migrations.get_last_batch(engine)
         if not last_batch_names:
             Style.info("Nothing to rollback.")
             return
 
-        Style.heading(f"ROLLBACK (Batch {Migrations.get_last_batch_number()})")
-        conn = MigrationConnectionWrapper(Model.get_engine())
+        Style.heading(f"ROLLBACK (Batch {Migrations.get_last_batch_number(engine)})")
+        conn = MigrationConnectionWrapper(engine)
         try:
             for name in last_batch_names:
                 filename = f"{name}.py"
@@ -146,7 +153,7 @@ def run_migrate(
                     if not fake:
                         mod.down(conn)
                         conn.commit()
-                    Migrations.remove(name)
+                    Migrations.remove(name, engine)
                     Style.success(f"Rolled back {name}")
                 else:
                     Style.warn(f"Migration {name} has no down() method.")
@@ -161,8 +168,8 @@ def run_migrate(
         return
 
     Style.heading("RUNNING MIGRATIONS")
-    batch = Migrations.get_last_batch_number() + 1
-    conn = MigrationConnectionWrapper(Model.get_engine())
+    batch = Migrations.get_last_batch_number(engine) + 1
+    conn = MigrationConnectionWrapper(engine)
 
     try:
         for name in pending:
@@ -177,7 +184,7 @@ def run_migrate(
                 if not fake:
                     mod.up(conn)
                     conn.commit()
-                Migrations.log(name, batch)
+                Migrations.log(name, batch, engine)
                 Style.success(f"Applied {name}")
             else:
                 Style.warn(f"Migration {name} has no up() method.")

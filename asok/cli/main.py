@@ -188,6 +188,7 @@ def main() -> None:
     migrate_parser.add_argument("--rollback", action="store_true")
     migrate_parser.add_argument("--status", action="store_true")
     migrate_parser.add_argument("--fake", action="store_true")
+    migrate_parser.add_argument("--database", default=None, help="Database DSN or name to apply migrations to")
 
     subparsers.add_parser("seed")
     subparsers.add_parser("routes")
@@ -295,7 +296,7 @@ def main() -> None:
     elif args.command == "preview":
         run_preview(args.port)
     elif args.command == "migrate":
-        run_migrate(rollback=args.rollback, status=args.status, fake=args.fake)
+        run_migrate(rollback=args.rollback, status=args.status, fake=args.fake, database=args.database)
     elif args.command == "seed":
         run_seed()
     elif args.command == "routes":

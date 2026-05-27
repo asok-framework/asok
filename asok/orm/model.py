@@ -80,6 +80,18 @@ class ModelMeta(type):
         attrs["_search_fields"] = [
             k for k, v in fields.items() if getattr(v, "searchable", False)
         ]
+        # Inherit and setup global scopes
+        scopes = {}
+        for base in bases:
+            if hasattr(base, "_global_scopes"):
+                scopes.update(base._global_scopes)
+        if "_global_scopes" in attrs:
+            scopes.update(attrs["_global_scopes"])
+        if attrs["_soft_delete_field"]:
+            sdf = attrs["_soft_delete_field"]
+            scopes["soft_delete"] = lambda q, sdf=sdf: q.where_null(sdf)
+        attrs["_global_scopes"] = scopes
+
         # Use explicit __tablename__ if provided, otherwise auto-pluralize
         attrs["_table"] = attrs.get("__tablename__", _pluralize(name))
         attrs["_model_name"] = name
@@ -175,6 +187,42 @@ class ModelMeta(type):
 
                 attrs[k] = property(get_many_to_many)
 
+            elif v.type == "MorphTo":
+
+                def get_morph_to(self, rel=v, rel_name=k):
+                    cached = self.__dict__.get(f"_eager_{rel_name}")
+                    if cached is not None:
+                        return cached
+                    fk_id = rel.foreign_key or f"{rel_name}_id"
+                    fk_type = rel.owner_key or f"{rel_name}_type"
+
+                    target_id = getattr(self, fk_id, None)
+                    target_type = getattr(self, fk_type, None)
+                    if not target_id or not target_type:
+                        return None
+
+                    target_model = MODELS_REGISTRY.get(target_type)
+                    if not target_model:
+                        return None
+                    return target_model.find(id=target_id)
+
+                attrs[k] = property(get_morph_to)
+
+            elif v.type == "MorphMany":
+
+                def get_morph_many(self, rel=v, rel_name=k):
+                    cached = self.__dict__.get(f"_eager_{rel_name}")
+                    if cached is not None:
+                        return cached
+                    target_model = MODELS_REGISTRY.get(rel.target_model_name)
+                    if not target_model:
+                        return []
+                    fk_id = f"{rel.foreign_key}_id"
+                    fk_type = f"{rel.foreign_key}_type"
+                    return target_model.where(fk_id, self.id).where(fk_type, self.__class__.__name__).get()
+
+                attrs[k] = property(get_morph_many)
+
         for k in fields:
             if k in attrs and isinstance(attrs[k], Field):
                 attrs.pop(k)
@@ -187,6 +235,7 @@ class ModelMeta(type):
 
 class Model(metaclass=ModelMeta):
     _db_path: str | None = (os.getenv("DATABASE_URL") or "").strip() or None
+    _global_scopes: dict[str, Any] = {}
 
     @classmethod
     def get_engine(cls):

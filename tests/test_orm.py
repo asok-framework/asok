@@ -300,7 +300,7 @@ class TestQueryCache:
         os.makedirs(default_cache._path, exist_ok=True)
 
         create_user("Alice", "alice@example.com")
-        
+
         # Verify it serializes and deserializes without error on a file backend
         q = User.query().where("name", "Alice").cache(60)
         results = q.get()

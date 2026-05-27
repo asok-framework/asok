@@ -56,3 +56,18 @@ class Relation:
             pivot_fk=pivot_fk,
             pivot_other_fk=pivot_other_fk,
         )
+
+    @staticmethod
+    def MorphTo(
+        id_column: Optional[str] = None, type_column: Optional[str] = None
+    ) -> Relation:
+        """Polymorphic belongs-to-like relationship."""
+        return Relation("MorphTo", "", id_column, type_column)
+
+    @staticmethod
+    def MorphMany(
+        target_model_name: str, relation_name: str
+    ) -> Relation:
+        """Polymorphic has-many-like relationship."""
+        return Relation("MorphMany", target_model_name, relation_name)
+

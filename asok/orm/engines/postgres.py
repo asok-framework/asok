@@ -14,10 +14,36 @@ class PostgresEngine(BaseEngine):
     def __init__(self, dsn: str):
         self.dsn = dsn
         self._local = threading.local()
+        self._pool = None
+
+    def _init_pool(self) -> None:
+        if self._pool is not None:
+            return
+        try:
+            from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
+            self._pool = ConnectionPool(
+                self.dsn,
+                min_size=1,
+                max_size=10,
+                open=True,
+                kwargs={"row_factory": dict_row, "autocommit": True}
+            )
+        except Exception:
+            self._pool = None
 
     def get_connection(self) -> Any:
         conn = getattr(self._local, "conn", None)
         if conn is not None and not conn.closed:
+            return conn
+
+        if not hasattr(self, "_pool_initialized"):
+            self._init_pool()
+            self._pool_initialized = True
+
+        if self._pool is not None:
+            conn = self._pool.getconn()
+            self._local.conn = conn
             return conn
 
         try:
@@ -39,14 +65,26 @@ class PostgresEngine(BaseEngine):
         return conn
 
     def close_connections(self) -> None:
+        if hasattr(self._local, "conn"):
+            conn = self._local.conn
+            if getattr(self, "_pool", None) is not None:
+                try:
+                    self._pool.putconn(conn)
+                except Exception:
+                    pass
+            else:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            delattr(self._local, "conn")
+
         for conn in getattr(self._local, "_all_conns", []):
             try:
                 conn.close()
             except Exception:
                 pass
         self._local._all_conns = []
-        if hasattr(self._local, "conn"):
-            delattr(self._local, "conn")
 
     def execute(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> List[Dict[str, Any]] | int:
         import time

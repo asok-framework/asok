@@ -10,20 +10,42 @@ from .base import BaseEngine
 logger = logging.getLogger("asok.orm")
 
 class MySQLTransaction:
-    """Transaction context manager for MySQL."""
+    """Transaction context manager for MySQL with nested transaction (SAVEPOINT) support."""
 
-    def __init__(self, conn: Any):
-        self.conn = conn
+    def __init__(self, engine: MySQLEngine):
+        self.engine = engine
+        self.conn = engine.get_connection()
+        self.sp_name = None
 
     def __enter__(self) -> MySQLTransaction:
-        self.conn.begin()
+        if not hasattr(self.engine._local, "txn_level"):
+            self.engine._local.txn_level = 0
+        self.engine._local.txn_level += 1
+        level = self.engine._local.txn_level
+        if level == 1:
+            self.conn.begin()
+        else:
+            self.sp_name = f"sp_{level}"
+            with self.conn.cursor() as cur:
+                cur.execute(f"SAVEPOINT {self.sp_name}")
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        level = self.engine._local.txn_level
+        self.engine._local.txn_level -= 1
         if exc_type is not None:
-            self.conn.rollback()
+            if level == 1:
+                self.conn.rollback()
+            else:
+                with self.conn.cursor() as cur:
+                    cur.execute(f"ROLLBACK TO {self.sp_name}")
+                    cur.execute(f"RELEASE SAVEPOINT {self.sp_name}")
         else:
-            self.conn.commit()
+            if level == 1:
+                self.conn.commit()
+            else:
+                with self.conn.cursor() as cur:
+                    cur.execute(f"RELEASE SAVEPOINT {self.sp_name}")
 
 class MySQLEngine(BaseEngine):
     """MySQL engine backend using the pymysql library."""
@@ -241,7 +263,7 @@ class MySQLEngine(BaseEngine):
                 logger.warning("Failed to create FULLTEXT search index for %s: %s", model_class._table, e)
 
     def transaction(self) -> Any:
-        return MySQLTransaction(self.get_connection())
+        return MySQLTransaction(self)
 
     @property
     def primary_key_def(self) -> str:

@@ -33,9 +33,50 @@ class Query(Generic[T]):
         self._eager: list[str] = []
         self._union_queries: list[Query[T]] = []
         self._intersect_queries: list[Query[T]] = []
-        # Auto-filter soft-deleted rows unless explicitly included
-        if model._soft_delete_field and not with_trashed:
-            self._wheres.append(f"{model._soft_delete_field} IS NULL")
+        self._disabled_global_scopes: set[str] = set()
+        if with_trashed:
+            self._disabled_global_scopes.add("soft_delete")
+
+    def clone(self) -> Query[T]:
+        """Return a copy of the query builder state."""
+        q = Query(self.model, with_trashed=True)
+        q._select = self._select
+        q._wheres = list(self._wheres)
+        q._args = list(self._args)
+        q._order = self._order
+        q._limit = self._limit
+        q._offset = self._offset
+        q._groups = list(self._groups)
+        q._eager = list(self._eager)
+        q._union_queries = list(self._union_queries)
+        q._intersect_queries = list(self._intersect_queries)
+        q._disabled_global_scopes = set(self._disabled_global_scopes)
+        if hasattr(self, "_cache_ttl"):
+            q._cache_ttl = self._cache_ttl
+        if hasattr(self, "_cache_key"):
+            q._cache_key = self._cache_key
+        return q
+
+    def _apply_global_scopes(self) -> None:
+        """Apply all active global scopes defined on the model."""
+        for name, scope in self.model._global_scopes.items():
+            if name not in self._disabled_global_scopes:
+                scope(self)
+                self._disabled_global_scopes.add(name)
+
+    def without_global_scope(self, name: str) -> Query[T]:
+        """Disable a specific global scope for this query."""
+        self._disabled_global_scopes.add(name)
+        return self
+
+    def without_global_scopes(self) -> Query[T]:
+        """Disable all global scopes for this query."""
+        self._disabled_global_scopes.update(self.model._global_scopes.keys())
+        return self
+
+    def with_trashed(self) -> Query[T]:
+        """Include soft-deleted records in the results."""
+        return self.without_global_scope("soft_delete")
 
     def with_(self, *relation_names: str) -> Query[T]:
         """Eager load relationships to avoid N+1 query problems."""
@@ -329,7 +370,9 @@ class Query(Generic[T]):
 
     def to_sql(self) -> str:
         """Return the SQL query string with placeholders."""
-        return self._build()
+        clone = self.clone()
+        clone._apply_global_scopes()
+        return clone._build()
 
     def raw_sql(self) -> str:
         """Return the SQL query with parameters interpolated (for debugging only).
@@ -337,12 +380,14 @@ class Query(Generic[T]):
         WARNING: This is naive and NOT SECURE against SQL injection.
         Use only for inspection in logs/console; never execute this string.
         """
-        all_args = list(self._args)
-        for u in self._union_queries:
+        clone = self.clone()
+        clone._apply_global_scopes()
+        all_args = list(clone._args)
+        for u in clone._union_queries:
             all_args.extend(u._args)
-        for i in self._intersect_queries:
+        for i in clone._intersect_queries:
             all_args.extend(i._args)
-        return interpolate_sql(self.to_sql(), all_args)
+        return interpolate_sql(clone.to_sql(), all_args)
 
     def __repr__(self) -> str:
         return f"<Query: {self.to_sql()}>"
@@ -386,64 +431,103 @@ class Query(Generic[T]):
 
     def get(self) -> ModelList[T]:
         """Execute the query and return a ModelList of results."""
-        sql = self._build()
+        clone = self.clone()
+        clone._apply_global_scopes()
+        sql = clone._build()
 
         # Collect all args from this query and any union/intersect queries
-        all_args = list(self._args)
-        for union_query in self._union_queries:
+        all_args = list(clone._args)
+        for union_query in clone._union_queries:
             all_args.extend(union_query._args)
-        for intersect_query in self._intersect_queries:
+        for intersect_query in clone._intersect_queries:
             all_args.extend(intersect_query._args)
 
-        cache_ttl = getattr(self, "_cache_ttl", None)
+        cache_ttl = getattr(clone, "_cache_ttl", None)
         if cache_ttl is not None:
             from ..cache import default_cache
 
-            if hasattr(self, "_cache_key") and self._cache_key:
-                cache_key = self._cache_key
+            if hasattr(clone, "_cache_key") and clone._cache_key:
+                cache_key = clone._cache_key
             else:
-                raw_key = f"{sql}_{all_args}_{self._eager}"
+                raw_key = f"{sql}_{all_args}_{clone._eager}"
                 cache_key = "orm_" + hashlib.md5(raw_key.encode()).hexdigest()
 
             cached_rows = default_cache.get(cache_key)
             if cached_rows is not None:
                 results = ModelList(
-                    (self.model(_trust=True, **row) for row in cached_rows),
+                    (clone.model(_trust=True, **row) for row in cached_rows),
                     sql=sql,
                     args=all_args,
                 )
-                if self._eager and results:
-                    self._load_eager(results)
+                if clone._eager and results:
+                    clone._load_eager(results)
                 return results
 
-        rows = self.model.get_engine().execute(sql, all_args)
+        rows = clone.model.get_engine().execute(sql, all_args)
         results = ModelList(
-            (self.model(_trust=True, **row) for row in rows),
+            (clone.model(_trust=True, **row) for row in rows),
             sql=sql,
             args=all_args,
         )
-        if self._eager and results:
-            self._load_eager(results)
+        if clone._eager and results:
+            clone._load_eager(results)
 
-        if getattr(self, "_cache_ttl", None) is not None:
+        if getattr(clone, "_cache_ttl", None) is not None:
             from ..cache import default_cache
 
             # Ensure cache_key is available in this scope
             cache_key = (
-                getattr(self, "_cache_key", None)
+                getattr(clone, "_cache_key", None)
                 or "orm_"
-                + hashlib.md5(f"{sql}_{all_args}_{self._eager}".encode()).hexdigest()
+                + hashlib.md5(f"{sql}_{all_args}_{clone._eager}".encode()).hexdigest()
             )
-            default_cache.set(cache_key, rows, ttl=self._cache_ttl)
+            default_cache.set(cache_key, rows, ttl=clone._cache_ttl)
 
         return results
 
     def _load_eager(self, results):
-        """Batch load relations to avoid N+1 queries."""
-        for rel_name in self._eager:
+        """Batch load relations to avoid N+1 queries supporting nesting and polymorphism."""
+        # Parse nested paths, e.g. ["posts.comments", "posts.author", "profile"]
+        eager_groups = {}
+        for eager_path in self._eager:
+            parts = eager_path.split(".", 1)
+            parent = parts[0]
+            sub = parts[1] if len(parts) > 1 else None
+            eager_groups.setdefault(parent, []).append(sub)
+
+        for rel_name, sub_paths in eager_groups.items():
             rel = self.model._relations.get(rel_name)
             if not rel:
                 continue
+
+            active_subs = [p for p in sub_paths if p is not None]
+
+            if rel.type == "MorphTo":
+                fk_id = rel.foreign_key or f"{rel_name}_id"
+                fk_type = rel.owner_key or f"{rel_name}_type"
+
+                by_type = {}
+                for r in results:
+                    t_type = getattr(r, fk_type, None)
+                    t_id = getattr(r, fk_id, None)
+                    if t_type and t_id:
+                        by_type.setdefault(t_type, []).append((r, t_id))
+
+                for t_type, pairs in by_type.items():
+                    target_model = MODELS_REGISTRY.get(t_type)
+                    if not target_model:
+                        continue
+                    t_ids = list({p[1] for p in pairs})
+                    targets_query = Query(target_model).where_in("id", t_ids)
+                    if active_subs:
+                        targets_query = targets_query.with_(*active_subs)
+                    targets = targets_query.get()
+
+                    by_id = {t.id: t for t in targets}
+                    for r, t_id in pairs:
+                        r.__dict__[f"_eager_{rel_name}"] = by_id.get(t_id)
+                continue
+
             target = MODELS_REGISTRY.get(rel.target_model_name)
             if not target:
                 continue
@@ -453,7 +537,11 @@ class Query(Generic[T]):
                 ids = [r.id for r in results if r.id]
                 if not ids:
                     continue
-                children = Query(target).where_in(fk, ids).get()
+                children_query = Query(target).where_in(fk, ids)
+                if active_subs:
+                    children_query = children_query.with_(*active_subs)
+                children = children_query.get()
+
                 grouped = {}
                 for c in children:
                     grouped.setdefault(getattr(c, fk), []).append(c)
@@ -469,10 +557,76 @@ class Query(Generic[T]):
                 parent_ids = list({getattr(r, fk) for r in results if getattr(r, fk)})
                 if not parent_ids:
                     continue
-                parents = Query(target).where_in("id", parent_ids).get()
+                parents_query = Query(target).where_in("id", parent_ids)
+                if active_subs:
+                    parents_query = parents_query.with_(*active_subs)
+                parents = parents_query.get()
+
                 by_id = {p.id: p for p in parents}
                 for r in results:
                     r.__dict__[f"_eager_{rel_name}"] = by_id.get(getattr(r, fk))
+
+            elif rel.type == "BelongsToMany":
+                # SECURITY: _pivot_info validates identifiers
+                pivot, pfk, pofk = results[0]._pivot_info(rel) if results else (None, None, None)
+                if not pivot:
+                    continue
+                ids = [r.id for r in results if r.id]
+                if not ids:
+                    continue
+
+                engine = self.model.get_engine()
+                q_pivot = engine.quote_identifier(pivot)
+                q_pfk = engine.quote_identifier(pfk)
+                q_pofk = engine.quote_identifier(pofk)
+
+                placeholders = ", ".join(["?"] * len(ids))
+                pivot_sql = f"SELECT {q_pfk}, {q_pofk} FROM {q_pivot} WHERE {q_pfk} IN ({placeholders})"
+                pivot_rows = engine.execute(pivot_sql, ids)
+
+                if not pivot_rows:
+                    for r in results:
+                        r.__dict__[f"_eager_{rel_name}"] = ModelList()
+                    continue
+
+                target_ids = list({row[pofk] for row in pivot_rows})
+                targets_query = Query(target).where_in("id", target_ids)
+                if active_subs:
+                    targets_query = targets_query.with_(*active_subs)
+                targets = targets_query.get()
+
+                by_id = {t.id: t for t in targets}
+                parent_to_targets = {}
+                for row in pivot_rows:
+                    pid = row[pfk]
+                    tid = row[pofk]
+                    t_obj = by_id.get(tid)
+                    if t_obj:
+                        parent_to_targets.setdefault(pid, []).append(t_obj)
+
+                for r in results:
+                    r.__dict__[f"_eager_{rel_name}"] = ModelList(
+                        parent_to_targets.get(r.id, []),
+                        sql=targets.sql,
+                        args=targets.args,
+                    )
+
+            elif rel.type == "MorphMany":
+                fk_id = f"{rel.foreign_key}_id"
+                fk_type = f"{rel.foreign_key}_type"
+                ids = [r.id for r in results if r.id]
+                if not ids:
+                    continue
+                children_query = Query(target).where_in(fk_id, ids).where(fk_type, self.model.__name__)
+                if active_subs:
+                    children_query = children_query.with_(*active_subs)
+                children = children_query.get()
+
+                grouped = {}
+                for c in children:
+                    grouped.setdefault(getattr(c, fk_id), []).append(c)
+                for r in results:
+                    r.__dict__[f"_eager_{rel_name}"] = grouped.get(r.id, [])
 
     def first(self) -> Optional[T]:
         """Execute the query and return the first matching record or None."""
@@ -482,20 +636,22 @@ class Query(Generic[T]):
 
     def count(self) -> int:
         """Return the number of records matching the query."""
-        if self._union_queries or self._intersect_queries or self._groups:
-            subquery = self._build()
+        clone = self.clone()
+        clone._apply_global_scopes()
+        if clone._union_queries or clone._intersect_queries or clone._groups:
+            subquery = clone._build()
             sql = f"SELECT COUNT(*) FROM ({subquery}) AS sub"
         else:
-            sql = self._build(select="COUNT(*)")
+            sql = clone._build(select="COUNT(*)")
 
-        all_args = list(self._args)
-        if self._union_queries or self._intersect_queries:
-            for union_query in self._union_queries:
+        all_args = list(clone._args)
+        if clone._union_queries or clone._intersect_queries:
+            for union_query in clone._union_queries:
                 all_args.extend(union_query._args)
-            for intersect_query in self._intersect_queries:
+            for intersect_query in clone._intersect_queries:
                 all_args.extend(intersect_query._args)
 
-        res = self.model.get_engine().execute(sql, all_args)
+        res = clone.model.get_engine().execute(sql, all_args)
         return list(res[0].values())[0] if res else 0
 
     def _aggregate(self, func: str, column: str) -> Any:
@@ -503,20 +659,22 @@ class Query(Generic[T]):
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
 
-        if self._union_queries or self._intersect_queries or self._groups:
-            subquery = self._build()
+        clone = self.clone()
+        clone._apply_global_scopes()
+        if clone._union_queries or clone._intersect_queries or clone._groups:
+            subquery = clone._build()
             sql = f"SELECT {func}({column}) FROM ({subquery}) AS sub"
         else:
-            sql = self._build(select=f"{func}({column})")
+            sql = clone._build(select=f"{func}({column})")
 
-        all_args = list(self._args)
-        if self._union_queries or self._intersect_queries:
-            for union_query in self._union_queries:
+        all_args = list(clone._args)
+        if clone._union_queries or clone._intersect_queries:
+            for union_query in clone._union_queries:
                 all_args.extend(union_query._args)
-            for intersect_query in self._intersect_queries:
+            for intersect_query in clone._intersect_queries:
                 all_args.extend(intersect_query._args)
 
-        res = self.model.get_engine().execute(sql, all_args)
+        res = clone.model.get_engine().execute(sql, all_args)
         result = list(res[0].values())[0] if res else None
         return result if result is not None else 0
 
@@ -541,42 +699,46 @@ class Query(Generic[T]):
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
 
-        if self._union_queries or self._intersect_queries:
-            subquery = self._build()
+        clone = self.clone()
+        clone._apply_global_scopes()
+        if clone._union_queries or clone._intersect_queries:
+            subquery = clone._build()
             sql = f"SELECT {column} FROM ({subquery}) AS sub"
         else:
-            sql = self._build(select=column)
+            sql = clone._build(select=column)
 
-        all_args = list(self._args)
-        if self._union_queries or self._intersect_queries:
-            for union_query in self._union_queries:
+        all_args = list(clone._args)
+        if clone._union_queries or clone._intersect_queries:
+            for union_query in clone._union_queries:
                 all_args.extend(union_query._args)
-            for intersect_query in self._intersect_queries:
+            for intersect_query in clone._intersect_queries:
                 all_args.extend(intersect_query._args)
 
-        rows = self.model.get_engine().execute(sql, all_args)
+        rows = clone.model.get_engine().execute(sql, all_args)
         return [list(row.values())[0] for row in rows]
 
     def update(self, **values: Any) -> int:
         """Bulk update matching rows with the provided values."""
-        if self._union_queries or self._intersect_queries:
+        clone = self.clone()
+        clone._apply_global_scopes()
+        if clone._union_queries or clone._intersect_queries:
             raise ValueError("Cannot update a compound query (UNION/INTERSECT)")
         if not values:
             return 0
         for col in values:
-            if not self.model._valid_column(col):
+            if not clone.model._valid_column(col):
                 raise ValueError(f"Invalid column: {col}")
         set_str = ", ".join([f"{k} = ?" for k in values])
-        sql = f"UPDATE {self.model._table} SET {set_str}"
+        sql = f"UPDATE {clone.model._table} SET {set_str}"
         args = []
         for k, v in values.items():
-            field = self.model._fields.get(k)
+            field = clone.model._fields.get(k)
             if field:
-                v = self.model.get_engine().prepare_value(field, v)
+                v = clone.model.get_engine().prepare_value(field, v)
             args.append(v)
-        sql += self._build_where()
-        args += self._args
-        return self.model.get_engine().execute(sql, args)
+        sql += clone._build_where()
+        args += clone._args
+        return clone.model.get_engine().execute(sql, args)
 
     def exists(self) -> bool:
         """Return True if any records match the query."""
@@ -584,25 +746,29 @@ class Query(Generic[T]):
 
     def delete(self) -> int:
         """Bulk delete matching records (handles soft delete if enabled)."""
-        if self._union_queries or self._intersect_queries:
+        clone = self.clone()
+        clone._apply_global_scopes()
+        if clone._union_queries or clone._intersect_queries:
             raise ValueError("Cannot delete a compound query (UNION/INTERSECT)")
         import datetime
 
-        if self.model._soft_delete_field:
-            return self.update(
-                **{self.model._soft_delete_field: datetime.datetime.now().isoformat()}
+        if clone.model._soft_delete_field:
+            return clone.update(
+                **{clone.model._soft_delete_field: datetime.datetime.now().isoformat()}
             )
-        sql = f"DELETE FROM {self.model._table}"
-        sql += self._build_where()
-        return self.model.get_engine().execute(sql, self._args)
+        sql = f"DELETE FROM {clone.model._table}"
+        sql += clone._build_where()
+        return clone.model.get_engine().execute(sql, clone._args)
 
     def force_delete(self) -> int:
         """Bulk delete matching records permanently, bypassing soft delete."""
-        if self._union_queries or self._intersect_queries:
+        clone = self.clone()
+        clone._apply_global_scopes()
+        if clone._union_queries or clone._intersect_queries:
             raise ValueError("Cannot delete a compound query (UNION/INTERSECT)")
-        sql = f"DELETE FROM {self.model._table}"
-        sql += self._build_where()
-        return self.model.get_engine().execute(sql, self._args)
+        sql = f"DELETE FROM {clone.model._table}"
+        sql += clone._build_where()
+        return clone.model.get_engine().execute(sql, clone._args)
 
     def paginate(self, page: int = 1, per_page: int = 10) -> dict[str, Any]:
         """Paginate the current query and return results with metadata.
