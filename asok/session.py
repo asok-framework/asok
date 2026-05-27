@@ -42,7 +42,7 @@ class Session(dict):
 
 
 class SessionStore:
-    """Handles session persistence using various backends (memory, file)."""
+    """Handles session persistence using various backends (memory, file, redis)."""
 
     def __init__(
         self,
@@ -54,7 +54,7 @@ class SessionStore:
         """Initialize the session store.
 
         Args:
-            backend: The storage backend to use ('memory' or 'file').
+            backend: The storage backend to use ('memory', 'file', or 'redis').
             path: The directory for file-based sessions.
             ttl: Time-to-live for sessions in seconds (default 24 hours).
             max_sessions: Maximum number of in-memory sessions (default 10000).
@@ -74,23 +74,39 @@ class SessionStore:
                 os.chmod(path, 0o700)
             except OSError:
                 pass
+        elif backend == "redis":
+            try:
+                import redis
+            except ImportError:
+                raise ImportError(
+                    "The 'redis' library is required to use the Redis session backend. "
+                    "Install it using 'pip install asok[redis]'."
+                )
+            redis_url = os.environ.get("ASOK_REDIS_URL") or os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
+            self._redis = redis.Redis.from_url(redis_url)
 
     def load(self, sid: str) -> Optional[dict[str, Any]]:
         """Load session data for the given session ID."""
         if self.backend == "file":
             return self._load_file(sid)
+        elif self.backend == "redis":
+            return self._load_redis(sid)
         return self._load_memory(sid)
 
     def save(self, sid: str, data: dict[str, Any]) -> None:
         """Persist session data for the given session ID."""
         if self.backend == "file":
             return self._save_file(sid, data)
+        elif self.backend == "redis":
+            return self._save_redis(sid, data)
         return self._save_memory(sid, data)
 
     def delete(self, sid: str) -> None:
         """Remove a session from storage."""
         if self.backend == "file":
             return self._delete_file(sid)
+        elif self.backend == "redis":
+            return self._delete_redis(sid)
         return self._delete_memory(sid)
 
     def generate_sid(self) -> str:
@@ -113,6 +129,8 @@ class SessionStore:
         """Remove all expired sessions. Returns the number of sessions purged."""
         if self.backend == "file":
             return self._cleanup_file()
+        elif self.backend == "redis":
+            return 0  # Managed by Redis TTL automatically
         return self._cleanup_memory()
 
     def _cleanup_memory(self) -> int:
@@ -294,4 +312,50 @@ class SessionStore:
         try:
             os.remove(fpath)
         except OSError:
+            pass
+
+    # ── Redis backend ──────────────────────────────────────────
+
+    def _redis_key(self, sid: str) -> str:
+        return f"session:{sid}"
+
+    def _load_redis(self, sid: str) -> Optional[dict[str, Any]]:
+        rkey = self._redis_key(sid)
+        try:
+            val = self._redis.get(rkey)
+            if val is None:
+                return None
+            if isinstance(val, bytes):
+                val = val.decode("utf-8")
+            return json.loads(val)
+        except Exception:
+            return None
+
+    def _save_redis(self, sid: str, data: dict[str, Any]) -> None:
+        # SECURITY: Limit session data size to prevent DoS (max 100KB per session)
+        try:
+            data_str = json.dumps(data)
+            if len(data_str) > 100_000:
+                import logging
+
+                logging.getLogger("asok.session").warning(
+                    "Session data too large (%d bytes), truncating", len(data_str)
+                )
+                if isinstance(data, dict) and len(data) > 1000:
+                    data = dict(list(data.items())[:1000])
+                    data_str = json.dumps(data)
+        except (TypeError, ValueError):
+            return
+
+        rkey = self._redis_key(sid)
+        try:
+            self._redis.setex(rkey, self.ttl, data_str)
+        except Exception:
+            pass
+
+    def _delete_redis(self, sid: str) -> None:
+        rkey = self._redis_key(sid)
+        try:
+            self._redis.delete(rkey)
+        except Exception:
             pass

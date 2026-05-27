@@ -337,7 +337,18 @@ class Asok(
             path=os.path.join(self.root_dir, session_path),
             ttl=self.config["SESSION_TTL"],
         )
-        self._session_store.start_cleanup_timer(interval=3600)
+        if self.config["SESSION_BACKEND"] != "redis":
+            self._session_store.start_cleanup_timer(interval=3600)
+
+        # Sync default_cache backend with environment settings loaded in setup
+        from ..cache import default_cache
+        env_backend = os.environ.get("ASOK_CACHE_BACKEND", "memory").lower()
+        if env_backend != default_cache.backend:
+            default_cache.backend = env_backend
+            if env_backend == "file":
+                os.makedirs(default_cache._path, exist_ok=True)
+            elif env_backend == "redis":
+                default_cache._init_redis()
 
     def _ensure_package_dirs(self, *dirs: str) -> None:
         """Create empty __init__.py in directories if they exist but are not Python packages."""

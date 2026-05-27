@@ -64,8 +64,8 @@ admin = Admin(app)
 - ⛓️ **Dynamic Routes** - Parameters via `[id]`, `[slug:slug]` patterns
 
 ### Database & ORM
-- 🗄️ **Built-in ORM** - SQLite with relations, migrations, soft deletes
-- 🔍 **Full-Text Search** - FTS5 integration for lightning-fast search
+- 🗄️ **Built-in ORM** - SQLite (default), PostgreSQL, and MySQL support with relations, migrations, soft deletes
+- 🔍 **Full-Text Search** - FTS5/FULLTEXT integration for lightning-fast search
 - 🔐 **Auto Password Hashing** - PBKDF2-SHA256 with **600,000 iterations**
 - 📊 **Query Builder** - Fluent API with eager loading
 
@@ -117,10 +117,24 @@ Asok doesn't aim to replace existing frameworks—it offers a different approach
 ## 🛠️ Installation & Setup
 
 ### 1. Installation
-You can install Asok via pip:
+By default, Asok has zero external dependencies and works out of the box with SQLite:
 
 ```bash
 pip install asok
+```
+
+If you wish to use optional database engines or the Redis backend (for caching and sessions), install the corresponding extra(s):
+
+```bash
+# Optional database engines
+pip install "asok[postgres]"
+pip install "asok[mysql]"
+
+# Optional Redis backend
+pip install "asok[redis]"
+
+# Combined extras (e.g. Postgres + Redis)
+pip install "asok[postgres,redis]"
 ```
 
 or clone the repo and use the `asok/` folder.
@@ -402,7 +416,6 @@ Asok v0.1.x is **early-stage software** under active development. It's suitable 
 - Projects where dependency auditing is critical
 
 **⚠️ Current Limitations:**
-- **Database**: SQLite only (PostgreSQL/MySQL planned for v0.2.0)
 - **Concurrency**: WSGI only, no async/await yet (ASGI planned for v0.3.0)
 - **Ecosystem**: Early-stage community, limited third-party plugins
 - **Maturity**: v0.1.x - APIs may evolve before v1.0
