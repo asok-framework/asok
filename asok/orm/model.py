@@ -240,7 +240,9 @@ class Model(metaclass=ModelMeta):
                         val = decimal.Decimal(str(val))
                     except Exception as e:
                         # Log Decimal conversion errors for debugging
-                        logger.debug("Failed to convert Decimal field '%s': %s", name, e)
+                        logger.debug(
+                            "Failed to convert Decimal field '%s': %s", name, e
+                        )
                 elif hasattr(field, "is_enum") and not isinstance(val, enum.Enum):
                     try:
                         val = field.enum_class(val)
@@ -329,7 +331,9 @@ class Model(metaclass=ModelMeta):
         engine = cls.get_engine()
 
         # Use engine-specific primary key definition
-        pk_def = getattr(engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT")
+        pk_def = getattr(
+            engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
+        )
         if hasattr(engine, "primary_key_def"):
             pk_def = engine.primary_key_def
         f_defs = [pk_def]
@@ -379,7 +383,9 @@ class Model(metaclass=ModelMeta):
 
                 logger.info("Migrating %s: Adding column %s", cls._table, name)
                 try:
-                    engine.execute(f"ALTER TABLE {engine.quote_identifier(cls._table)} ADD COLUMN {def_str}")
+                    engine.execute(
+                        f"ALTER TABLE {engine.quote_identifier(cls._table)} ADD COLUMN {def_str}"
+                    )
                 except Exception as e:
                     logger.error(
                         "Failed to migrate %s (adding %s): %s", cls._table, name, e
@@ -435,8 +441,11 @@ class Model(metaclass=ModelMeta):
                 # Check index existence or try-catch for dialect differences (like MySQL lack of IF NOT EXISTS)
                 # In sqlite/postgres, we can prefix CREATE INDEX with IF NOT EXISTS.
                 from .engines import MySQLEngine
+
                 if not isinstance(engine, MySQLEngine):
-                    index_sql = f"CREATE INDEX IF NOT EXISTS {q_index} ON {q_table}({q_field})"
+                    index_sql = (
+                        f"CREATE INDEX IF NOT EXISTS {q_index} ON {q_table}({q_field})"
+                    )
 
                 try:
                     engine.execute(index_sql)
@@ -448,7 +457,11 @@ class Model(metaclass=ModelMeta):
                     )
                 except Exception as e:
                     # Ignore duplicate key error for MySQL (1061) or general issues if already exists
-                    if "Duplicate key name" in str(e) or "already exists" in str(e) or "1061" in str(e):
+                    if (
+                        "Duplicate key name" in str(e)
+                        or "already exists" in str(e)
+                        or "1061" in str(e)
+                    ):
                         pass
                     else:
                         logger.error(
@@ -745,9 +758,7 @@ class Model(metaclass=ModelMeta):
 
         engine = cls.get_engine()
         rows = engine.execute(sql, args)
-        return ModelList(
-            (cls(_trust=True, **row) for row in rows), sql=sql, args=args
-        )
+        return ModelList((cls(_trust=True, **row) for row in rows), sql=sql, args=args)
 
     @classmethod
     def count(cls, **kwargs):
@@ -804,6 +815,7 @@ class Model(metaclass=ModelMeta):
 
         engine = cls.get_engine()
         from .engines import SQLiteEngine
+
         is_sqlite = isinstance(engine, SQLiteEngine)
 
         # SECURITY: Validate and quote soft delete field name
@@ -818,7 +830,9 @@ class Model(metaclass=ModelMeta):
             term = " ".join([f"{t}*" for t in term.split() if t])
 
         q_table = engine.quote_identifier(cls._table)
-        where_clause, search_args = engine.search_sql(cls._table, cls._search_fields, term)
+        where_clause, search_args = engine.search_sql(
+            cls._table, cls._search_fields, term
+        )
         sql = f"SELECT * FROM {q_table} WHERE {where_clause}{sd_where} LIMIT ? OFFSET ?"
         all_args = search_args + [limit, offset]
 
@@ -955,7 +969,9 @@ class Model(metaclass=ModelMeta):
         if self._soft_delete_field:
             setattr(self, self._soft_delete_field, datetime.datetime.now().isoformat())
             sql = f'UPDATE "{self._table}" SET "{self._soft_delete_field}" = ? WHERE id = ?'
-            self.get_engine().execute(sql, (getattr(self, self._soft_delete_field), self.id))
+            self.get_engine().execute(
+                sql, (getattr(self, self._soft_delete_field), self.id)
+            )
         else:
             sql = f'DELETE FROM "{self._table}" WHERE id = ?'
             self.get_engine().execute(sql, (self.id,))
@@ -1099,3 +1115,43 @@ class Model(metaclass=ModelMeta):
         if order_by:
             q.order_by(order_by)
         return q.paginate(page, per_page)
+
+    @classmethod
+    async def all_async(
+        cls: type[T],
+        order_by: Optional[str] = None,
+        limit: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ModelList[T]:
+        """Fetch all records matching simple criteria asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            cls.all, order_by=order_by, limit=limit, **kwargs
+        )
+
+    @classmethod
+    async def find_async(cls: type[T], **kwargs: Any) -> Optional[T]:
+        """Find the first record matching simple criteria asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.find, **kwargs)
+
+    @classmethod
+    async def create_async(cls: type[T], **kwargs: Any) -> T:
+        """Create and save a new record asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.create, **kwargs)
+
+    async def save_async(self) -> None:
+        """Persist the model instance to the database asynchronously."""
+        import asyncio
+
+        await asyncio.to_thread(self.save)
+
+    async def delete_async(self) -> None:
+        """Delete the current model record asynchronously."""
+        import asyncio
+
+        await asyncio.to_thread(self.delete)

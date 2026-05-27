@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 from ..middleware import rate_limit_middleware
 from ..orm import Model
 from ..session import SessionStore
+from .asgi import ASGIMixin
 from .assets import AssetMixin
 from .errors import ErrorRendererMixin
 from .lifecycle import LifecycleMixin
@@ -32,6 +33,7 @@ class Asok(
     StaticMixin,
     ErrorRendererMixin,
     WSGIMixin,
+    ASGIMixin,
 ):
     """The central application class for the Asok framework.
 
@@ -342,6 +344,7 @@ class Asok(
 
         # Sync default_cache backend with environment settings loaded in setup
         from ..cache import default_cache
+
         env_backend = os.environ.get("ASOK_CACHE_BACKEND", "memory").lower()
         if env_backend != default_cache.backend:
             default_cache.backend = env_backend
@@ -363,3 +366,14 @@ class Asok(
                             pass
                     except Exception as e:
                         logger.warning(f"Could not create __init__.py in {d}: {e}")
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Main entry point supporting both WSGI and ASGI servers."""
+        if len(args) == 2:
+            return self._wsgi_call(*args, **kwargs)
+        elif len(args) == 3:
+            return self._asgi_call(*args, **kwargs)
+        else:
+            raise TypeError(
+                "Invalid call signature. Expected WSGI (2 args) or ASGI (3 args)."
+            )
