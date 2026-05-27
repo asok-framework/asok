@@ -1,5 +1,5 @@
 /**
- * ASOK Reactive Runtime v0.1.7
+ * ASOK Reactive Runtime v0.3.0
  * - Full implementation of the Asok SPA spec
  * - Event-driven, attribute-based reactivity
  * - Support for OOB swaps, SSE, and complex triggers
