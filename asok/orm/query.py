@@ -361,7 +361,7 @@ class Query(Generic[T]):
             union_sql += union_query._build_where()
             if union_query._groups:
                 union_sql += f" GROUP BY {', '.join(union_query._groups)}"
-            sql = f"({sql}) UNION ({union_sql})"
+            sql = f"{sql} UNION {union_sql}"
 
         # Add INTERSECT queries
         for intersect_query in self._intersect_queries:
@@ -371,7 +371,7 @@ class Query(Generic[T]):
             intersect_sql += intersect_query._build_where()
             if intersect_query._groups:
                 intersect_sql += f" GROUP BY {', '.join(intersect_query._groups)}"
-            sql = f"({sql}) INTERSECT ({intersect_sql})"
+            sql = f"{sql} INTERSECT {intersect_sql}"
 
         # ORDER/LIMIT/OFFSET apply to the final result
         # Aggregates like COUNT(*) do not allow ORDER BY without GROUP BY in strict SQL (PostgreSQL)
@@ -405,9 +405,16 @@ class Query(Generic[T]):
                 raw_key = f"{sql}_{all_args}_{self._eager}"
                 cache_key = "orm_" + hashlib.md5(raw_key.encode()).hexdigest()
 
-            cached = default_cache.get(cache_key)
-            if cached is not None:
-                return cached
+            cached_rows = default_cache.get(cache_key)
+            if cached_rows is not None:
+                results = ModelList(
+                    (self.model(_trust=True, **row) for row in cached_rows),
+                    sql=sql,
+                    args=all_args,
+                )
+                if self._eager and results:
+                    self._load_eager(results)
+                return results
 
         rows = self.model.get_engine().execute(sql, all_args)
         results = ModelList(
@@ -427,7 +434,7 @@ class Query(Generic[T]):
                 or "orm_"
                 + hashlib.md5(f"{sql}_{all_args}_{self._eager}".encode()).hexdigest()
             )
-            default_cache.set(cache_key, results, ttl=self._cache_ttl)
+            default_cache.set(cache_key, rows, ttl=self._cache_ttl)
 
         return results
 
@@ -475,16 +482,41 @@ class Query(Generic[T]):
 
     def count(self) -> int:
         """Return the number of records matching the query."""
-        sql = self._build(select="COUNT(*)")
-        res = self.model.get_engine().execute(sql, self._args)
+        if self._union_queries or self._intersect_queries or self._groups:
+            subquery = self._build()
+            sql = f"SELECT COUNT(*) FROM ({subquery}) AS sub"
+        else:
+            sql = self._build(select="COUNT(*)")
+
+        all_args = list(self._args)
+        if self._union_queries or self._intersect_queries:
+            for union_query in self._union_queries:
+                all_args.extend(union_query._args)
+            for intersect_query in self._intersect_queries:
+                all_args.extend(intersect_query._args)
+
+        res = self.model.get_engine().execute(sql, all_args)
         return list(res[0].values())[0] if res else 0
 
     def _aggregate(self, func: str, column: str) -> Any:
         """Perform a SQL aggregate function (SUM, AVG, etc.) on a column."""
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
-        sql = self._build(select=f"{func}({column})")
-        res = self.model.get_engine().execute(sql, self._args)
+
+        if self._union_queries or self._intersect_queries or self._groups:
+            subquery = self._build()
+            sql = f"SELECT {func}({column}) FROM ({subquery}) AS sub"
+        else:
+            sql = self._build(select=f"{func}({column})")
+
+        all_args = list(self._args)
+        if self._union_queries or self._intersect_queries:
+            for union_query in self._union_queries:
+                all_args.extend(union_query._args)
+            for intersect_query in self._intersect_queries:
+                all_args.extend(intersect_query._args)
+
+        res = self.model.get_engine().execute(sql, all_args)
         result = list(res[0].values())[0] if res else None
         return result if result is not None else 0
 
@@ -508,12 +540,27 @@ class Query(Generic[T]):
         """Return a flat list of values for a single column across all matches."""
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
-        sql = self._build(select=column)
-        rows = self.model.get_engine().execute(sql, self._args)
+
+        if self._union_queries or self._intersect_queries:
+            subquery = self._build()
+            sql = f"SELECT {column} FROM ({subquery}) AS sub"
+        else:
+            sql = self._build(select=column)
+
+        all_args = list(self._args)
+        if self._union_queries or self._intersect_queries:
+            for union_query in self._union_queries:
+                all_args.extend(union_query._args)
+            for intersect_query in self._intersect_queries:
+                all_args.extend(intersect_query._args)
+
+        rows = self.model.get_engine().execute(sql, all_args)
         return [list(row.values())[0] for row in rows]
 
     def update(self, **values: Any) -> int:
         """Bulk update matching rows with the provided values."""
+        if self._union_queries or self._intersect_queries:
+            raise ValueError("Cannot update a compound query (UNION/INTERSECT)")
         if not values:
             return 0
         for col in values:
@@ -537,6 +584,8 @@ class Query(Generic[T]):
 
     def delete(self) -> int:
         """Bulk delete matching records (handles soft delete if enabled)."""
+        if self._union_queries or self._intersect_queries:
+            raise ValueError("Cannot delete a compound query (UNION/INTERSECT)")
         import datetime
 
         if self.model._soft_delete_field:
@@ -549,6 +598,8 @@ class Query(Generic[T]):
 
     def force_delete(self) -> int:
         """Bulk delete matching records permanently, bypassing soft delete."""
+        if self._union_queries or self._intersect_queries:
+            raise ValueError("Cannot delete a compound query (UNION/INTERSECT)")
         sql = f"DELETE FROM {self.model._table}"
         sql += self._build_where()
         return self.model.get_engine().execute(sql, self._args)
