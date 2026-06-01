@@ -33,7 +33,9 @@ def test_field_metadata_enrichment(tmp_path):
     readonly_set = set()
 
     # Check that is_date metadata is set
-    tup_date, meta_date = admin_instance._field_meta("pub_date", date_field, readonly_set)
+    tup_date, meta_date = admin_instance._field_meta(
+        "pub_date", date_field, readonly_set
+    )
     assert meta_date["is_date"] is True
     assert meta_date["is_datetime"] is False
 
@@ -48,12 +50,16 @@ def test_field_metadata_enrichment(tmp_path):
     assert meta_fk["fk_model_slug"] == "mock_users"
 
     # Check that text metadata is set
-    tup_txt, meta_txt = admin_instance._field_meta("description", text_field, readonly_set)
+    tup_txt, meta_txt = admin_instance._field_meta(
+        "description", text_field, readonly_set
+    )
     assert meta_txt["is_text"] is True
     assert meta_txt["wysiwyg"] is False
 
     # Check that wysiwyg metadata is set
-    tup_wys, meta_wys = admin_instance._field_meta("content", wysiwyg_field, readonly_set)
+    tup_wys, meta_wys = admin_instance._field_meta(
+        "content", wysiwyg_field, readonly_set
+    )
     assert meta_wys["is_text"] is True
     assert meta_wys["wysiwyg"] is True
 
@@ -86,7 +92,7 @@ def test_detail_template_rendering(tmp_path):
                         "name": "description",
                         "is_text": True,
                         "wysiwyg": False,
-                    }
+                    },
                 },
                 # WYSIWYG Field
                 {
@@ -95,7 +101,7 @@ def test_detail_template_rendering(tmp_path):
                         "name": "body_content",
                         "is_text": True,
                         "wysiwyg": True,
-                    }
+                    },
                 },
                 # Normal Field (string)
                 {
@@ -104,7 +110,7 @@ def test_detail_template_rendering(tmp_path):
                         "name": "title",
                         "is_text": False,
                         "wysiwyg": False,
-                    }
+                    },
                 },
                 # Date Field
                 {
@@ -112,7 +118,7 @@ def test_detail_template_rendering(tmp_path):
                     "m": {
                         "name": "published_on",
                         "is_date": True,
-                    }
+                    },
                 },
                 # FK Field
                 {
@@ -121,9 +127,9 @@ def test_detail_template_rendering(tmp_path):
                         "name": "author_id",
                         "is_fk": True,
                         "fk_model_slug": "users",
-                    }
-                }
-            ]
+                    },
+                },
+            ],
         }
     ]
 
@@ -136,6 +142,7 @@ def test_detail_template_rendering(tmp_path):
 
         class MockAuthor:
             id = 456
+
             def __str__(self):
                 return "John Doe"
 
@@ -171,11 +178,17 @@ def test_detail_template_rendering(tmp_path):
     assert 'class="detail-field" style="grid-column: 1 / -1"' in html_content
 
     # 3. Verify WYSIWYG content rendered safely (SafeString)
-    assert '<div class="detail-wysiwyg-content"><p>This is <strong>WYSIWYG</strong> content.</p></div>' in html_content
+    assert (
+        '<div class="detail-wysiwyg-content"><p>This is <strong>WYSIWYG</strong> content.</p></div>'
+        in html_content
+    )
 
     # 4. Verify text field preserves line breaks with white-space: pre-wrap
-    assert '<div style="white-space: pre-wrap">This is a multiline\ndescription field.</div>' in html_content
+    assert (
+        '<div style="white-space: pre-wrap">This is a multiline\ndescription field.</div>'
+        in html_content
+    )
 
     # 5. Verify Foreign Key link is rendered correctly
     assert 'href="/admin/users/456/view"' in html_content
-    assert 'John Doe' in html_content
+    assert "John Doe" in html_content

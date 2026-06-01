@@ -52,7 +52,9 @@ class IPLocation:
         try:
             file_size = os.path.getsize(self.db_path)
             if file_size > 100_000_000:
-                logger.warning(f"GeoIP database too large ({file_size} bytes), skipping")
+                logger.warning(
+                    f"GeoIP database too large ({file_size} bytes), skipping"
+                )
                 self._loaded = True
                 return
         except OSError:
@@ -67,7 +69,9 @@ class IPLocation:
                 for line in f:
                     line_count += 1
                     if line_count > max_lines:
-                        logger.warning(f"GeoIP database has too many lines (>{max_lines}), truncating")
+                        logger.warning(
+                            f"GeoIP database has too many lines (>{max_lines}), truncating"
+                        )
                         break
                     parts = line.strip().split(",")
                     if len(parts) >= 6:
@@ -148,7 +152,7 @@ class Countries:
     @staticmethod
     def get(iso: str) -> Optional[dict[str, str]]:
         """Get rich information for a specific country by ISO alpha-2 code."""
-        iso = iso.upper()
+        iso = iso.strip().upper()
         for c in get_dial_codes():
             if c[0] == iso:
                 return {
@@ -228,6 +232,7 @@ class Countries:
         """Estimate primary timezone for a country (rough estimation)."""
         # Mapping for major countries
         zones = {
+            "CD": "Africa/Kinshasa",
             "FR": "Europe/Paris",
             "US": "America/New_York",
             "GB": "Europe/London",
@@ -238,7 +243,7 @@ class Countries:
             "BR": "America/Sao_Paulo",
             "RU": "Europe/Moscow",
             "CA": "America/Toronto",
-            "AU": "Australia/Sydney",
+            "AU": "Australia/Sydney"
         }
         return zones.get(iso_code.upper(), "UTC")
 

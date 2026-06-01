@@ -33,7 +33,9 @@ class ASGIMixin:
                             if inspect.iscoroutinefunction(hook):
                                 await hook()
                             else:
-                                hook()
+                                res = hook()
+                                if inspect.iscoroutine(res):
+                                    await res
                         except Exception as e:
                             logger.error("Error in ASGI startup hook: %s", e)
                     await send({"type": "lifespan.startup.complete"})
@@ -44,7 +46,9 @@ class ASGIMixin:
                             if inspect.iscoroutinefunction(hook):
                                 await hook()
                             else:
-                                hook()
+                                res = hook()
+                                if inspect.iscoroutine(res):
+                                    await res
                         except Exception as e:
                             logger.error("Error in ASGI shutdown hook: %s", e)
                     await send({"type": "lifespan.shutdown.complete"})
@@ -267,6 +271,9 @@ class ASGIMixin:
             )
 
         finally:
+            from ..orm import close_all_db_connections
+
+            close_all_db_connections()
             request_var.reset(token)
 
     async def _send_captured_response(
@@ -344,8 +351,14 @@ class ASGIMixin:
             def make_wrapper(mw, nxt):
                 if inspect.iscoroutinefunction(mw):
 
+                    async def async_nxt(req):
+                        res = nxt(req)
+                        if inspect.iscoroutine(res):
+                            return await res
+                        return res
+
                     async def async_wrapper(req):
-                        return await mw(req, nxt)
+                        return await mw(req, async_nxt)
 
                     return async_wrapper
                 else:
@@ -362,7 +375,9 @@ class ASGIMixin:
         return chain
 
 
-def async_to_sync(awaitable: Any, loop: Optional[asyncio.AbstractEventLoop] = None) -> Any:
+def async_to_sync(
+    awaitable: Any, loop: Optional[asyncio.AbstractEventLoop] = None
+) -> Any:
     """Run an awaitable synchronously, starting a loop on a separate thread if needed."""
     if not inspect.isawaitable(awaitable):
         return awaitable

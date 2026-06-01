@@ -13,6 +13,7 @@ from .style import Style
 
 class MigrationConnectionWrapper:
     """Wrapper to make db connections look like sqlite3.Connection with execute/commit/rollback/close."""
+
     def __init__(self, engine):
         self.engine = engine
         self.conn = engine.get_connection()
@@ -35,7 +36,10 @@ class MigrationConnectionWrapper:
 
 
 def run_migrate(
-    rollback: bool = False, status: bool = False, fake: bool = False, database: str | None = None
+    rollback: bool = False,
+    status: bool = False,
+    fake: bool = False,
+    database: str | None = None,
 ) -> None:
     """Apply or rollback versioned database migrations."""
     root = _find_project_root()
@@ -83,6 +87,7 @@ def run_migrate(
     # Determine target engine
     if database:
         from ..orm.engines import get_engine
+
         engine = get_engine(database)
     else:
         engine = Model.get_engine()
@@ -305,9 +310,15 @@ def run_createsuperuser(email: str | None = None, password: str | None = None) -
             q_role_id = engine.quote_identifier("role_id")
             q_user_id = engine.quote_identifier("user_id")
 
-            exists = engine.execute(f"SELECT 1 FROM {q_role_user} WHERE {q_role_id} = ? AND {q_user_id} = ?", (admin_role.id, user.id))
+            exists = engine.execute(
+                f"SELECT 1 FROM {q_role_user} WHERE {q_role_id} = ? AND {q_user_id} = ?",
+                (admin_role.id, user.id),
+            )
             if not exists:
-                engine.execute(f"INSERT INTO {q_role_user} ({q_role_id}, {q_user_id}) VALUES (?, ?)", (admin_role.id, user.id))
+                engine.execute(
+                    f"INSERT INTO {q_role_user} ({q_role_id}, {q_user_id}) VALUES (?, ?)",
+                    (admin_role.id, user.id),
+                )
         except Exception as e:
             print(f"  ⚠ Could not attach admin role: {e}")
 
@@ -429,11 +440,7 @@ def run_dumpdata(model_name: str | None = None, output_file: str | None = None) 
                     val = val.name
                 fields_data[field_name] = val
 
-            fixtures.append({
-                "model": name,
-                "pk": pk,
-                "fields": fields_data
-            })
+            fixtures.append({"model": name, "pk": pk, "fields": fields_data})
 
     # Output formatted JSON
     json_data = json.dumps(fixtures, indent=2, ensure_ascii=False)
@@ -441,7 +448,9 @@ def run_dumpdata(model_name: str | None = None, output_file: str | None = None) 
         try:
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(json_data)
-            Style.success(f"Successfully dumped {len(fixtures)} records to '{output_file}'.")
+            Style.success(
+                f"Successfully dumped {len(fixtures)} records to '{output_file}'."
+            )
         except Exception as e:
             Style.error(f"Failed to write dump to file '{output_file}': {e}")
             sys.exit(1)
@@ -503,7 +512,12 @@ def run_loaddata(file_path: str) -> None:
 
     with Model.transaction():
         for index, item in enumerate(fixtures):
-            if not isinstance(item, dict) or "model" not in item or "pk" not in item or "fields" not in item:
+            if (
+                not isinstance(item, dict)
+                or "model" not in item
+                or "pk" not in item
+                or "fields" not in item
+            ):
                 Style.error(f"Invalid fixture item at index {index}.")
                 sys.exit(1)
 
@@ -526,14 +540,18 @@ def run_loaddata(file_path: str) -> None:
                     try:
                         val = base64.b64decode(val[7:])
                     except Exception as e:
-                        Style.error(f"Failed to decode base64 value for field '{k}' in model '{model_name}': {e}")
+                        Style.error(
+                            f"Failed to decode base64 value for field '{k}' in model '{model_name}': {e}"
+                        )
                         sys.exit(1)
                 processed_fields[k] = val
 
             engine = matched_cls.get_engine()
             q_table = engine.quote_identifier(matched_cls._table)
             q_id = engine.quote_identifier("id")
-            exists_check = engine.execute(f"SELECT 1 FROM {q_table} WHERE {q_id} = ? LIMIT 1", (pk,))
+            exists_check = engine.execute(
+                f"SELECT 1 FROM {q_table} WHERE {q_id} = ? LIMIT 1", (pk,)
+            )
             exists = bool(exists_check)
 
             if exists:
@@ -641,4 +659,3 @@ def run_loaddata(file_path: str) -> None:
                 events.emit("model:saved", instance)
 
     Style.success("Successfully loaded fixtures.")
-

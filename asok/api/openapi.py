@@ -48,7 +48,7 @@ class OpenAPIGenerator:
         # SECURITY: Limit directory traversal depth to prevent DoS
         for root, _, files in os.walk(pages_dir):
             # Calculate depth relative to pages_dir
-            depth = root[len(pages_dir):].count(os.sep)
+            depth = root[len(pages_dir) :].count(os.sep)
             if depth >= self._MAX_DEPTH:
                 continue
 

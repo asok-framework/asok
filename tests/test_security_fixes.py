@@ -13,12 +13,17 @@ from asok.request import Request
 class DummyApp:
     def __init__(self, root_dir):
         self.root_dir = root_dir
-        self.config = {"SECRET_KEY": "test", "DATABASE": ":memory:", "AUTH_MODEL": "User"}
+        self.config = {
+            "SECRET_KEY": "test",
+            "DATABASE": ":memory:",
+            "AUTH_MODEL": "User",
+        }
         self.models = []
 
 
 class MockUser(Model):
     """Mock User model for testing."""
+
     _table = "users"
     username = Field.String()
     email = Field.String()
@@ -32,6 +37,7 @@ class MockUser(Model):
 
 class MockRole(Model):
     """Mock Role model for testing."""
+
     _table = "roles"
     name = Field.String()
     permissions = Field.String()
@@ -85,11 +91,15 @@ def test_non_admin_cannot_assign_roles_without_permission(tmp_path):
     MockRole.create_table()
 
     # Create a regular user (not admin)
-    regular_user = MockUser.create(username="regular", is_admin=False, password="test123")
+    regular_user = MockUser.create(
+        username="regular", is_admin=False, password="test123"
+    )
     regular_user.email = "regular@example.com"
 
     # Create a target user to edit
-    target_user = MockUser.create(username="target", is_admin=False, password="target123")
+    target_user = MockUser.create(
+        username="target", is_admin=False, password="target123"
+    )
     target_user.email = "target@example.com"
 
     # Create a role
@@ -115,21 +125,27 @@ def test_non_admin_cannot_assign_roles_without_permission(tmp_path):
 
     # Mock User model with roles relation
     from asok.orm import Relation
+
     if "roles" not in MockUser._relations:
-        MockUser._relations["roles"] = Relation.BelongsToMany("MockRole", pivot_table="role_user")
+        MockUser._relations["roles"] = Relation.BelongsToMany(
+            "MockRole", pivot_table="role_user"
+        )
 
     # Mock the sync method
     sync_called = []
+
     def mock_sync(rel_name, ids):
         sync_called.append((rel_name, ids))
+
     target_user.sync = mock_sync
 
     # Call _sync_m2m
     admin_instance._sync_m2m(req, MockUser, target_user)
 
     # Verify that sync was NOT called for roles (permission denied)
-    assert len(sync_called) == 0 or ("roles" not in [s[0] for s in sync_called]), \
+    assert len(sync_called) == 0 or ("roles" not in [s[0] for s in sync_called]), (
         "Non-admin should not be able to assign roles without permission"
+    )
 
     print("✓ Non-admin without roles.edit permission cannot assign roles")
 
@@ -151,7 +167,9 @@ def test_admin_can_assign_roles(tmp_path):
     admin_user.email = "admin@example.com"
 
     # Create a target user to edit
-    target_user = MockUser.create(username="target", is_admin=False, password="target123")
+    target_user = MockUser.create(
+        username="target", is_admin=False, password="target123"
+    )
     target_user.email = "target@example.com"
 
     # Create a role
@@ -177,23 +195,30 @@ def test_admin_can_assign_roles(tmp_path):
 
     # Mock User model with roles relation
     from asok.orm import Relation
+
     if "roles" not in MockUser._relations:
-        MockUser._relations["roles"] = Relation.BelongsToMany("MockRole", pivot_table="role_user")
+        MockUser._relations["roles"] = Relation.BelongsToMany(
+            "MockRole", pivot_table="role_user"
+        )
 
     # Mock the sync method
     sync_called = []
+
     def mock_sync(rel_name, ids):
         sync_called.append((rel_name, ids))
+
     target_user.sync = mock_sync
 
     # Call _sync_m2m
     admin_instance._sync_m2m(req, MockUser, target_user)
 
     # Verify that sync WAS called for roles (admin has permission)
-    assert any(s[0] == "roles" for s in sync_called), \
+    assert any(s[0] == "roles" for s in sync_called), (
         "Admin should be able to assign roles"
-    assert [role.id] in [s[1] for s in sync_called if s[0] == "roles"], \
+    )
+    assert [role.id] in [s[1] for s in sync_called if s[0] == "roles"], (
         "Role ID should be synced"
+    )
 
     print("✓ Admin can assign roles")
 

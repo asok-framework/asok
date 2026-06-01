@@ -211,7 +211,11 @@
       });
 
       const tempContainer = document.createElement('div');
-      tempContainer.innerHTML = html;
+      // SECURITY: HTML comes from server - sanitize to prevent XSS if server is compromised
+      // Note: This assumes server responses are trusted but adds defense-in-depth
+      const sanitizedHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
+        window.AsokSecurity.sanitizeHtml(html) : html;
+      tempContainer.innerHTML = sanitizedHtml;
       const insertedNodes = Array.from(tempContainer.childNodes);
       insertedNodes.forEach(function (node) {
         startMarker.parentNode.insertBefore(node, endMarker);
@@ -233,19 +237,23 @@
           afterSwap(newNodes || [target]);
         });
       } else {
+        // SECURITY: Fallback implementation with sanitization (defense-in-depth)
+        const safeHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
+          window.AsokSecurity.sanitizeHtml(html) : html;
+
         if (mode === 'delete') {
           target.remove();
           afterSwap([]);
         } else if (mode === 'outerHTML' || mode === 'replaceWith') {
-          const fragment = document.createRange().createContextualFragment(html);
+          const fragment = document.createRange().createContextualFragment(safeHtml);
           const newNodes = Array.from(fragment.childNodes);
           target.replaceWith(fragment);
           afterSwap(newNodes);
         } else if (mode === 'innerHTML') {
-          target.innerHTML = html;
+          target.innerHTML = safeHtml;
           afterSwap(Array.from(target.childNodes));
         } else {
-          const fragment = document.createRange().createContextualFragment(html);
+          const fragment = document.createRange().createContextualFragment(safeHtml);
           const newNodes = Array.from(fragment.childNodes);
           if (mode === 'beforebegin') {
             target.parentNode.insertBefore(fragment, target);
@@ -256,7 +264,7 @@
           } else if (mode === 'afterend') {
             target.parentNode.insertBefore(fragment, target.nextSibling);
           } else {
-            target.insertAdjacentHTML(mode, html);
+            target.insertAdjacentHTML(mode, safeHtml);
           }
           afterSwap(newNodes);
         }
@@ -292,6 +300,13 @@
 
           const redirectUrl = res.headers.get('X-Asok-Redirect');
           if (redirectUrl) {
+            // SECURITY: Validate redirect URL to prevent open redirect attacks
+            if (window.AsokSecurity && window.AsokSecurity.isSafeUrl) {
+              if (!window.AsokSecurity.isSafeUrl(redirectUrl)) {
+                console.error('[Asok] Blocked unsafe redirect URL:', redirectUrl);
+                return Promise.reject('unsafe_redirect');
+              }
+            }
             window.location.href = redirectUrl;
             return Promise.reject('redirected');
           }
@@ -333,12 +348,29 @@
       }
 
       const tempDiv = document.createElement('div');
+      // SECURITY: tempDiv is not inserted into DOM, only used to parse templates
+      // The actual content is sanitized when passed through doSwap() -> Asok.swap()
       tempDiv.innerHTML = html;
       const templates = tempDiv.querySelectorAll('template[data-block]');
       const shouldPushUrl = (sourceElement && sourceElement.dataset && sourceElement.dataset.pushUrl !== undefined) || (!sourceElement && url);
       const pushData = shouldPushUrl ? { shouldPush: true, src: sourceElement, url: url, b: blockName, sel: selector } : null;
 
       if (templates.length) {
+        // Execute root-level scripts (like the directives registry) before swapping templates
+        tempDiv.querySelectorAll('script').forEach(function (script) {
+          let parent = script.parentNode;
+          while (parent && parent !== tempDiv) {
+            if (parent.tagName === 'TEMPLATE') return;
+            parent = parent.parentNode;
+          }
+          const newScript = document.createElement('script');
+          if (script.nonce) newScript.nonce = script.nonce;
+          if (script.src) newScript.src = script.src;
+          newScript.textContent = script.textContent;
+          document.body.appendChild(newScript);
+          newScript.remove();
+        });
+
         for (let i = 0; i < templates.length; i++) {
           const tpl = templates[i];
           const target = findTargetElement(tpl.dataset.block);
@@ -448,7 +480,19 @@
         formData.append(el.name, el.value);
       }
 
-      if (method === 'GET') {
+      // SECURITY: Check for sensitive data before allowing GET method
+      if (method === 'GET' && window.AsokSecurity && window.AsokSecurity.hasSensitiveData) {
+        if (window.AsokSecurity.hasSensitiveData(formData)) {
+          console.warn('[Asok Security] Forcing POST for form with sensitive data');
+          method = 'POST';
+          body = formData;
+        } else {
+          const params = new URLSearchParams(formData).toString();
+          if (params) {
+            url += (url.indexOf('?') < 0 ? '?' : '&') + params;
+          }
+        }
+      } else if (method === 'GET') {
         const params = new URLSearchParams(formData).toString();
         if (params) {
           url += (url.indexOf('?') < 0 ? '?' : '&') + params;
@@ -472,7 +516,19 @@
       if (actionValue) {
         formData.append('_action', actionValue);
       }
-      if (method === 'GET') {
+      // SECURITY: Check for sensitive data before allowing GET method
+      if (method === 'GET' && window.AsokSecurity && window.AsokSecurity.hasSensitiveData) {
+        if (window.AsokSecurity.hasSensitiveData(formData)) {
+          console.warn('[Asok Security] Forcing POST for form with sensitive data');
+          method = 'POST';
+          body = formData;
+        } else {
+          const params = new URLSearchParams(formData).toString();
+          if (params) {
+            url += (url.indexOf('?') < 0 ? '?' : '&') + params;
+          }
+        }
+      } else if (method === 'GET') {
         const params = new URLSearchParams(formData).toString();
         if (params) {
           url += (url.indexOf('?') < 0 ? '?' : '&') + params;
@@ -628,6 +684,16 @@
     const el = e.target.closest('[data-block]');
     if (!el || el.tagName === 'FORM') return;
 
+    const isInteractive = 
+      el.tagName === 'A' || 
+      el.tagName === 'BUTTON' || 
+      el.tagName === 'INPUT' ||
+      el.hasAttribute('data-url') || 
+      el.hasAttribute('data-action') ||
+      el.hasAttribute('data-trigger');
+
+    if (!isInteractive) return;
+
     const triggerEvent = (el.dataset.trigger || 'click').split(/\s+/)[0];
     if (triggerEvent !== 'click') return;
 
@@ -636,76 +702,94 @@
   });
 
   // Setup dynamic components triggers and SSE
-  function setupDirectives() {
+  function initSpaDirectives(root) {
+    const el = root || document;
+    const elements = el === document ? document.querySelectorAll('*') : [el, ...el.querySelectorAll('*')];
+
     // SSE event sources
-    document.querySelectorAll('[data-sse]').forEach(function (el) {
-      if (el.__asokSseSetup) return;
-      el.__asokSseSetup = 1;
+    elements.forEach(function (n) {
+      if (n.hasAttribute && n.hasAttribute('data-sse')) {
+        if (n.__asokSseSetup) return;
+        n.__asokSseSetup = 1;
 
-      const eventSource = new EventSource(el.dataset.sse);
-      const selector = el.dataset.block || ('#' + el.id);
-      const swapMode = el.dataset.swap || 'innerHTML';
+        const eventSource = new EventSource(n.dataset.sse);
+        const selector = n.dataset.block || ('#' + n.id);
+        const swapMode = n.dataset.swap || 'innerHTML';
 
-      eventSource.onmessage = function (ev) {
-        const tempContainer = document.createElement('div');
-        tempContainer.innerHTML = ev.data;
-        const templates = tempContainer.querySelectorAll('template[data-block]');
+        eventSource.onmessage = function (ev) {
+          const tempContainer = document.createElement('div');
+          // SECURITY: tempContainer is not inserted into DOM, only used to parse templates
+          // The actual content is sanitized when passed through doSwap() -> Asok.swap()
+          tempContainer.innerHTML = ev.data;
+          const templates = tempContainer.querySelectorAll('template[data-block]');
 
-        if (templates.length) {
-          for (let i = 0; i < templates.length; i++) {
-            const tpl = templates[i];
-            const target = findTargetElement(tpl.dataset.block);
+          if (templates.length) {
+            for (let i = 0; i < templates.length; i++) {
+              const tpl = templates[i];
+              const target = findTargetElement(tpl.dataset.block);
+              if (target) {
+                doSwap(target, tpl.innerHTML, tpl.dataset.swap || 'innerHTML', null);
+              }
+            }
+          } else {
+            const target = findTargetElement(selector);
             if (target) {
-              doSwap(target, tpl.innerHTML, tpl.dataset.swap || 'innerHTML', null);
+              doSwap(target, ev.data, swapMode, null);
             }
           }
-        } else {
-          const target = findTargetElement(selector);
-          if (target) {
-            doSwap(target, ev.data, swapMode, null);
-          }
-        }
-      };
+        };
+      }
     });
 
     // Custom triggers
-    document.querySelectorAll('[data-block][data-trigger]').forEach(function (el) {
-      if (el.__asokTriggerSetup) return;
-      el.__asokTriggerSetup = 1;
+    elements.forEach(function (n) {
+      if (n.hasAttribute && n.hasAttribute('data-block') && n.hasAttribute('data-trigger')) {
+        if (n.__asokTriggerSetup) return;
+        n.__asokTriggerSetup = 1;
 
-      const trigger = parseTriggerOption(el.dataset.trigger);
-      if (trigger.event === 'submit' || trigger.event === 'click') return;
+        const trigger = parseTriggerOption(n.dataset.trigger);
+        if (trigger.event === 'submit' || trigger.event === 'click') return;
 
-      if (trigger.event === 'load') {
-        triggerBlockRequest(el);
-        return;
-      }
-
-      if (trigger.event === 'every') {
-        triggerBlockRequest(el);
-        setInterval(function () {
-          triggerBlockRequest(el);
-        }, trigger.interval);
-        return;
-      }
-
-      let debounceTimer;
-      el.addEventListener(trigger.event, function () {
-        if (trigger.delay) {
-          clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(function () {
-            triggerBlockRequest(el);
-          }, trigger.delay);
-        } else {
-          triggerBlockRequest(el);
+        if (trigger.event === 'load') {
+          triggerBlockRequest(n);
+          return;
         }
-      });
+
+        if (trigger.event === 'every') {
+          triggerBlockRequest(n);
+          setInterval(function () {
+            triggerBlockRequest(n);
+          }, trigger.interval);
+          return;
+        }
+
+        let debounceTimer;
+        n.addEventListener(trigger.event, function () {
+          if (trigger.delay) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(function () {
+              triggerBlockRequest(n);
+            }, trigger.delay);
+          } else {
+            triggerBlockRequest(n);
+          }
+        });
+      }
     });
   }
 
+  window.Asok = window.Asok || {};
+  const oldInit = window.Asok.init;
+  window.Asok.init = function (el) {
+    if (oldInit) oldInit(el);
+    initSpaDirectives(el);
+  };
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupDirectives);
+    document.addEventListener('DOMContentLoaded', function () {
+      initSpaDirectives(document);
+    });
   } else {
-    setupDirectives();
+    initSpaDirectives(document);
   }
 })();

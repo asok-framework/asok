@@ -30,10 +30,14 @@ class LocalStorage(BaseStorage):
     """Local disk storage backend."""
 
     def __init__(self) -> None:
-        self.base_dir = os.path.abspath(os.path.join(os.getcwd(), "src/partials/uploads"))
+        self.base_dir = os.path.abspath(
+            os.path.join(os.getcwd(), "src/partials/uploads")
+        )
 
     def save(self, filename: str, content: bytes, upload_to: str = "") -> str:
-        dest_dir = os.path.join(self.base_dir, upload_to) if upload_to else self.base_dir
+        dest_dir = (
+            os.path.join(self.base_dir, upload_to) if upload_to else self.base_dir
+        )
         os.makedirs(dest_dir, exist_ok=True)
         dest_path = os.path.join(dest_dir, filename)
 
@@ -54,7 +58,9 @@ class LocalStorage(BaseStorage):
         return f"/uploads/{filename}"
 
     def delete(self, filename: str, upload_to: str = "") -> None:
-        dest_dir = os.path.join(self.base_dir, upload_to) if upload_to else self.base_dir
+        dest_dir = (
+            os.path.join(self.base_dir, upload_to) if upload_to else self.base_dir
+        )
         dest_path = os.path.join(dest_dir, filename)
         try:
             resolved_dest = os.path.realpath(dest_path)
@@ -80,9 +86,13 @@ class S3Storage(BaseStorage):
 
         self.bucket = os.environ.get("ASOK_S3_BUCKET") or os.environ.get("S3_BUCKET")
         if not self.bucket:
-            raise ValueError("ASOK_S3_BUCKET / S3_BUCKET environment variable is required for S3 storage.")
+            raise ValueError(
+                "ASOK_S3_BUCKET / S3_BUCKET environment variable is required for S3 storage."
+            )
 
-        region = os.environ.get("ASOK_S3_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        region = os.environ.get("ASOK_S3_REGION") or os.environ.get(
+            "AWS_DEFAULT_REGION"
+        )
         endpoint = os.environ.get("ASOK_S3_ENDPOINT")
 
         self.client = boto3.client(
@@ -98,6 +108,7 @@ class S3Storage(BaseStorage):
         key = f"{upload_to}/{filename}" if upload_to else filename
 
         import mimetypes
+
         content_type, _ = mimetypes.guess_type(filename)
         if not content_type:
             content_type = "application/octet-stream"

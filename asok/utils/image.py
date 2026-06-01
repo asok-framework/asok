@@ -70,7 +70,9 @@ def optimize_image(
 
     # SECURITY: Validate filepath doesn't contain shell metacharacters or traversal
     abs_filepath = os.path.abspath(filepath)
-    if ".." in abs_filepath or any(c in filepath for c in [";", "&", "|", "`", "$", "(", ")"]):
+    if ".." in abs_filepath or any(
+        c in filepath for c in [";", "&", "|", "`", "$", "(", ")"]
+    ):
         logger.warning(f"Suspicious characters detected in filepath: {filepath}")
         return None
 

@@ -45,6 +45,12 @@ def _user_can(self: Any, perm: str) -> bool:
     to fully trusted administrators.
     """
     if getattr(self, "is_admin", False):
+        # SECURITY: Audit log for superadmin actions to detect privilege misuse
+        user_id = getattr(self, "id", "unknown")
+        user_email = getattr(self, "email", None) or getattr(self, "username", f"ID:{user_id}")
+        logger.info(
+            f"ADMIN ACCESS: User {user_email} (superadmin) granted permission '{perm}'"
+        )
         return True
     for r in self.roles:
         raw = (getattr(r, "permissions", "") or "").strip()
@@ -102,14 +108,18 @@ class RBACMixin:
             return True
         can_fn = getattr(u, "can", None)
         if not callable(can_fn):
-            user_email = getattr(u, "email", None) or getattr(u, "username", f"ID:{u.id}")
+            user_email = getattr(u, "email", None) or getattr(
+                u, "username", f"ID:{u.id}"
+            )
             logger.debug(
                 f"Permission check: {user_email} lacks can() method for {slug}.{verb}"
             )
             return False
         result = bool(can_fn(f"{slug}.{verb}"))
         if not result:
-            user_email = getattr(u, "email", None) or getattr(u, "username", f"ID:{u.id}")
+            user_email = getattr(u, "email", None) or getattr(
+                u, "username", f"ID:{u.id}"
+            )
             # DEBUG: Routine permission checks for UI (not actual blocked access attempts)
             # Actual HTTP access denials will log at WARNING level in the view layer
             logger.debug(

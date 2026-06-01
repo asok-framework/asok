@@ -25,7 +25,9 @@ def make_model(name: str) -> None:
         return
     # SECURITY: Only allow alphanumeric and underscores
     if not name.replace("_", "").replace("-", "").isalnum():
-        Style.error("Model name must contain only letters, numbers, hyphens, and underscores")
+        Style.error(
+            "Model name must contain only letters, numbers, hyphens, and underscores"
+        )
         return
     # SECURITY: Prevent path traversal
     if ".." in name or "/" in name or "\\" in name:
@@ -65,7 +67,9 @@ def make_middleware(name: str) -> None:
         return
     # SECURITY: Only allow alphanumeric and underscores
     if not name.replace("_", "").replace("-", "").isalnum():
-        Style.error("Middleware name must contain only letters, numbers, hyphens, and underscores")
+        Style.error(
+            "Middleware name must contain only letters, numbers, hyphens, and underscores"
+        )
         return
     # SECURITY: Prevent path traversal
     if ".." in name or "/" in name or "\\" in name:
@@ -104,7 +108,9 @@ def make_migration(name: str) -> None:
         return
     # SECURITY: Only allow alphanumeric, underscores, and hyphens
     if not name.replace("_", "").replace("-", "").isalnum():
-        Style.error("Migration name must contain only letters, numbers, hyphens, and underscores")
+        Style.error(
+            "Migration name must contain only letters, numbers, hyphens, and underscores"
+        )
         return
     # SECURITY: Prevent path traversal
     if ".." in name or "/" in name or "\\" in name:
@@ -181,6 +187,7 @@ def make_migration(name: str) -> None:
         Style.warn("No models registered. Check your model definitions.")
     engine = Model.get_engine()
     from ..orm.engines import SQLiteEngine
+
     is_sqlite = isinstance(engine, SQLiteEngine)
 
     # Analysis
@@ -199,7 +206,9 @@ def make_migration(name: str) -> None:
             fields = []
 
             # Ensure 'id' is always the first column if not explicitly defined
-            pk_def = getattr(engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT")
+            pk_def = getattr(
+                engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
+            )
             if "id" not in model_cls._fields:
                 fields.append(pk_def)
 
@@ -295,7 +304,9 @@ def make_migration(name: str) -> None:
                     sql_fts = f"CREATE VIRTUAL TABLE IF NOT EXISTS {fts_table} USING fts5({f_names}, content='{table}', content_rowid='id')"
                     up_sql.append(f"conn.execute({repr(sql_fts)})")
 
-                    sql_rebuild = f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')"
+                    sql_rebuild = (
+                        f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')"
+                    )
                     up_sql.append(f"conn.execute({repr(sql_rebuild)})")
 
                     # Triggers to keep FTS in sync
@@ -324,9 +335,12 @@ def make_migration(name: str) -> None:
             else:
                 # MySQL/Postgres: FULLTEXT INDEX via ALTER TABLE
                 from ..orm.engines import MySQLEngine
+
                 if isinstance(engine, MySQLEngine):
                     index_name = f"idx_{table}_fts"
-                    cols = ", ".join([engine.quote_identifier(c) for c in model_cls._search_fields])
+                    cols = ", ".join(
+                        [engine.quote_identifier(c) for c in model_cls._search_fields]
+                    )
                     q_table = engine.quote_identifier(table)
                     q_index = engine.quote_identifier(index_name)
                     # Check if FULLTEXT index already exists (use ? so translate_query handles dialect)
@@ -411,7 +425,9 @@ def make_page(name: str) -> None:
     parts = name.split("/")
     for part in parts:
         if not part or not part.replace("_", "").replace("-", "").isalnum():
-            Style.error(f"Invalid page name component: '{part}' (must contain only letters, numbers, hyphens, and underscores)")
+            Style.error(
+                f"Invalid page name component: '{part}' (must contain only letters, numbers, hyphens, and underscores)"
+            )
             return
 
     page_dir = f"src/pages/{name}"
@@ -462,7 +478,9 @@ def make_component(name: str) -> None:
         return
     # SECURITY: Only allow alphanumeric, underscores, and hyphens
     if not name.replace("_", "").replace("-", "").isalnum():
-        Style.error("Component name must contain only letters, numbers, hyphens, and underscores")
+        Style.error(
+            "Component name must contain only letters, numbers, hyphens, and underscores"
+        )
         return
     # SECURITY: Prevent path traversal
     if ".." in name or "/" in name or "\\" in name:

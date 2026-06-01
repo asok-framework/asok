@@ -123,7 +123,9 @@ class Query(Generic[T]):
                 if inner_strip == "*":
                     inner_validated = "*"
                 elif self.model._valid_column(inner_strip):
-                    inner_validated = self.model.get_engine().quote_identifier(inner_strip)
+                    inner_validated = self.model.get_engine().quote_identifier(
+                        inner_strip
+                    )
                 else:
                     raise ValueError(f"Invalid column in aggregate: {inner_strip}")
 
@@ -243,8 +245,28 @@ class Query(Generic[T]):
         self._args.extend(values)
         return self
 
-    def like(self, column: str, pattern: str) -> Query[T]:
-        """Filter using SQL LIKE operator."""
+    def like(self, column: str, pattern: str, escape_wildcards: bool = False) -> Query[T]:
+        """Filter using SQL LIKE operator.
+
+        Args:
+            column: The column name to filter
+            pattern: The LIKE pattern (can include % and _ wildcards)
+            escape_wildcards: If True, escape literal % and _ characters in pattern
+                             (useful when searching for literal wildcards)
+
+        SECURITY: By default, wildcards are NOT escaped to preserve backward compatibility.
+        Set escape_wildcards=True if you need to search for literal % or _ characters.
+
+        Example:
+            # Search for users with "test" in name (wildcards active)
+            User.query().like('name', '%test%')
+
+            # Search for literal "100%" in description (wildcards escaped)
+            Product.query().like('description', '100%', escape_wildcards=True)
+        """
+        if escape_wildcards:
+            # SECURITY: Escape backslash first, then wildcards
+            pattern = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return self.where(column, "LIKE", pattern)
 
     def or_where(self, column: str, op_or_val: Any, val: Any = None) -> Query[T]:
@@ -318,7 +340,9 @@ class Query(Generic[T]):
             return self
 
         # Let the engine build the full text search clause
-        where_clause, args = self.model.get_engine().search_sql(self.model._table, self.model._search_fields, term)
+        where_clause, args = self.model.get_engine().search_sql(
+            self.model._table, self.model._search_fields, term
+        )
         self._wheres.append(where_clause)
         self._args.extend(args)
         return self
@@ -420,7 +444,9 @@ class Query(Generic[T]):
 
         # ORDER/LIMIT/OFFSET apply to the final result
         # Aggregates like COUNT(*) do not allow ORDER BY without GROUP BY in strict SQL (PostgreSQL)
-        is_aggregate = select is not None and any(agg in select.upper() for agg in ["COUNT(", "SUM(", "AVG(", "MIN(", "MAX("])
+        is_aggregate = select is not None and any(
+            agg in select.upper() for agg in ["COUNT(", "SUM(", "AVG(", "MIN(", "MAX("]
+        )
         if self._order and not (is_aggregate and not self._groups):
             sql += f" ORDER BY {self._order}"
         if self._limit is not None and not is_aggregate:
@@ -568,7 +594,9 @@ class Query(Generic[T]):
 
             elif rel.type == "BelongsToMany":
                 # SECURITY: _pivot_info validates identifiers
-                pivot, pfk, pofk = results[0]._pivot_info(rel) if results else (None, None, None)
+                pivot, pfk, pofk = (
+                    results[0]._pivot_info(rel) if results else (None, None, None)
+                )
                 if not pivot:
                     continue
                 ids = [r.id for r in results if r.id]
@@ -617,7 +645,11 @@ class Query(Generic[T]):
                 ids = [r.id for r in results if r.id]
                 if not ids:
                     continue
-                children_query = Query(target).where_in(fk_id, ids).where(fk_type, self.model.__name__)
+                children_query = (
+                    Query(target)
+                    .where_in(fk_id, ids)
+                    .where(fk_type, self.model.__name__)
+                )
                 if active_subs:
                     children_query = children_query.with_(*active_subs)
                 children = children_query.get()

@@ -202,9 +202,7 @@ def _asok_cosine_similarity(v1, v2):
         return dot / (n1 * n2)
     except Exception as e:
         # Log vector operation errors for debugging
-        logging.getLogger("asok.orm").debug(
-            "Error in cosine_similarity: %s", e
-        )
+        logging.getLogger("asok.orm").debug("Error in cosine_similarity: %s", e)
         return 0.0
 
 
@@ -228,9 +226,7 @@ def _asok_euclidean_distance(v1, v2):
         return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
     except Exception as e:
         # Log vector operation errors for debugging
-        logging.getLogger("asok.orm").debug(
-            "Error in euclidean_distance: %s", e
-        )
+        logging.getLogger("asok.orm").debug("Error in euclidean_distance: %s", e)
         return 99999.0
 
 

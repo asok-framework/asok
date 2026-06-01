@@ -487,7 +487,9 @@ class TemplateMixin:
                 if os.path.isfile(full_min):
                     target_path = min_path
 
-        serve_s3 = os.environ.get("ASOK_SERVE_STATIC_FROM_S3", "false").lower() == "true"
+        serve_s3 = (
+            os.environ.get("ASOK_SERVE_STATIC_FROM_S3", "false").lower() == "true"
+        )
         if serve_s3:
             try:
                 from asok.core.storage import S3Storage, get_storage

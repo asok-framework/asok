@@ -44,30 +44,44 @@ def check_min(val: Any, limit: str) -> bool:
     """Check if length of value is at least limit.
 
     SECURITY: Validates limit parameter to prevent integer overflow.
+    Raises ValueError for invalid limit configurations.
     """
     try:
         limit_int = int(limit)
-        # SECURITY: Reject unreasonably large limits
-        if limit_int < 0 or limit_int > 1_000_000:
-            return True
+        # SECURITY: Reject unreasonably large or negative limits
+        if limit_int < 0:
+            raise ValueError(f"Minimum length cannot be negative: {limit_int}")
+        if limit_int > 1_000_000:
+            raise ValueError(f"Minimum length too large (max 1,000,000): {limit_int}")
         return len(str(val)) >= limit_int
-    except (ValueError, OverflowError):
-        return True
+    except (ValueError, OverflowError) as e:
+        # Re-raise with context if it's our validation error
+        if "length" in str(e).lower():
+            raise
+        # For other parsing errors, raise with clear message
+        raise ValueError(f"Invalid minimum length value: {limit}") from e
 
 
 def check_max(val: Any, limit: str) -> bool:
     """Check if length of value is at most limit.
 
     SECURITY: Validates limit parameter to prevent integer overflow.
+    Raises ValueError for invalid limit configurations.
     """
     try:
         limit_int = int(limit)
-        # SECURITY: Reject unreasonably large limits
-        if limit_int < 0 or limit_int > 1_000_000:
-            return True
+        # SECURITY: Reject unreasonably large or negative limits
+        if limit_int < 0:
+            raise ValueError(f"Maximum length cannot be negative: {limit_int}")
+        if limit_int > 1_000_000:
+            raise ValueError(f"Maximum length too large (max 1,000,000): {limit_int}")
         return len(str(val)) <= limit_int
-    except (ValueError, OverflowError):
-        return True
+    except (ValueError, OverflowError) as e:
+        # Re-raise with context if it's our validation error
+        if "length" in str(e).lower():
+            raise
+        # For other parsing errors, raise with clear message
+        raise ValueError(f"Invalid maximum length value: {limit}") from e
 
 
 def check_unique(val: Any, model_name: str, field_name: str) -> bool:

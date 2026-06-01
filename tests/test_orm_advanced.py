@@ -42,9 +42,7 @@ class Product(Model):
     active = Field.Integer(default=1)
     deleted_at = Field.SoftDelete()
 
-    _global_scopes = {
-        "active": lambda q: q.where("active", 1)
-    }
+    _global_scopes = {"active": lambda q: q.where("active", 1)}
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +149,7 @@ def test_global_scopes():
     # Setup products
     Product.create(name="Laptop", active=1)
     Product.create(name="Phone", active=1)
-    Product.create(name="Tablet", active=0) # Inactive
+    Product.create(name="Tablet", active=0)  # Inactive
 
     # Standard query should automatically filter active=1
     products = Product.query().get()
@@ -193,9 +191,13 @@ def test_polymorphic_relationships():
     video = Video.create(title="Asok Tutorial Video")
 
     # Create comment pointing to Article (polymorphic)
-    c1 = Comment.create(body="Great article!", commentable_id=article.id, commentable_type="Article")
+    c1 = Comment.create(
+        body="Great article!", commentable_id=article.id, commentable_type="Article"
+    )
     # Create comment pointing to Video (polymorphic)
-    c2 = Comment.create(body="Nice tutorial!", commentable_id=video.id, commentable_type="Video")
+    c2 = Comment.create(
+        body="Nice tutorial!", commentable_id=video.id, commentable_type="Video"
+    )
 
     # 1. Test MorphTo property resolution
     assert c1.commentable is not None
@@ -329,15 +331,19 @@ def test_orm_fixtures(tmp_path, monkeypatch):
     # - Update m1's name and data
     # - Add a new record with pk=3 (which doesn't exist)
     data[0]["fields"]["name"] = "BinaryRecordUpdated"
-    data[0]["fields"]["data"] = "base64:c29tZXRoaW5nIG5ldw=="  # base64 for b"something new"
-    data.append({
-        "model": "FixtureTestModel",
-        "pk": 3,
-        "fields": {
-            "name": "ThirdRecord",
-            "data": "base64:dGVzdA=="  # base64 for b"test"
+    data[0]["fields"]["data"] = (
+        "base64:c29tZXRoaW5nIG5ldw=="  # base64 for b"something new"
+    )
+    data.append(
+        {
+            "model": "FixtureTestModel",
+            "pk": 3,
+            "fields": {
+                "name": "ThirdRecord",
+                "data": "base64:dGVzdA==",  # base64 for b"test"
+            },
         }
-    })
+    )
 
     with open(fixture_file, "w") as f:
         json.dump(data, f)
@@ -364,4 +370,3 @@ def test_orm_fixtures(tmp_path, monkeypatch):
     assert m2_check.data == b"hello"
 
     FixtureTestModel.close_connections()
-

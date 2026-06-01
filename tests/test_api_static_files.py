@@ -71,5 +71,9 @@ def test_api_docs_template_references_minified_js():
         template_content = f.read()
 
     # Verify the template references docs.min.js (not docs.js)
-    assert "/asok-api/docs.min.js" in template_content or "docs.min.js" in template_content
-    assert "initApiDocs" in template_content, "Template should call initApiDocs function"
+    assert (
+        "/asok-api/docs.min.js" in template_content or "docs.min.js" in template_content
+    )
+    assert "initApiDocs" in template_content, (
+        "Template should call initApiDocs function"
+    )

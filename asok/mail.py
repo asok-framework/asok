@@ -114,8 +114,14 @@ class Mail:
 
         # Validate all recipient emails
         to = [Mail._validate_email(e) for e in to]
-        cc_list = [Mail._validate_email(e) for e in ([cc] if isinstance(cc, str) else (cc or []))]
-        bcc_list = [Mail._validate_email(e) for e in ([bcc] if isinstance(bcc, str) else (bcc or []))]
+        cc_list = [
+            Mail._validate_email(e)
+            for e in ([cc] if isinstance(cc, str) else (cc or []))
+        ]
+        bcc_list = [
+            Mail._validate_email(e)
+            for e in ([bcc] if isinstance(bcc, str) else (bcc or []))
+        ]
 
         # SECURITY: Limit total recipients across to/cc/bcc (max 100)
         all_recipients = (to + cc_list + bcc_list)[:100]

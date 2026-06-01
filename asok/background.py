@@ -66,7 +66,11 @@ def background(
 
         import json
 
-        redis_url = os.environ.get("ASOK_REDIS_URL") or os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
+        redis_url = (
+            os.environ.get("ASOK_REDIS_URL")
+            or os.environ.get("REDIS_URL")
+            or "redis://localhost:6379/0"
+        )
         client = redis.Redis.from_url(redis_url)
         client.lpush("asok:queue", json.dumps(job))
 
@@ -75,6 +79,7 @@ def background(
         return f
 
     import contextvars
+
     ctx = contextvars.copy_context()
 
     def wrapper() -> Any:

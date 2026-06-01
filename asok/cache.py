@@ -47,7 +47,11 @@ class Cache:
                 "The 'redis' library is required to use the Redis cache backend. "
                 "Install it using 'pip install asok[redis]'."
             )
-        redis_url = os.environ.get("ASOK_REDIS_URL") or os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
+        redis_url = (
+            os.environ.get("ASOK_REDIS_URL")
+            or os.environ.get("REDIS_URL")
+            or "redis://localhost:6379/0"
+        )
         self._redis = redis.Redis.from_url(redis_url)
 
     def _get_redis_client(self):
@@ -255,6 +259,9 @@ def cache_page(
 
             cached = cache.get(cache_key)
             if cached is not None:
+                token = getattr(request, "csrf_token_value", None)
+                if isinstance(cached, str) and token:
+                    return cached.replace("__ASOK_CSRF_TOKEN_PLACEHOLDER__", token)
                 return cached
 
             response = func(request, *args, **kwargs)
@@ -263,7 +270,12 @@ def cache_page(
             # In Asok, view functions often return a Response object or just a string.
             status_code = getattr(response, "status", "200")
             if str(status_code).startswith("200"):
-                cache.set(cache_key, response, ttl=ttl)
+                token = getattr(request, "csrf_token_value", None)
+                if isinstance(response, str) and token:
+                    cached_response = response.replace(token, "__ASOK_CSRF_TOKEN_PLACEHOLDER__")
+                else:
+                    cached_response = response
+                cache.set(cache_key, cached_response, ttl=ttl)
 
             return response
 

@@ -90,6 +90,8 @@ def _interpolate(
     elif rule_name == "in" and arg:
         placeholders["values"] = str(arg)
         placeholders["in"] = str(arg)
+    elif rule_name == "digits" and arg:
+        placeholders["digits"] = str(arg)
 
     # Replace all placeholders in the text
     for key, value in placeholders.items():

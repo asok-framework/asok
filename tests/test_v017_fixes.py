@@ -15,11 +15,13 @@ from asok.session import Session
 # Setup and Mocking
 # ---------------------------------------------------------------------------
 
+
 class DummyApp:
     def __init__(self, root_dir="/tmp"):
         self.config = {"AUTH_MODEL": "MockUser", "SECRET_KEY": "test-secret"}
         self.root_dir = root_dir
         self.models = []
+
 
 class MockUser(Model):
     _db_path = ":memory:"
@@ -30,10 +32,12 @@ class MockUser(Model):
     totp_enabled = Field.Boolean(default=False)
     backup_codes = Field.String(nullable=True)
 
+
 # Make sure Role and AdminLog exist in registry to bypass _ensure_model_file
 class Role(Model):
     _db_path = ":memory:"
     __tablename__ = "roles"
+
 
 class AdminLog(Model):
     _db_path = ":memory:"
@@ -43,6 +47,7 @@ class AdminLog(Model):
 # ---------------------------------------------------------------------------
 # Impersonation Reversion Tests
 # ---------------------------------------------------------------------------
+
 
 def test_impersonation_reversion_revoked_admin(tmp_path):
     # Setup test DB and register model in MODELS_REGISTRY
@@ -70,16 +75,19 @@ def test_impersonation_reversion_revoked_admin(tmp_path):
     }
     req = Request(environ)
     # Set up session with impersonator details
-    req._session = Session({
-        "user_id": target.id,            # Target's ID
-        "impersonator_id": admin.id,     # Impersonating Admin's ID
-        "impersonate_started_at": time.time()
-    })
+    req._session = Session(
+        {
+            "user_id": target.id,  # Target's ID
+            "impersonator_id": admin.id,  # Impersonating Admin's ID
+            "impersonate_started_at": time.time(),
+        }
+    )
     req.user = None
     req._flashes = []
 
     def mock_flash(category, message):
         req._flashes.append((category, message))
+
     req.flash = mock_flash
 
     # Dispatch should successfully load target as req.user
@@ -117,6 +125,7 @@ def test_impersonation_reversion_revoked_admin(tmp_path):
 # File Extension Bypass Tests
 # ---------------------------------------------------------------------------
 
+
 def test_crud_view_blocked_extension_bypass(tmp_path):
     # Test that a blocked file extension (e.g. .php) is rejected and doesn't get saved,
     # even if it has a fake "image/png" content_type.
@@ -131,6 +140,7 @@ def test_crud_view_blocked_extension_bypass(tmp_path):
 
     class MockForm:
         _fields = {}
+
         def __init__(self):
             pass
 
@@ -144,7 +154,7 @@ def test_crud_view_blocked_extension_bypass(tmp_path):
     upload = UploadedFile(
         filename="evil.php",
         content=b"<?php echo 'evil'; ?>",
-        content_type="image/png"  # Spoofed MIME type
+        content_type="image/png",  # Spoofed MIME type
     )
 
     environ = {
@@ -158,11 +168,15 @@ def test_crud_view_blocked_extension_bypass(tmp_path):
     req = Request(environ)
     req.files["avatar"] = upload
     req._flashes = []
+
     def mock_flash(category, message):
         req._flashes.append((category, message))
+
     req.flash = mock_flash
 
-    admin_instance.t = lambda request, msg, **kwargs: msg.format(**kwargs) if kwargs else msg
+    admin_instance.t = lambda request, msg, **kwargs: (
+        msg.format(**kwargs) if kwargs else msg
+    )
 
     class MockModel:
         __name__ = "MockModel"
@@ -188,6 +202,7 @@ def test_crud_view_blocked_extension_bypass(tmp_path):
 # Media Manager Error Handling Tests
 # ---------------------------------------------------------------------------
 
+
 def test_media_upload_value_error_handling(tmp_path):
     app = DummyApp(root_dir=str(tmp_path))
     admin_instance = Admin(app)
@@ -200,6 +215,7 @@ def test_media_upload_value_error_handling(tmp_path):
     class MockValueErrorFile:
         def __init__(self, filename):
             self.filename = filename
+
         def save(self, dest):
             raise ValueError("Invalid magic bytes or mime-type mismatch")
 
@@ -208,6 +224,7 @@ def test_media_upload_value_error_handling(tmp_path):
         def __init__(self, filename):
             self.filename = filename
             self.saved = False
+
         def save(self, dest):
             self.saved = True
 
@@ -228,10 +245,14 @@ def test_media_upload_value_error_handling(tmp_path):
     req.files = {"fail": f_fail, "ok": f_ok}
     req.all_files = [f_fail, f_ok]
     req._flashes = []
+
     def mock_flash(category, message):
         req._flashes.append((category, message))
+
     req.flash = mock_flash
-    admin_instance.t = lambda request, msg, **kwargs: msg.format(**kwargs) if kwargs else msg
+    admin_instance.t = lambda request, msg, **kwargs: (
+        msg.format(**kwargs) if kwargs else msg
+    )
 
     # Calling _media_upload will raise RedirectException (redirects back to /media)
     with pytest.raises(RedirectException):
@@ -248,6 +269,7 @@ def test_media_upload_value_error_handling(tmp_path):
 # WSGI Uncaught Exception Tests
 # ---------------------------------------------------------------------------
 
+
 def test_wsgi_uncaught_exception_handling():
     app = Asok()
     app.config["SECRET_KEY"] = "test-secret"
@@ -256,6 +278,7 @@ def test_wsgi_uncaught_exception_handling():
     # We mock _dispatch_controller to raise an exception
     def mock_dispatch(req, env):
         raise RuntimeError("Something went wrong inside controller")
+
     app._dispatch_controller = mock_dispatch
 
     environ = {
@@ -268,6 +291,7 @@ def test_wsgi_uncaught_exception_handling():
     }
 
     response_started = []
+
     def start_response(status, headers):
         response_started.append((status, headers))
 
@@ -284,6 +308,7 @@ def test_wsgi_uncaught_exception_handling():
 # ---------------------------------------------------------------------------
 # Admin Login without 2FA Test
 # ---------------------------------------------------------------------------
+
 
 def test_admin_login_without_2fa_success(tmp_path):
     app = DummyApp(root_dir=str(tmp_path))
@@ -311,25 +336,34 @@ def test_admin_login_without_2fa_success(tmp_path):
         "password": "correct",
     }
     req._flashes = []
+
     def mock_flash(category, message):
         req._flashes.append((category, message))
+
     req.flash = mock_flash
 
-    admin_instance.t = lambda request, msg, **kwargs: msg.format(**kwargs) if kwargs else msg
+    admin_instance.t = lambda request, msg, **kwargs: (
+        msg.format(**kwargs) if kwargs else msg
+    )
 
     # Mock request.authenticate and request.login
     # Note: In real code, authenticate() calls login() internally, so we mock authenticate to do both
     login_called = []
+
     class AuthenticateMock:
         def __call__(self, email, password):
-            login_called.append(user)  # Simulate the login() call that authenticate() does
+            login_called.append(
+                user
+            )  # Simulate the login() call that authenticate() does
             return user
+
     req.authenticate = AuthenticateMock()
 
     # Mock login too (even though authenticate calls it in real code)
     class LoginMock:
         def __call__(self, u):
             pass  # No-op since authenticate already tracked the call
+
     req.login = LoginMock()
 
     # Call _login. It should raise RedirectException because login was successful and it redirects to prefix
@@ -373,12 +407,18 @@ def test_admin_login_csrf_failure(tmp_path):
         "password": "correct",
     }
     req._flashes = []
+
     def mock_flash(category, message):
         req._flashes.append((category, message))
+
     req.flash = mock_flash
 
-    admin_instance.t = lambda request, msg, **kwargs: msg.format(**kwargs) if kwargs else msg
-    admin_instance._render = lambda request, template_name, **ctx: f"Rendered {template_name}"
+    admin_instance.t = lambda request, msg, **kwargs: (
+        msg.format(**kwargs) if kwargs else msg
+    )
+    admin_instance._render = lambda request, template_name, **ctx: (
+        f"Rendered {template_name}"
+    )
 
     # Call _login. It should catch SecurityError (from CSRF verification failing)
     # and re-render the login page, flashing the expiration error.
@@ -412,11 +452,13 @@ def test_impersonation_of_non_admin_does_not_redirect_to_login(tmp_path):
         "wsgi.input": None,
     }
     req = Request(environ)
-    req._session = Session({
-        "user_id": target.id,            # Target's ID
-        "impersonator_id": admin.id,     # Impersonating Admin's ID
-        "impersonate_started_at": time.time()
-    })
+    req._session = Session(
+        {
+            "user_id": target.id,  # Target's ID
+            "impersonator_id": admin.id,  # Impersonating Admin's ID
+            "impersonate_started_at": time.time(),
+        }
+    )
     req.user = None
     req._flashes = []
 

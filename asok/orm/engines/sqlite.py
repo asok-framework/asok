@@ -112,17 +112,26 @@ class SQLiteEngine(BaseEngine):
         if hasattr(self._local, "conn"):
             delattr(self._local, "conn")
 
-    def execute(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> List[Dict[str, Any]] | int:
+    def execute(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> List[Dict[str, Any]] | int:
         conn = self.get_connection()
         cursor = conn.execute(sql, args or ())
         if cursor.description:
             return [dict(row) for row in cursor.fetchall()]
+        # Auto-commit DML statements when not inside an explicit transaction,
+        # matching the autocommit=True behavior of the MySQL and PostgreSQL engines.
+        txn_level = getattr(self._local, "txn_level", 0)
+        if txn_level == 0 and conn.in_transaction:
+            conn.commit()
         return cursor.rowcount
 
     def quote_identifier(self, name: str) -> str:
         return f'"{name}"'
 
-    def translate_query(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> Tuple[str, List[Any]]:
+    def translate_query(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> Tuple[str, List[Any]]:
         return sql, list(args) if args else []
 
     def get_column_type(self, field: Any) -> str:
@@ -138,7 +147,9 @@ class SQLiteEngine(BaseEngine):
         rows = self.execute(sql)
         return [row["name"] for row in rows]
 
-    def search_sql(self, table: str, columns: List[str], term: str) -> Tuple[str, List[Any]]:
+    def search_sql(
+        self, table: str, columns: List[str], term: str
+    ) -> Tuple[str, List[Any]]:
         fts_table = f"{table}_fts"
         subquery = f"SELECT rowid FROM {self.quote_identifier(fts_table)} WHERE {self.quote_identifier(fts_table)} MATCH ?"
         return f"id IN ({subquery})", [term]
@@ -159,7 +170,10 @@ class SQLiteEngine(BaseEngine):
     def deserialize_value(self, field: Any, value: Any) -> Any:
         if getattr(field, "is_vector", False) and isinstance(value, (bytes, bytearray)):
             if len(value) % 4 != 0:
-                logger.warning("Vector field has invalid byte length %d (not divisible by 4)", len(value))
+                logger.warning(
+                    "Vector field has invalid byte length %d (not divisible by 4)",
+                    len(value),
+                )
                 return []
             return list(struct.unpack(f"{len(value) // 4}f", value))
         return value
@@ -168,6 +182,7 @@ class SQLiteEngine(BaseEngine):
         if isinstance(e, sqlite3.IntegrityError):
             from ..exceptions import ModelError
             from ..utils import _RE_NOT_NULL, _RE_UNIQUE
+
             msg = str(e)
             m = _RE_UNIQUE.search(msg)
             if m:
@@ -212,12 +227,20 @@ class SQLiteEngine(BaseEngine):
 
             # Auto-rebuild if empty
             try:
-                source_count = self.execute(f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table)}")[0]["cnt"]
-                fts_count = self.execute(f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table + '_fts')}")[0]["cnt"]
+                source_count = self.execute(
+                    f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table)}"
+                )[0]["cnt"]
+                fts_count = self.execute(
+                    f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table + '_fts')}"
+                )[0]["cnt"]
                 if source_count > 0 and fts_count == 0:
-                    self.execute(f'INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts") VALUES(\'rebuild\')')
+                    self.execute(
+                        f'INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts") VALUES(\'rebuild\')'
+                    )
             except Exception as e:
-                logger.warning("Failed to rebuild FTS5 index for %s: %s", model_class._table, e)
+                logger.warning(
+                    "Failed to rebuild FTS5 index for %s: %s", model_class._table, e
+                )
 
     @property
     def primary_key_def(self) -> str:

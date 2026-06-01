@@ -219,13 +219,124 @@ class ModelMeta(type):
                         return []
                     fk_id = f"{rel.foreign_key}_id"
                     fk_type = f"{rel.foreign_key}_type"
-                    return target_model.where(fk_id, self.id).where(fk_type, self.__class__.__name__).get()
+                    return (
+                        target_model.where(fk_id, self.id)
+                        .where(fk_type, self.__class__.__name__)
+                        .get()
+                    )
 
                 attrs[k] = property(get_morph_many)
 
         for k in fields:
             if k in attrs and isinstance(attrs[k], Field):
                 attrs.pop(k)
+
+        # Auto-detect and generate translatable properties for fields suffix with _xx (e.g. title_fr)
+        translatable_bases = set()
+        for field_name in fields:
+            if len(field_name) > 3 and field_name[-3] == "_":
+                lang_suffix = field_name[-2:]
+                if lang_suffix.isalpha() and lang_suffix.islower():
+                    base_name = field_name[:-3]
+                    translatable_bases.add(base_name)
+
+        for base_name in translatable_bases:
+            if base_name not in attrs:
+
+                def make_getter(b_name=base_name):
+                    def getter(self):
+                        from ..context import current_request
+
+                        try:
+                            lang = current_request.lang if current_request else "en"
+                        except RuntimeError:
+                            lang = "en"
+
+                        # Load default application locale
+                        app_ref = None
+                        if current_request and hasattr(current_request, "environ"):
+                            app_ref = current_request.environ.get("asok.app")
+                        default_lang = (
+                            app_ref.config.get("LOCALE") if app_ref else "en"
+                        ) or "en"
+
+                        # 1. Try active language specific field (e.g. title_fr, title_en)
+                        target_field = f"{b_name}_{lang}"
+                        if target_field in self._fields:
+                            val = getattr(self, target_field, None)
+                            if val:
+                                return val
+
+                        # 2. If the active language is the default language,
+                        # or if the target field for the active language does not exist in fields,
+                        # try the base field (e.g. title) from raw dictionary.
+                        if lang == default_lang or target_field not in self._fields:
+                            val = self.__dict__.get(b_name)
+                            if val:
+                                return val
+
+                        # 3. Fallback to default application locale field if it exists
+                        default_field = f"{b_name}_{default_lang}"
+                        if default_field in self._fields:
+                            val = getattr(self, default_field, None)
+                            if val:
+                                return val
+                        elif default_lang == "en":
+                            val = self.__dict__.get(b_name)
+                            if val:
+                                return val
+
+                        # 4. Try common fallbacks (default_lang, then en, then fr)
+                        for fallback in (default_lang, "en", "fr"):
+                            fallback_field = f"{b_name}_{fallback}"
+                            if fallback_field in self._fields:
+                                val = getattr(self, fallback_field, None)
+                            elif fallback == default_lang:
+                                val = self.__dict__.get(b_name)
+                            if val:
+                                return val
+
+                        # 5. Fallback to any defined translation field
+                        for f_name in self._fields:
+                            if f_name.startswith(f"{b_name}_"):
+                                val = getattr(self, f_name, None)
+                                if val:
+                                    return val
+                        return self.__dict__.get(b_name)
+
+                    return getter
+
+                def make_setter(b_name=base_name):
+                    def setter(self, value):
+                        from ..context import current_request
+
+                        try:
+                            lang = current_request.lang if current_request else "en"
+                        except RuntimeError:
+                            lang = "en"
+
+                        # Load default application locale
+                        app_ref = None
+                        if current_request and hasattr(current_request, "environ"):
+                            app_ref = current_request.environ.get("asok.app")
+                        default_lang = (
+                            app_ref.config.get("LOCALE") if app_ref else "en"
+                        ) or "en"
+
+                        target_field = f"{b_name}_{lang}"
+                        if lang == default_lang:
+                            self.__dict__[b_name] = value
+                            if target_field in self._fields:
+                                setattr(self, target_field, value)
+                        else:
+                            if target_field in self._fields:
+                                setattr(self, target_field, value)
+                            else:
+                                self.__dict__[b_name] = value
+
+                    return setter
+
+                attrs[base_name] = property(make_getter(), make_setter())
 
         cls = super().__new__(mcs, name, bases, attrs)
         if name != "Model":
@@ -240,10 +351,17 @@ class Model(metaclass=ModelMeta):
     @classmethod
     def get_engine(cls):
         cached_engine = getattr(cls, "_cached_engine", None)
+        raw_path = cls._db_path
+        resolved_path = os.getenv(raw_path) if raw_path else None
+        if not resolved_path:
+            resolved_path = raw_path
+        if resolved_path:
+            resolved_path = resolved_path.strip()
+
         cached_path = getattr(cls, "_cached_path", None)
-        if cached_engine is None or cached_path != cls._db_path:
-            cls._cached_path = cls._db_path
-            cls._cached_engine = get_engine(cls._db_path)
+        if cached_engine is None or cached_path != resolved_path:
+            cls._cached_path = resolved_path
+            cls._cached_engine = get_engine(resolved_path)
         return cls._cached_engine
 
     def __init__(self, _trust: bool = False, **kwargs: Any):
@@ -307,13 +425,16 @@ class Model(metaclass=ModelMeta):
 
                     val = SafeString(val)
 
-            setattr(self, name, val)
+            if _trust:
+                self.__dict__[name] = val
+            else:
+                setattr(self, name, val)
 
         # Handle extra fields (e.g. aggregates from GROUP BY)
         if _trust:
             for k, v in kwargs.items():
                 if k not in self._fields and k != "id":
-                    setattr(self, k, v)
+                    self.__dict__[k] = v
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} id={self.id}>"
@@ -1204,3 +1325,17 @@ class Model(metaclass=ModelMeta):
         import asyncio
 
         await asyncio.to_thread(self.delete)
+
+
+def close_all_db_connections() -> None:
+    """Close all database connections held by the current thread."""
+    try:
+        Model.close_connections()
+        for model_cls in list(MODELS_REGISTRY.values()):
+            try:
+                model_cls.close_connections()
+            except Exception:
+                pass
+    except Exception:
+        pass
+

@@ -175,6 +175,7 @@ class TestRedisStore:
     @pytest.fixture
     def mock_redis(self):
         from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         store = {}
 
@@ -196,6 +197,7 @@ class TestRedisStore:
     def store(self, mock_redis):
         import sys
         from unittest.mock import MagicMock, patch
+
         mock_redis_module = MagicMock()
         mock_redis_module.Redis.from_url.return_value = mock_redis
 
@@ -226,4 +228,3 @@ class TestRedisStore:
         store.save(sid, {"step": 1})
         store.save(sid, {"step": 2})
         assert store.load(sid) == {"step": 2}
-

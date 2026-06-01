@@ -70,3 +70,43 @@ def test_worker_loop() -> None:
             run_worker()
 
             assert _dummy_task_executed == ("val1", "val2")
+
+
+def test_worker_status(capsys) -> None:
+    mock_redis = MagicMock()
+    mock_client = MagicMock()
+    mock_redis.Redis.from_url.return_value = mock_client
+
+    # Mock llen to return 2, lrange to return 2 tasks
+    mock_client.llen.return_value = 2
+    mock_client.lrange.return_value = [
+        json.dumps({
+            "module": "tests.test_queue",
+            "function": "dummy_task",
+            "args": ["val1"],
+            "kwargs": {"kwarg1": "val2"},
+        }).encode("utf-8"),
+        json.dumps({
+            "module": "tests.test_queue",
+            "function": "dummy_task",
+            "args": ["val3"],
+            "kwargs": {},
+        }).encode("utf-8"),
+    ]
+
+    from asok.cli.worker import run_worker
+
+    with patch.dict(sys.modules, {"redis": mock_redis}):
+        with patch.dict(os.environ, {"ASOK_QUEUE_BACKEND": "redis"}):
+            run_worker(action="status")
+
+            captured = capsys.readouterr()
+            import re
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            clean_out = ansi_escape.sub('', captured.out)
+
+            assert "Pending tasks: 2" in clean_out
+            assert "1. tests.test_queue.dummy_task('val3')" in clean_out
+            assert "2. tests.test_queue.dummy_task('val1', kwarg1='val2')" in clean_out
+
+

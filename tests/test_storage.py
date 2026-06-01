@@ -56,8 +56,7 @@ def test_s3_storage_mocked() -> None:
             # Test save
             url = storage.save("logo.png", b"file content", "images")
             assert (
-                url
-                == "https://test-bucket.s3.us-west-2.amazonaws.com/images/logo.png"
+                url == "https://test-bucket.s3.us-west-2.amazonaws.com/images/logo.png"
             )
             mock_client.put_object.assert_called_with(
                 Bucket="test-bucket",
@@ -94,10 +93,10 @@ def test_static_helper_s3() -> None:
         assert url.startswith("/css/app.css?v=")
 
     # Scenario 2: S3 static serving enabled, but backend is local
-    with patch.dict(os.environ, {
-        "ASOK_SERVE_STATIC_FROM_S3": "true",
-        "ASOK_STORAGE_BACKEND": "local"
-    }):
+    with patch.dict(
+        os.environ,
+        {"ASOK_SERVE_STATIC_FROM_S3": "true", "ASOK_STORAGE_BACKEND": "local"},
+    ):
         # Reset storage instance
         asok.core.storage._storage_instance = None
         url = req.static("css/app.css")
@@ -123,8 +122,9 @@ def test_static_helper_s3() -> None:
             asok.core.storage._storage_instance = None
 
             url = req.static("css/app.css")
-            assert url.startswith("https://static-bucket.s3.us-west-2.amazonaws.com/css/app.css?v=")
+            assert url.startswith(
+                "https://static-bucket.s3.us-west-2.amazonaws.com/css/app.css?v="
+            )
 
             # Reset singleton
             asok.core.storage._storage_instance = None
-

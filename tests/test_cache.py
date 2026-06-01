@@ -75,6 +75,7 @@ class TestRedisCache:
     @pytest.fixture
     def mock_redis(self):
         from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         store = {}
 
@@ -101,6 +102,7 @@ class TestRedisCache:
 
         def mock_keys(pattern):
             import fnmatch
+
             if isinstance(pattern, bytes):
                 pattern = pattern.decode("utf-8")
             return [
@@ -120,6 +122,7 @@ class TestRedisCache:
     def cache(self, mock_redis):
         import sys
         from unittest.mock import MagicMock, patch
+
         mock_redis_module = MagicMock()
         mock_redis_module.Redis.from_url.return_value = mock_redis
 
@@ -150,4 +153,38 @@ class TestRedisCache:
         cache.flush()
         assert cache.get("key1") is None
         assert cache.get("key2") is None
+
+
+class TestCachePageDecorator:
+    def test_csrf_token_not_cached(self):
+        from asok.cache import Cache, cache_page
+
+        # Create a mock Request
+        class MockRequest:
+            def __init__(self, path, token):
+                self.method = "GET"
+                self.path = path
+                self.query_string = ""
+                self.csrf_token_value = token
+
+        cache = Cache(backend="memory")
+
+        @cache_page(ttl=60, cache_instance=cache)
+        def view_fn(request):
+            return f"<html><head><meta name='csrf-token' content='{request.csrf_token_value}'></head><body>{request.csrf_token_value}</body></html>"
+
+        # Request 1 (first user/session)
+        req1 = MockRequest("/test-cached-csrf", "token_first_user")
+        res1 = view_fn(req1)
+        assert res1 == "<html><head><meta name='csrf-token' content='token_first_user'></head><body>token_first_user</body></html>"
+
+        # Verify that the value saved in the cache database has the placeholder instead of the token
+        raw_cached = cache.get("page_/test-cached-csrf")
+        # Since we modified the response before storing, calling cache.get directly will return the version with placeholder
+        assert raw_cached == "<html><head><meta name='csrf-token' content='__ASOK_CSRF_TOKEN_PLACEHOLDER__'></head><body>__ASOK_CSRF_TOKEN_PLACEHOLDER__</body></html>"
+
+        # Request 2 (second user/session, hits cache)
+        req2 = MockRequest("/test-cached-csrf", "token_second_user")
+        res2 = view_fn(req2)
+        assert res2 == "<html><head><meta name='csrf-token' content='token_second_user'></head><body>token_second_user</body></html>"
 

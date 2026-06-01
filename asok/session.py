@@ -82,7 +82,11 @@ class SessionStore:
                     "The 'redis' library is required to use the Redis session backend. "
                     "Install it using 'pip install asok[redis]'."
                 )
-            redis_url = os.environ.get("ASOK_REDIS_URL") or os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
+            redis_url = (
+                os.environ.get("ASOK_REDIS_URL")
+                or os.environ.get("REDIS_URL")
+                or "redis://localhost:6379/0"
+            )
             self._redis = redis.Redis.from_url(redis_url)
 
     def load(self, sid: str) -> Optional[dict[str, Any]]:
@@ -117,12 +121,43 @@ class SessionStore:
         """Rotate the session ID while preserving data to prevent session fixation.
 
         Returns the new session ID.
+
+        SECURITY: Atomic operation to prevent race conditions during session rotation.
         """
         data = self.load(sid)
         new_sid = self.generate_sid()
+
         if data is not None:
-            self.save(new_sid, data)
-        self.delete(sid)
+            # SECURITY: Use backend-specific atomic operations to prevent race conditions
+            if self.backend == "memory":
+                # Memory backend: use lock for atomicity
+                with self._lock:
+                    self._memory[new_sid] = {"data": dict(data), "ts": time.time()}
+                    self._memory.pop(sid, None)
+            elif self.backend == "redis":
+                # Redis backend: use pipeline for atomic operations
+                try:
+                    pipeline = self._redis.pipeline()
+                    rkey_old = self._redis_key(sid)
+                    rkey_new = self._redis_key(new_sid)
+                    data_str = json.dumps(data)
+                    pipeline.setex(rkey_new, self.ttl, data_str)
+                    pipeline.delete(rkey_old)
+                    pipeline.execute()
+                except Exception:
+                    # Fallback to non-atomic if pipeline fails
+                    self.save(new_sid, data)
+                    self.delete(sid)
+            else:
+                # File backend: use try/finally for cleanup
+                try:
+                    self.save(new_sid, data)
+                finally:
+                    self.delete(sid)
+        else:
+            # No data to preserve, just delete old session
+            self.delete(sid)
+
         return new_sid
 
     def cleanup(self) -> int:
@@ -293,8 +328,11 @@ class SessionStore:
         except OSError as e:
             # Fallback for systems that don't support os.open securely
             import logging
+
             logger = logging.getLogger("asok.session")
-            logger.warning(f"Failed to create session file with secure permissions: {e}")
+            logger.warning(
+                f"Failed to create session file with secure permissions: {e}"
+            )
 
             with open(fpath, "w") as f:
                 json.dump({"data": dict(data), "ts": time.time()}, f)

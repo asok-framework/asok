@@ -98,7 +98,9 @@ class AuthViewsMixin:
                 request.flash("error", self.t(request, "Invalid credentials"))
         except (AbortException, SecurityError) as e:
             # Special handling for CSRF failure in login form to avoid 403 pages
-            if isinstance(e, SecurityError) or (isinstance(e, AbortException) and e.status == 403):
+            if isinstance(e, SecurityError) or (
+                isinstance(e, AbortException) and e.status == 403
+            ):
                 request.flash(
                     "error",
                     self.t(request, "Security session expired. Please try again."),

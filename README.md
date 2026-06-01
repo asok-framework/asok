@@ -126,15 +126,15 @@ pip install asok
 If you wish to use optional database engines or the Redis backend (for caching and sessions), install the corresponding extra(s):
 
 ```bash
-# Optional database engines
+# Optional database engines & capabilities
 pip install "asok[postgres]"
 pip install "asok[mysql]"
-
-# Optional Redis backend
 pip install "asok[redis]"
+pip install "asok[async]"
 
 # Combined extras (e.g. Postgres + Redis)
 pip install "asok[postgres,redis]"
+
 ```
 
 or clone the repo and use the `asok/` folder.
@@ -392,18 +392,26 @@ Thanks to all our amazing contributors! 🎉
 
 Asok is actively developed with exciting features planned:
 
-**v0.2.0** - Enterprise Features
-- PostgreSQL & MySQL support
-- Advanced ORM relationships (many-to-many improvements)
-- WebSocket rooms for real-time collaboration
-- Background job queue system
-- Plugin ecosystem & CLI enhancements
+**v0.3.0** - Enterprise Ready ✅ **Released June 2026**
+- **Async/ASGI**: Full async/await support with ASGI/WSGI dual engine
+- **Multi-DB**: PostgreSQL & MySQL with connection pooling, vector search
+- **Advanced ORM**: Polymorphic relations, self-referencing, nested eager loading, N+1 detection
+- **WebSocket Rooms**: Multi-user collaboration with room broadcasting
+- **Redis**: Caching, sessions, cache warming, fragment caching
+- **Cloud**: AWS S3 storage integration
+- **Background Jobs**: `asok worker` for async task processing
+- **Admin Enhancements**: Inline editing, advanced filtering, saved presets, column customization
+- **VSCode Extension**: Syntax highlighting, IntelliSense, snippets, route navigation
+- **Localization**: Translation management UI and automatic string extraction
+- **Query Optimization**: N+1 detection, query analysis, index suggestions, slow query logging
 
-**v0.3.0** - Modern Stack
-- GraphQL API support with auto-generated schemas
-- Server-side rendering (SSR) & static site generation
-- Built-in monitoring & observability tools
-- Full async/await support (ASGI) ✅ **Implemented in v0.2.x**
+**v0.4.0** - GraphQL & Scale (Planned Q4 2026)
+- GraphQL API with auto-generated schemas and subscriptions
+- Advanced WebSocket features (presence, permissions, private messages)
+- Multi-database scaling (read replicas, sharding, load balancing)
+- Plugin ecosystem for third-party extensions
+- Built-in monitoring & observability (Prometheus/Grafana)
+- Advanced SSR & hydration (islands architecture, SSG, ISR)
 
 **Note:** Timelines are subject to change based on community feedback and development priorities.
 
@@ -411,20 +419,22 @@ Asok is actively developed with exciting features planned:
 
 ## 🏭 Production Status
 
-Asok v0.1.x is **early-stage software** under active development. It's suitable for:
+Asok v0.3.0 is **actively developed software** with growing production adoption. It's suitable for:
 
 **✅ Recommended for:**
-- Personal projects and MVPs
+- Production web applications and APIs
 - Internal tools and admin dashboards
+- Personal projects and MVPs
 - Rapid prototyping and experimentation
 - Learning full-stack Python development
-- Projects where dependency auditing is critical
+- Projects requiring zero runtime dependencies
+- Applications where dependency auditing is critical
 
 **⚠️ Current Limitations:**
-- **Ecosystem**: Early-stage community, limited third-party plugins
-- **Maturity**: v0.1.x - APIs may evolve before v1.0
+- **Ecosystem**: Growing community, limited third-party plugins
+- **Maturity**: v0.3.x - APIs are stabilizing but may evolve before v1.0
 
-**For mission-critical production applications**, consider your specific requirements and evaluate if Asok's current feature set meets your needs.
+**For mission-critical production applications**, Asok v0.3.0 provides enterprise features (async, multi-DB, Redis, S3) suitable for production workloads. Evaluate if the current feature set meets your specific requirements.
 
 ---
 

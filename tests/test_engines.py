@@ -24,6 +24,7 @@ def test_get_engine():
     assert isinstance(mysql_engine, MySQLEngine)
     assert mysql_engine.dsn == "mysql://user:pass@localhost/db"
 
+
 def test_engine_quoting():
     sqlite = SQLiteEngine("db.sqlite3")
     postgres = PostgresEngine("postgresql://...")
@@ -31,7 +32,8 @@ def test_engine_quoting():
 
     assert sqlite.quote_identifier("users") == '"users"'
     assert postgres.quote_identifier("users") == '"users"'
-    assert mysql.quote_identifier("users") == '`users`'
+    assert mysql.quote_identifier("users") == "`users`"
+
 
 def test_engine_query_translation():
     sqlite = SQLiteEngine("db.sqlite3")
@@ -52,6 +54,7 @@ def test_engine_query_translation():
     sql_my, args_my = mysql.translate_query(sql, args)
     assert sql_my == "SELECT * FROM users WHERE email = %s AND active = %s"
     assert args_my == args
+
 
 def test_engine_column_types():
     postgres = PostgresEngine("postgresql://...")
@@ -82,8 +85,10 @@ def test_engine_column_types():
     assert postgres.get_column_type(vector_field) == "vector(512)"
     assert mysql.get_column_type(vector_field) == "JSON"
 
+
 def test_sqlite_exception_translation():
     import sqlite3
+
     sqlite = SQLiteEngine("db.sqlite3")
 
     # Test Unique constraint failed error

@@ -9,6 +9,7 @@ from .base import BaseEngine
 
 logger = logging.getLogger("asok.orm")
 
+
 class MySQLTransaction:
     """Transaction context manager for MySQL with nested transaction (SAVEPOINT) support."""
 
@@ -47,6 +48,7 @@ class MySQLTransaction:
                 with self.conn.cursor() as cur:
                     cur.execute(f"RELEASE SAVEPOINT {self.sp_name}")
 
+
 class MySQLEngine(BaseEngine):
     """MySQL engine backend using the pymysql library."""
 
@@ -65,7 +67,7 @@ class MySQLEngine(BaseEngine):
         except ImportError:
             raise ImportError(
                 "MySQL support requires 'pymysql'.\n"
-                "Please install it using: pip install \"asok[mysql]\""
+                'Please install it using: pip install "asok[mysql]"'
             )
 
         # Parse DSN (mysql://user:password@host:port/database)
@@ -83,7 +85,7 @@ class MySQLEngine(BaseEngine):
             password=password,
             database=db,
             cursorclass=pymysql.cursors.DictCursor,
-            autocommit=True
+            autocommit=True,
         )
         self._local.conn = conn
 
@@ -103,7 +105,9 @@ class MySQLEngine(BaseEngine):
         if hasattr(self._local, "conn"):
             delattr(self._local, "conn")
 
-    def execute(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> List[Dict[str, Any]] | int:
+    def execute(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> List[Dict[str, Any]] | int:
         import time
 
         from ...context import request_var
@@ -133,7 +137,9 @@ class MySQLEngine(BaseEngine):
         # MySQL uses backticks
         return f"`{name}`"
 
-    def translate_query(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> Tuple[str, List[Any]]:
+    def translate_query(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> Tuple[str, List[Any]]:
         # Translate ? to %s
         translated_sql = sql.replace("?", "%s")
         return translated_sql, list(args) if args else []
@@ -187,8 +193,11 @@ class MySQLEngine(BaseEngine):
     # MySQL/MariaDB default minimum full-text word length (innodb_ft_min_token_size)
     _FT_MIN_WORD_LEN: int = 3
 
-    def search_sql(self, table: str, columns: List[str], term: str) -> Tuple[str, List[Any]]:
+    def search_sql(
+        self, table: str, columns: List[str], term: str
+    ) -> Tuple[str, List[Any]]:
         import re
+
         cols = ", ".join([self.quote_identifier(c) for c in columns])
 
         # Sanitize: keep only alphanumeric chars and spaces; strip FTS operators
@@ -207,18 +216,22 @@ class MySQLEngine(BaseEngine):
         return f"MATCH ({cols}) AGAINST (? IN BOOLEAN MODE)", [ft_term]
 
     def vector_distance_sql(self, column: str, metric: str) -> str:
-        raise NotImplementedError("Vector search is not natively supported on the MySQL backend.")
+        raise NotImplementedError(
+            "Vector search is not natively supported on the MySQL backend."
+        )
 
     def prepare_value(self, field: Any, value: Any) -> Any:
         if getattr(field, "is_vector", False) and value is not None:
             # Serialize to JSON array representation for MySQL JSON column
             import json
+
             return json.dumps(list(value))
         return value
 
     def deserialize_value(self, field: Any, value: Any) -> Any:
         if getattr(field, "is_vector", False) and value is not None:
             import json
+
             if isinstance(value, str):
                 try:
                     return [float(x) for x in json.loads(value)]
@@ -235,10 +248,12 @@ class MySQLEngine(BaseEngine):
             return e
         if isinstance(e, pymysql.err.IntegrityError):
             from ..exceptions import ModelError
+
             err_code = e.args[0] if e.args else None
             err_msg = e.args[1] if len(e.args) > 1 else ""
             if err_code == 1062:
                 import re
+
                 m = re.search(r"for key '.*?\.(\w+)'", err_msg)
                 if not m:
                     m = re.search(r"for key '(\w+)'", err_msg)
@@ -246,6 +261,7 @@ class MySQLEngine(BaseEngine):
                 return ModelError(f"{field} already exists", field=field, original=e)
             elif err_code in (1048, 1364):
                 import re
+
                 m = re.search(r"Column '(\w+)' cannot be null", err_msg)
                 field = m.group(1) if m else "field"
                 return ModelError(f"{field} is required", field=field, original=e)
@@ -255,12 +271,20 @@ class MySQLEngine(BaseEngine):
     def post_create_table(self, model_class: Any) -> None:
         # Create FULLTEXT index for full-text search
         if model_class._search_fields:
-            cols = ", ".join([self.quote_identifier(c) for c in model_class._search_fields])
+            cols = ", ".join(
+                [self.quote_identifier(c) for c in model_class._search_fields]
+            )
             index_name = f"idx_{model_class._table}_fts"
             try:
-                self.execute(f"ALTER TABLE {self.quote_identifier(model_class._table)} ADD FULLTEXT INDEX {self.quote_identifier(index_name)} ({cols});")
+                self.execute(
+                    f"ALTER TABLE {self.quote_identifier(model_class._table)} ADD FULLTEXT INDEX {self.quote_identifier(index_name)} ({cols});"
+                )
             except Exception as e:
-                logger.warning("Failed to create FULLTEXT search index for %s: %s", model_class._table, e)
+                logger.warning(
+                    "Failed to create FULLTEXT search index for %s: %s",
+                    model_class._table,
+                    e,
+                )
 
     def transaction(self) -> Any:
         return MySQLTransaction(self)

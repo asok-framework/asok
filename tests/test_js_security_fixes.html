@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asok JavaScript Security Fixes - Test Suite</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 1200px; margin: 0 auto; }
+        h1 { color: #2c3e50; }
+        .test { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .test.pass { background: #d4edda; border-color: #c3e6cb; }
+        .test.fail { background: #f8d7da; border-color: #f5c6cb; }
+        .test h3 { margin-top: 0; }
+        .test-result { font-weight: bold; margin-top: 10px; }
+        code { background: #f4f4f4; padding: 2px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>🔒 Asok JavaScript Security Fixes - Test Suite</h1>
+    <p>Testing all security fixes applied to JavaScript assets</p>
+
+    <div id="test-results"></div>
+
+    <!-- Load security utils FIRST -->
+    <script src="../asok/core/assets/asok_security_utils.js"></script>
+
+    <script>
+        const results = [];
+
+        function test(name, fn) {
+            try {
+                const result = fn();
+                if (result) {
+                    results.push({ name, pass: true, message: 'Passed' });
+                } else {
+                    results.push({ name, pass: false, message: 'Assertion failed' });
+                }
+            } catch (error) {
+                results.push({ name, pass: false, message: error.message });
+            }
+        }
+
+        function assert(condition, message) {
+            if (!condition) {
+                throw new Error(message || 'Assertion failed');
+            }
+            return true;
+        }
+
+        // ==========================================
+        // Test 1: HTML Sanitization
+        // ==========================================
+        test('HTML Sanitization - Remove script tags', () => {
+            const malicious = '<div>Hello</div><script>alert("XSS")</script>';
+            const sanitized = AsokSecurity.sanitizeHtml(malicious);
+            return assert(!sanitized.includes('<script'), 'Script tag was not removed');
+        });
+
+        test('HTML Sanitization - Remove event handlers', () => {
+            const malicious = '<img src="x" onerror="alert(1)">';
+            const sanitized = AsokSecurity.sanitizeHtml(malicious);
+            return assert(!sanitized.includes('onerror'), 'Event handler was not removed');
+        });
+
+        test('HTML Sanitization - Remove dangerous tags', () => {
+            const malicious = '<div>Test</div><iframe src="evil.com"></iframe>';
+            const sanitized = AsokSecurity.sanitizeHtml(malicious);
+            return assert(!sanitized.includes('iframe'), 'Iframe was not removed');
+        });
+
+        test('HTML Sanitization - Preserve safe HTML', () => {
+            const safe = '<div class="test"><p>Hello <strong>World</strong></p></div>';
+            const sanitized = AsokSecurity.sanitizeHtml(safe);
+            return assert(sanitized.includes('<div') && sanitized.includes('<p>') && sanitized.includes('<strong>'),
+                         'Safe HTML was incorrectly modified');
+        });
+
+        // ==========================================
+        // Test 2: URL Validation
+        // ==========================================
+        test('URL Validation - Block javascript: protocol', () => {
+            const malicious = 'javascript:alert(1)';
+            return assert(!AsokSecurity.isSafeUrl(malicious), 'javascript: URL was not blocked');
+        });
+
+        test('URL Validation - Block data: protocol', () => {
+            const malicious = 'data:text/html,<script>alert(1)</script>';
+            return assert(!AsokSecurity.isSafeUrl(malicious), 'data: URL was not blocked');
+        });
+
+        test('URL Validation - Allow HTTPS URLs', () => {
+            const safe = 'https://example.com/page';
+            return assert(AsokSecurity.isSafeUrl(safe), 'HTTPS URL was incorrectly blocked');
+        });
+
+        test('URL Validation - Allow relative URLs', () => {
+            const safe = '/path/to/page';
+            return assert(AsokSecurity.isSafeUrl(safe), 'Relative URL was incorrectly blocked');
+        });
+
+        test('URL Validation - Allow fragment identifiers', () => {
+            const safe = '#section-1';
+            return assert(AsokSecurity.isSafeUrl(safe), 'Fragment identifier was incorrectly blocked');
+        });
+
+        // ==========================================
+        // Test 3: Attribute Validation
+        // ==========================================
+        test('Attribute Validation - Block event handlers', () => {
+            const malicious = 'onclick';
+            return assert(!AsokSecurity.isSafeAttribute(malicious), 'onclick attribute was not blocked');
+        });
+
+        test('Attribute Validation - Block onload', () => {
+            const malicious = 'onload';
+            return assert(!AsokSecurity.isSafeAttribute(malicious), 'onload attribute was not blocked');
+        });
+
+        test('Attribute Validation - Allow safe attributes', () => {
+            const safe = 'class';
+            return assert(AsokSecurity.isSafeAttribute(safe), 'Safe attribute was incorrectly blocked');
+        });
+
+        test('Attribute Validation - Allow data attributes', () => {
+            const safe = 'data-value';
+            return assert(AsokSecurity.isSafeAttribute(safe), 'Data attribute was incorrectly blocked');
+        });
+
+        // ==========================================
+        // Test 4: Duration Validation
+        // ==========================================
+        test('Duration Validation - Cap excessive durations', () => {
+            const result = AsokSecurity.safeDuration(999999, 5000);
+            return assert(result === 5000, 'Excessive duration was not capped');
+        });
+
+        test('Duration Validation - Allow normal durations', () => {
+            const result = AsokSecurity.safeDuration(300, 5000);
+            return assert(result === 300, 'Normal duration was incorrectly modified');
+        });
+
+        test('Duration Validation - Handle negative values', () => {
+            const result = AsokSecurity.safeDuration(-100, 5000);
+            return assert(result === 0, 'Negative duration was not converted to 0');
+        });
+
+        // ==========================================
+        // Test 5: WebSocket Message Validation
+        // ==========================================
+        test('WebSocket Validation - Accept valid render message', () => {
+            const valid = { op: 'render', cid: 'comp-123', html: '<div>Test</div>' };
+            return assert(AsokSecurity.validateWsMessage(valid), 'Valid message was rejected');
+        });
+
+        test('WebSocket Validation - Reject invalid op', () => {
+            const invalid = { op: 'malicious', cid: 'comp-123' };
+            return assert(!AsokSecurity.validateWsMessage(invalid), 'Invalid op was accepted');
+        });
+
+        test('WebSocket Validation - Reject malformed cid', () => {
+            const invalid = { op: 'render', cid: '<script>alert(1)</script>' };
+            return assert(!AsokSecurity.validateWsMessage(invalid), 'Malformed cid was accepted');
+        });
+
+        test('WebSocket Validation - Reject missing op', () => {
+            const invalid = { cid: 'comp-123', html: '<div>Test</div>' };
+            return assert(!AsokSecurity.validateWsMessage(invalid), 'Message without op was accepted');
+        });
+
+        // ==========================================
+        // Test 6: JSON Parsing
+        // ==========================================
+        test('JSON Parsing - Parse valid JSON', () => {
+            const result = AsokSecurity.safeJsonParse('{"key":"value"}');
+            return assert(result && result.key === 'value', 'Valid JSON was not parsed correctly');
+        });
+
+        test('JSON Parsing - Handle invalid JSON', () => {
+            const result = AsokSecurity.safeJsonParse('{invalid json}');
+            return assert(result === null, 'Invalid JSON should return null');
+        });
+
+        // ==========================================
+        // Test 7: Sensitive Data Detection
+        // ==========================================
+        test('Sensitive Data - Detect password fields', () => {
+            const formData = new FormData();
+            formData.append('username', 'test');
+            formData.append('password', 'secret');
+            return assert(AsokSecurity.hasSensitiveData(formData), 'Password field not detected');
+        });
+
+        test('Sensitive Data - Detect token fields', () => {
+            const formData = new FormData();
+            formData.append('csrf_token', '12345');
+            return assert(AsokSecurity.hasSensitiveData(formData), 'Token field not detected');
+        });
+
+        test('Sensitive Data - Allow non-sensitive data', () => {
+            const formData = new FormData();
+            formData.append('email', 'test@example.com');
+            formData.append('name', 'John Doe');
+            return assert(!AsokSecurity.hasSensitiveData(formData), 'Non-sensitive data incorrectly flagged');
+        });
+
+        // ==========================================
+        // Test 8: Port Validation
+        // ==========================================
+        test('Port Validation - Accept valid port', () => {
+            return assert(AsokSecurity.isValidPort(8001), 'Valid port was rejected');
+        });
+
+        test('Port Validation - Reject privileged port', () => {
+            return assert(!AsokSecurity.isValidPort(80), 'Privileged port was accepted');
+        });
+
+        test('Port Validation - Reject invalid port', () => {
+            return assert(!AsokSecurity.isValidPort(99999), 'Out-of-range port was accepted');
+        });
+
+        // ==========================================
+        // Test 9: HTML Escaping
+        // ==========================================
+        test('HTML Escaping - Escape special characters', () => {
+            const text = '<script>alert("XSS")</script>';
+            const escaped = AsokSecurity.escapeHtml(text);
+            return assert(!escaped.includes('<script>') && escaped.includes('&lt;'),
+                         'HTML was not properly escaped');
+        });
+
+        test('HTML Escaping - Preserve regular text', () => {
+            const text = 'Hello World 123';
+            const escaped = AsokSecurity.escapeHtml(text);
+            return assert(escaped === text, 'Regular text was incorrectly modified');
+        });
+
+        // ==========================================
+        // Render Results
+        // ==========================================
+        const container = document.getElementById('test-results');
+        const passedCount = results.filter(r => r.pass).length;
+        const totalCount = results.length;
+
+        container.innerHTML = `
+            <h2>Test Results: ${passedCount}/${totalCount} Passed</h2>
+            ${results.map(r => `
+                <div class="test ${r.pass ? 'pass' : 'fail'}">
+                    <h3>${r.pass ? '✅' : '❌'} ${r.name}</h3>
+                    <div class="test-result">${r.message}</div>
+                </div>
+            `).join('')}
+        `;
+
+        // Log summary
+        console.log(`%c Security Tests: ${passedCount}/${totalCount} passed`,
+                    `font-size: 16px; font-weight: bold; color: ${passedCount === totalCount ? 'green' : 'red'}`);
+
+        if (passedCount === totalCount) {
+            console.log('%c All security fixes are working correctly! 🎉',
+                       'font-size: 14px; color: green');
+        } else {
+            console.error(`${totalCount - passedCount} test(s) failed!`);
+        }
+    </script>
+</body>
+</html>

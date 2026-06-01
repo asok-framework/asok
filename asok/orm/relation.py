@@ -74,9 +74,7 @@ class Relation:
         return Relation("MorphTo", "", id_column, type_column)
 
     @staticmethod
-    def MorphMany(
-        target_model_name: str, relation_name: str
-    ) -> Relation:
+    def MorphMany(target_model_name: str, relation_name: str) -> Relation:
         """Polymorphic has-many-like relationship.
 
         Establish a one-to-many relationship with a child model that can be associated
@@ -87,5 +85,3 @@ class Relation:
                 comments = Relation.MorphMany("Comment", "commentable")
         """
         return Relation("MorphMany", target_model_name, relation_name)
-
-

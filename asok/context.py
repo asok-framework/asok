@@ -67,4 +67,3 @@ def request_context(request_obj: "Request") -> Iterator[None]:
         yield
     finally:
         request_var.reset(token)
-

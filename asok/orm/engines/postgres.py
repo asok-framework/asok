@@ -8,6 +8,7 @@ from .base import BaseEngine
 
 logger = logging.getLogger("asok.orm")
 
+
 class PostgresEngine(BaseEngine):
     """PostgreSQL engine backend using the psycopg (Psycopg 3) library."""
 
@@ -22,12 +23,13 @@ class PostgresEngine(BaseEngine):
         try:
             from psycopg.rows import dict_row
             from psycopg_pool import ConnectionPool
+
             self._pool = ConnectionPool(
                 self.dsn,
                 min_size=1,
                 max_size=10,
                 open=True,
-                kwargs={"row_factory": dict_row, "autocommit": True}
+                kwargs={"row_factory": dict_row, "autocommit": True},
             )
         except Exception:
             self._pool = None
@@ -52,7 +54,7 @@ class PostgresEngine(BaseEngine):
         except ImportError:
             raise ImportError(
                 "PostgreSQL support requires 'psycopg'.\n"
-                "Please install it using: pip install \"asok[postgres]\""
+                'Please install it using: pip install "asok[postgres]"'
             )
 
         conn = psycopg.connect(self.dsn, row_factory=dict_row, autocommit=True)
@@ -86,7 +88,9 @@ class PostgresEngine(BaseEngine):
                 pass
         self._local._all_conns = []
 
-    def execute(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> List[Dict[str, Any]] | int:
+    def execute(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> List[Dict[str, Any]] | int:
         import time
 
         from ...context import request_var
@@ -115,7 +119,9 @@ class PostgresEngine(BaseEngine):
     def quote_identifier(self, name: str) -> str:
         return f'"{name}"'
 
-    def translate_query(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> Tuple[str, List[Any]]:
+    def translate_query(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> Tuple[str, List[Any]]:
         # Translate SQLite ? to psycopg %s
         translated_sql = sql.replace("?", "%s")
         return translated_sql, list(args) if args else []
@@ -167,10 +173,16 @@ class PostgresEngine(BaseEngine):
         rows = self.execute(sql, (table_name,))
         return [row["column_name"] for row in rows]
 
-    def search_sql(self, table: str, columns: List[str], term: str) -> Tuple[str, List[Any]]:
-        col_expr = " || ' ' || ".join([f"coalesce({self.quote_identifier(c)}, '')" for c in columns])
+    def search_sql(
+        self, table: str, columns: List[str], term: str
+    ) -> Tuple[str, List[Any]]:
+        col_expr = " || ' ' || ".join(
+            [f"coalesce({self.quote_identifier(c)}, '')" for c in columns]
+        )
         # Using simple language search configuration
-        where_clause = f"to_tsvector('simple', {col_expr}) @@ plainto_tsquery('simple', ?)"
+        where_clause = (
+            f"to_tsvector('simple', {col_expr}) @@ plainto_tsquery('simple', ?)"
+        )
         return where_clause, [term]
 
     def vector_distance_sql(self, column: str, metric: str) -> str:
@@ -194,7 +206,9 @@ class PostgresEngine(BaseEngine):
         if getattr(field, "is_vector", False) and value is not None:
             if isinstance(value, str):
                 val_clean = value.strip("[]")
-                return [float(x) for x in val_clean.split(",") if x] if val_clean else []
+                return (
+                    [float(x) for x in val_clean.split(",") if x] if val_clean else []
+                )
             elif isinstance(value, list):
                 return [float(x) for x in value]
         return value
@@ -206,10 +220,12 @@ class PostgresEngine(BaseEngine):
             return e
         if isinstance(e, psycopg.Error):
             from ..exceptions import ModelError
+
             # Check unique violation (sqlstate '23505')
             if getattr(e.diag, "sqlstate", None) == "23505":
                 detail = getattr(e.diag, "message_detail", "") or ""
                 import re
+
                 m = re.search(r"Key \((.*?)\)=", detail)
                 field = m.group(1) if m else "field"
                 return ModelError(f"{field} already exists", field=field, original=e)
@@ -222,7 +238,9 @@ class PostgresEngine(BaseEngine):
 
     def post_create_table(self, model_class: Any) -> None:
         # Create pgvector extension if a vector field is present
-        has_vector = any(getattr(f, "is_vector", False) for f in model_class._fields.values())
+        has_vector = any(
+            getattr(f, "is_vector", False) for f in model_class._fields.values()
+        )
         if has_vector:
             try:
                 self.execute("CREATE EXTENSION IF NOT EXISTS vector;")
@@ -231,12 +249,23 @@ class PostgresEngine(BaseEngine):
 
         # Create indexes for full-text search
         if model_class._search_fields:
-            col_expr = " || ' ' || ".join([f"coalesce({self.quote_identifier(c)}, '')" for c in model_class._search_fields])
+            col_expr = " || ' ' || ".join(
+                [
+                    f"coalesce({self.quote_identifier(c)}, '')"
+                    for c in model_class._search_fields
+                ]
+            )
             index_name = f"idx_{model_class._table}_fts"
             try:
-                self.execute(f"CREATE INDEX IF NOT EXISTS {self.quote_identifier(index_name)} ON {self.quote_identifier(model_class._table)} USING gin(to_tsvector('simple', {col_expr}));")
+                self.execute(
+                    f"CREATE INDEX IF NOT EXISTS {self.quote_identifier(index_name)} ON {self.quote_identifier(model_class._table)} USING gin(to_tsvector('simple', {col_expr}));"
+                )
             except Exception as e:
-                logger.warning("Failed to create GIN search index for %s: %s", model_class._table, e)
+                logger.warning(
+                    "Failed to create GIN search index for %s: %s",
+                    model_class._table,
+                    e,
+                )
 
     def transaction(self) -> Any:
         return self.get_connection().transaction()

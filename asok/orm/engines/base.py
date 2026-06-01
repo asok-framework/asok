@@ -18,7 +18,9 @@ class BaseEngine(ABC):
         pass
 
     @abstractmethod
-    def execute(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> List[Dict[str, Any]]:
+    def execute(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> List[Dict[str, Any]]:
         """Execute a query and return rows as a list of dictionaries."""
         pass
 
@@ -28,7 +30,9 @@ class BaseEngine(ABC):
         pass
 
     @abstractmethod
-    def translate_query(self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None) -> Tuple[str, List[Any]]:
+    def translate_query(
+        self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
+    ) -> Tuple[str, List[Any]]:
         """Translate SQL dialect (converting '?' placeholders to engine format)."""
         pass
 
@@ -48,7 +52,9 @@ class BaseEngine(ABC):
         pass
 
     @abstractmethod
-    def search_sql(self, table: str, columns: List[str], term: str) -> Tuple[str, List[Any]]:
+    def search_sql(
+        self, table: str, columns: List[str], term: str
+    ) -> Tuple[str, List[Any]]:
         """Build the full-text search clause and parameters for the engine."""
         pass
 
@@ -89,4 +95,3 @@ class BaseEngine(ABC):
     def transaction(self) -> Any:
         """Context manager for managing transactions."""
         raise NotImplementedError("Transaction is not supported on this engine.")
-

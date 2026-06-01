@@ -219,7 +219,7 @@ def render_image(field: Any, val: str, merged: dict[str, Any]) -> str:
         preview_attrs["alt"] = "Preview"
         preview_attrs["asok-cloak"] = True
 
-        html_out += f'<br><img{_render_attrs(preview_attrs)}>'
+        html_out += f"<br><img{_render_attrs(preview_attrs)}>"
         html_out += "</div>"
     else:
         # No preview - just a simple file input
@@ -268,9 +268,7 @@ def render_tags(field: Any, val: str, merged: dict[str, Any]) -> str:
     selected_tags = [
         {"value": v, "label": current_labels.get(v, v)} for v in current_values
     ]
-    state = html_safe_json(
-        {"selected": selected_tags, "open": False, "search": ""}
-    )
+    state = html_safe_json({"selected": selected_tags, "open": False, "search": ""})
 
     container_attrs = _extract_nested_attrs(merged, "container")
     container_class = container_attrs.get("class", "")
@@ -302,33 +300,31 @@ def render_tags(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
     # Display selected tags
-    html_out += f'  <div{_render_attrs(selected_attrs)}>'
+    html_out += f"  <div{_render_attrs(selected_attrs)}>"
     html_out += '    <template asok-for="tag in selected">'
-    html_out += f'      <span{_render_attrs(tag_attrs)}>'
+    html_out += f"      <span{_render_attrs(tag_attrs)}>"
     html_out += '        <span asok-text="tag.label"></span>'
-    html_out += (
-        f'        <button type="button" class="asok-tag-remove" asok-on:click="Asok.removeTag($, tag, $refs.input_{field.name})">×</button>'
-    )
+    html_out += f'        <button type="button" class="asok-tag-remove" asok-on:click="Asok.removeTag($, tag, $refs.input_{field.name})">×</button>'
     html_out += "      </span>"
     html_out += "    </template>"
 
     # Add button
     add_attrs["type"] = "button"
     add_attrs["asok-on:click"] = "open = !open"
-    html_out += f'    <button{_render_attrs(add_attrs)}>+ Add</button>'
+    html_out += f"    <button{_render_attrs(add_attrs)}>+ Add</button>"
     html_out += "  </div>"
 
     # Dropdown menu with options
     menu_attrs["asok-show"] = "open"
     menu_attrs["asok-on:click.outside"] = "open = false"
     menu_attrs["asok-cloak"] = True
-    html_out += f'  <div{_render_attrs(menu_attrs)}>'
+    html_out += f"  <div{_render_attrs(menu_attrs)}>"
     if searchable:
         search_attrs["type"] = "text"
         search_attrs["asok-model"] = "search"
         search_attrs["placeholder"] = "Search..."
         search_attrs["asok-on:keydown.escape"] = "open = false"
-        html_out += f'    <input{_render_attrs(search_attrs)}>'
+        html_out += f"    <input{_render_attrs(search_attrs)}>"
     html_out += '    <div class="asok-tags-options">'
 
     for opt in available_options:
@@ -345,7 +341,7 @@ def render_tags(field: Any, val: str, merged: dict[str, Any]) -> str:
         option_attrs["asok-show"] = f"{search_cond} && !{already_selected}"
         option_attrs["asok-on:click"] = click_action
 
-        html_out += f'      <div{_render_attrs(option_attrs)}>{esc(opt["label"])}</div>'
+        html_out += f"      <div{_render_attrs(option_attrs)}>{esc(opt['label'])}</div>"
 
     html_out += "    </div>"
     html_out += "  </div>"
@@ -406,7 +402,7 @@ def render_daterange(field: Any, val: str, merged: dict[str, Any]) -> str:
 
     label_attrs = dict(label_attrs_base)
     label_attrs["class"] = f"asok-daterange-label {label_class_base}".strip()
-    html_out += f'    <label{_render_attrs(label_attrs)}>{esc(start_label)}</label>'
+    html_out += f"    <label{_render_attrs(label_attrs)}>{esc(start_label)}</label>"
 
     start_attrs = {
         "type": "date",
@@ -418,7 +414,9 @@ def render_daterange(field: Any, val: str, merged: dict[str, Any]) -> str:
         start_attrs["min"] = datetime.date.today().isoformat()
 
     # Use asok-model for two-way binding and update hidden input
-    update_hidden = f"Asok.updateHiddenJson($refs.hidden_{field.name}, {{'start':start,'end':end}})"
+    update_hidden = (
+        f"Asok.updateHiddenJson($refs.hidden_{field.name}, {{'start':start,'end':end}})"
+    )
     html_out += f'    <input{_render_attrs(start_attrs)} asok-model="start" asok-on:change="{update_hidden}">'
     html_out += "  </div>"
 
@@ -429,7 +427,7 @@ def render_daterange(field: Any, val: str, merged: dict[str, Any]) -> str:
 
     label_attrs = dict(label_attrs_base)
     label_attrs["class"] = f"asok-daterange-label {label_class_base}".strip()
-    html_out += f'    <label{_render_attrs(label_attrs)}>{esc(end_label)}</label>'
+    html_out += f"    <label{_render_attrs(label_attrs)}>{esc(end_label)}</label>"
 
     end_attrs = {
         "type": "date",
@@ -512,12 +510,15 @@ def render_otp(field: Any, val: str, merged: dict[str, Any]) -> str:
             "asok-model": f"digits[{i}]",
         }
         input_attrs["class"] = f"asok-otp-input {input_class_base}".strip()
-        # Auto-focus next input on keyup
-        next_focus = "Asok.handleOtpKeyup($event)"
-        html_out += f'<input{_render_attrs(input_attrs)} asok-on:keyup="{next_focus}">'
+        # Update hidden value on input, auto-focus next on keyup
+        input_attrs["asok-on:input"] = f"Asok.updateHiddenValue($refs.hidden_{field.name}, digits.join(''))"
+        input_attrs["asok-on:keyup"] = "Asok.handleOtpKeyup($event)"
+        html_out += f'<input{_render_attrs(input_attrs)}>'
 
-    # Hidden input to store the complete OTP. Bound to the reactive 'digits' array.
-    html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" asok-bind:value="digits.join(\'\')" asok-ref="hidden_{field.name}">'
+    # Hidden input to store the complete OTP.
+    # Value is updated imperatively via Asok.updateHiddenValue() on each input/keyup
+    current_otp = current_value[:length]
+    html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" value="{current_otp}" asok-ref="hidden_{field.name}">'
     html_out += "</div>"
     return html_out
 
@@ -595,7 +596,9 @@ def render_timerange(field: Any, val: str, merged: dict[str, Any]) -> str:
 
     input_attrs_base = _extract_nested_attrs(merged, "input")
     input_class_base = input_attrs_base.get("class", "")
-    update_hidden = f"Asok.updateHiddenJson($refs.hidden_{field.name}, {{'start':start,'end':end}})"
+    update_hidden = (
+        f"Asok.updateHiddenJson($refs.hidden_{field.name}, {{'start':start,'end':end}})"
+    )
 
     # Start time input
     field_attrs = dict(field_attrs_base)
@@ -693,18 +696,18 @@ def render_files(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out += f'<input{_render_attrs(file_attrs)} asok-on:change="{change_handler}">'
 
     if preview_enabled:
-        html_out += f'  <div{_render_attrs(preview_attrs)}>'
+        html_out += f"  <div{_render_attrs(preview_attrs)}>"
         html_out += '  <template asok-for="(file, index) in files">'
-        html_out += f'    <div{_render_attrs(item_attrs)}>'
+        html_out += f"    <div{_render_attrs(item_attrs)}>"
 
         img_attrs["asok-show"] = "file.url"
         img_attrs["asok-bind:src"] = "file.url"
-        html_out += f'      <img{_render_attrs(img_attrs)}>'
+        html_out += f"      <img{_render_attrs(img_attrs)}>"
         html_out += '      <span asok-text="file.name"></span>'
 
         btn_attrs["type"] = "button"
         btn_attrs["asok-on:click"] = "files=files.filter((_,i)=>i!==index)"
-        html_out += f'      <button{_render_attrs(btn_attrs)}>×</button>'
+        html_out += f"      <button{_render_attrs(btn_attrs)}>×</button>"
         html_out += "    </div>"
         html_out += "  </template>"
         html_out += "</div>"
@@ -756,7 +759,7 @@ def render_autocomplete(field: Any, val: str, merged: dict[str, Any]) -> str:
     # Suggestions dropdown
     menu_attrs["asok-show"] = "show && filtered.length > 0"
     menu_attrs["asok-cloak"] = True
-    html_out += f'<div{_render_attrs(menu_attrs)}>'
+    html_out += f"<div{_render_attrs(menu_attrs)}>"
     html_out += '  <template asok-for="item in filtered">'
     select_action = f"Asok.selectAutocomplete($, item, $refs.input_{field.name})"
 
@@ -765,7 +768,7 @@ def render_autocomplete(field: Any, val: str, merged: dict[str, Any]) -> str:
     item_attrs["asok-on:click"] = select_action
     item_attrs["asok-text"] = "item"
 
-    html_out += f'    <div{_render_attrs(item_attrs)}></div>'
+    html_out += f"    <div{_render_attrs(item_attrs)}></div>"
     html_out += "  </template>"
     html_out += "</div>"
 
@@ -826,7 +829,7 @@ def render_cascading(field: Any, val: str, merged: dict[str, Any]) -> str:
     child_opt_attrs = dict(option_attrs)
     child_opt_attrs["asok-bind:value"] = "option"
     child_opt_attrs["asok-text"] = "option"
-    html_out += f'<option{_render_attrs(child_opt_attrs)}></option>'
+    html_out += f"<option{_render_attrs(child_opt_attrs)}></option>"
     html_out += "</template>"
     html_out += "</select>"
 
@@ -862,6 +865,7 @@ def render_phone(field: Any, val: str, merged: dict[str, Any]) -> str:
 
     # Country code select
     select_attrs["asok-model"] = "code"
+    select_attrs["asok-on:change"] = f"Asok.updateHiddenValue($refs.hidden_{field.name}, code+number)"
     html_out += f"<select{_render_attrs(select_attrs)}>"
     for code, dial, name, *rest in countries:
         selected = " selected" if code == default_country else ""
@@ -878,10 +882,10 @@ def render_phone(field: Any, val: str, merged: dict[str, Any]) -> str:
     if "placeholder" not in input_attrs:
         input_attrs["placeholder"] = "Phone number"
 
-    html_out += f'<input{_render_attrs(input_attrs)}>'
+    html_out += f"<input{_render_attrs(input_attrs)}>"
 
     # Hidden input to store complete phone
-    html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" asok-bind:value="code+number" asok-ref="hidden_{field.name}">'
+    html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" value="{default_code}" asok-ref="hidden_{field.name}">'
     html_out += "</div>"
     return html_out
 
@@ -919,37 +923,37 @@ def render_wysiwyg(field: Any, val: str, merged: dict[str, Any]) -> str:
     bold_btn["class"] = f"asok-wysiwyg-btn-bold {btn_class_base}".strip()
     bold_btn["type"] = "button"
     bold_btn["asok-on:click"] = "document.execCommand('bold')"
-    html_out += f'<button{_render_attrs(bold_btn)}><b>B</b></button>'
+    html_out += f"<button{_render_attrs(bold_btn)}><b>B</b></button>"
 
     italic_btn = dict(btn_attrs_base)
     italic_btn["class"] = f"asok-wysiwyg-btn-italic {btn_class_base}".strip()
     italic_btn["type"] = "button"
     italic_btn["asok-on:click"] = "document.execCommand('italic')"
-    html_out += f'<button{_render_attrs(italic_btn)}><i>I</i></button>'
+    html_out += f"<button{_render_attrs(italic_btn)}><i>I</i></button>"
 
     under_btn = dict(btn_attrs_base)
     under_btn["class"] = f"asok-wysiwyg-btn-underline {btn_class_base}".strip()
     under_btn["type"] = "button"
     under_btn["asok-on:click"] = "document.execCommand('underline')"
-    html_out += f'<button{_render_attrs(under_btn)}><u>U</u></button>'
+    html_out += f"<button{_render_attrs(under_btn)}><u>U</u></button>"
 
     list_btn = dict(btn_attrs_base)
     list_btn["class"] = f"asok-wysiwyg-btn-list {btn_class_base}".strip()
     list_btn["type"] = "button"
     list_btn["asok-on:click"] = "document.execCommand('insertUnorderedList')"
-    html_out += f'<button{_render_attrs(list_btn)}>• List</button>'
+    html_out += f"<button{_render_attrs(list_btn)}>• List</button>"
     html_out += "</div>"
 
     # Editor (contenteditable div)
     update_hidden = f"Asok.updateWysiwyg($event, $, $refs.hidden_{field.name})"
     editor_style = f"min-height:{height}px;border:1px solid #ddd;padding:10px;"
     if "style" in editor_attrs:
-         editor_style = f"{editor_style} {editor_attrs['style']}".strip()
+        editor_style = f"{editor_style} {editor_attrs['style']}".strip()
     editor_attrs["style"] = editor_style
     editor_attrs["contenteditable"] = "true"
     editor_attrs["asok-on:input"] = update_hidden
 
-    html_out += f'<div{_render_attrs(editor_attrs)}>{esc(current_content)}</div>'
+    html_out += f"<div{_render_attrs(editor_attrs)}>{esc(current_content)}</div>"
 
     # Hidden input to store HTML
     html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" value="{esc(current_content)}" asok-ref="hidden_{field.name}">'
@@ -971,7 +975,9 @@ def render_dropzone(field: Any, val: str, merged: dict[str, Any]) -> str:
     area_attrs["class"] = f"asok-dropzone-area {area_class}".strip()
     area_style = area_attrs.get("style", "")
     if not area_style:
-        area_attrs["style"] = "border:2px dashed #ccc;padding:40px;text-align:center;cursor:pointer;"
+        area_attrs["style"] = (
+            "border:2px dashed #ccc;padding:40px;text-align:center;cursor:pointer;"
+        )
 
     input_attrs = _extract_nested_attrs(merged, "input")
     input_class = input_attrs.get("class", "")
@@ -991,13 +997,15 @@ def render_dropzone(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
 
     # Drop zone div - copy exact syntax from working 'files' component
-    drop_handler = f"Asok.handleDropzoneDrop($event, $, {max_files}, $refs.input_{field.name})"
+    drop_handler = (
+        f"Asok.handleDropzoneDrop($event, $, {max_files}, $refs.input_{field.name})"
+    )
     area_attrs["asok-on:dragover.prevent"] = "dragging=true"
     area_attrs["asok-on:dragleave"] = "dragging=false"
     area_attrs["asok-on:drop.prevent"] = drop_handler
     area_attrs["asok-bind:class"] = "dragging?'dragging':''"
 
-    html_out += f'<div{_render_attrs(area_attrs)}>'
+    html_out += f"<div{_render_attrs(area_attrs)}>"
     html_out += f'<p>Drag & drop files here or <label for="{field.name}" style="color:blue;cursor:pointer;">browse</label></p>'
     html_out += "</div>"
 
@@ -1017,18 +1025,22 @@ def render_dropzone(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out += f'<input{_render_attrs(file_attrs)} asok-on:change="{change_handler}">'
 
     # File list
-    html_out += f'  <ul{_render_attrs(list_attrs)}>'
+    html_out += f"  <ul{_render_attrs(list_attrs)}>"
     html_out += '  <template asok-for="(file, index) in files">'
 
     item_attrs = dict(item_attrs_base)
     item_attrs["class"] = item_class_base.strip()
-    html_out += f'    <li{_render_attrs(item_attrs)}><span asok-text="file.name"></span> '
+    html_out += (
+        f'    <li{_render_attrs(item_attrs)}><span asok-text="file.name"></span> '
+    )
 
     btn_attrs = dict(btn_attrs_base)
     btn_attrs["class"] = btn_class_base.strip()
     btn_attrs["type"] = "button"
-    btn_attrs["asok-on:click"] = f"Asok.removeDropzoneFile($, index, $refs.input_{field.name})"
-    html_out += f'<button{_render_attrs(btn_attrs)}>×</button></li>'
+    btn_attrs["asok-on:click"] = (
+        f"Asok.removeDropzoneFile($, index, $refs.input_{field.name})"
+    )
+    html_out += f"<button{_render_attrs(btn_attrs)}>×</button></li>"
     html_out += "  </template>"
     html_out += "</ul>"
 
@@ -1053,7 +1065,9 @@ def render_signature(field: Any, val: str, merged: dict[str, Any]) -> str:
     canvas_attrs["class"] = canvas_class.strip()
     canvas_style = canvas_attrs.get("style", "")
     if not canvas_style:
-        canvas_attrs["style"] = "border:1px solid #ccc;cursor:crosshair;touch-action:none;"
+        canvas_attrs["style"] = (
+            "border:1px solid #ccc;cursor:crosshair;touch-action:none;"
+        )
 
     btn_attrs = _extract_nested_attrs(merged, "btn")
     btn_class = btn_attrs.get("class", "")
@@ -1082,12 +1096,12 @@ def render_signature(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out += f"<canvas{_render_attrs(canvas_attrs)}></canvas>"
 
     # Clear button
-    clear_handler = f"Asok.clearSignature($refs.canvas_{field.name}, $refs.hidden_{field.name})"
+    clear_handler = (
+        f"Asok.clearSignature($refs.canvas_{field.name}, $refs.hidden_{field.name})"
+    )
     btn_attrs["type"] = "button"
     btn_attrs["asok-on:click"] = clear_handler
-    html_out += (
-        f'<br><button{_render_attrs(btn_attrs)}>Clear</button>'
-    )
+    html_out += f"<br><button{_render_attrs(btn_attrs)}>Clear</button>"
 
     # Hidden input to store base64 signature
     html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" asok-ref="hidden_{field.name}" value="{val}">'
@@ -1210,18 +1224,14 @@ def render_treeselect(field: Any, val: str, merged: dict[str, Any]) -> str:
         item_wrapper_attrs["style"] = "margin:2px 0;"
     html_out += f"    <div{_render_attrs(item_wrapper_attrs)}>"
 
-    html_out += (
-        f'      <div style="display:flex;align-items:center;padding:5px;cursor:pointer;border-radius:4px;" asok-on:click="Asok.selectTreeItem($, item.id, $refs.hidden_{field.name})" asok-bind:style="selected==item.id ? \'background:#e7f3ff;color:#0056b3\' : \'\'">'
-    )
+    html_out += f'      <div style="display:flex;align-items:center;padding:5px;cursor:pointer;border-radius:4px;" asok-on:click="Asok.selectTreeItem($, item.id, $refs.hidden_{field.name})" asok-bind:style="selected==item.id ? \'background:#e7f3ff;color:#0056b3\' : \'\'">'
     html_out += "        <span style=\"width:20px;text-align:center;cursor:pointer;user-select:none;\" asok-on:click.stop=\"Asok.toggleTreeExpansion($, item.id)\" asok-text=\"item.children && item.children.length > 0 ? (expanded.includes(item.id) ? '▾' : '▸') : '•'\"></span>"
     html_out += '        <span asok-text="item.name"></span>'
     html_out += "      </div>"
     html_out += '      <template asok-if="item.children && item.children.length > 0 && expanded.includes(item.id)">'
     html_out += '        <div style="margin-left:20px;margin-top:2px;border-left:1px solid #eee;">'
     html_out += '          <template asok-for="child in item.children">'
-    html_out += (
-        f'            <div style="display:flex;align-items:center;padding:4px 10px;cursor:pointer;border-radius:3px;margin:1px 0;" asok-on:click.stop="Asok.selectTreeItem($, child.id, $refs.hidden_{field.name})" asok-bind:style="selected==child.id ? \'background:#e7f3ff;color:#0056b3\' : \'\'">'
-    )
+    html_out += f'            <div style="display:flex;align-items:center;padding:4px 10px;cursor:pointer;border-radius:3px;margin:1px 0;" asok-on:click.stop="Asok.selectTreeItem($, child.id, $refs.hidden_{field.name})" asok-bind:style="selected==child.id ? \'background:#e7f3ff;color:#0056b3\' : \'\'">'
     html_out += '              <span style="color:#ccc;margin-right:8px;">└</span>'
     html_out += '              <span asok-text="child.name"></span>'
     html_out += "            </div>"

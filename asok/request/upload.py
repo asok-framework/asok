@@ -126,7 +126,9 @@ class UploadedFile:
         b"7z\xbc\xaf\x27\x1c": ("application/x-7z-compressed", [".7z"]),
     }
 
-    def __init__(self, filename: str, content: bytes, content_type: Optional[str] = None):
+    def __init__(
+        self, filename: str, content: bytes, content_type: Optional[str] = None
+    ):
         self.filename: str = _sanitize_filename(filename)
         self.content: bytes = content
         self.size: int = len(content)
@@ -287,10 +289,12 @@ class UploadedFile:
             is_dir = destination.endswith(("/", "\\"))
             if secure_filename:
                 import uuid
+
                 _, ext = os.path.splitext(self.filename)
                 safe_name = f"{uuid.uuid4()}{ext.lower()}"
             else:
                 from asok.utils.security import secure_filename as sanitize_filename
+
                 safe_name = sanitize_filename(self.filename)
 
             if is_dir:
@@ -298,7 +302,19 @@ class UploadedFile:
             else:
                 upload_to = os.path.dirname(destination).strip("/\\")
 
-            url = get_storage().save(safe_name, self.content, upload_to)
+            # SECURITY: Sanitize SVG files before uploading to S3
+            content_to_upload = self.content
+            _, ext = os.path.splitext(safe_name)
+            if ext.lower() == ".svg" and allowed_types and "image/svg+xml" in allowed_types:
+                from asok.utils.svg_sanitizer import sanitize_svg
+
+                try:
+                    content_to_upload = sanitize_svg(self.content)
+                    logging.getLogger(__name__).debug("SVG file sanitized for S3: %s", safe_name)
+                except ValueError as e:
+                    raise ValueError(f"SVG sanitization failed: {e}")
+
+            url = get_storage().save(safe_name, content_to_upload, upload_to)
             self.filename = safe_name
             return url
 
@@ -362,8 +378,20 @@ class UploadedFile:
                 counter += 1
             dest = f"{base}_{counter}{ext}"
 
+        # SECURITY: Sanitize SVG files to remove JavaScript and other dangerous content
+        content_to_write = self.content
+        _, ext = os.path.splitext(dest)
+        if ext.lower() == ".svg" and allowed_types and "image/svg+xml" in allowed_types:
+            from asok.utils.svg_sanitizer import sanitize_svg
+
+            try:
+                content_to_write = sanitize_svg(self.content)
+                logger.debug("SVG file sanitized successfully: %s", safe_name)
+            except ValueError as e:
+                raise ValueError(f"SVG sanitization failed: {e}")
+
         with open(dest, "wb") as f:
-            f.write(self.content)
+            f.write(content_to_write)
 
         # SECURITY: Set restrictive permissions (read-only for owner and group)
         # 0o644 = rw-r--r-- (owner can read/write, others can only read)

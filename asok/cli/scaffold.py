@@ -47,7 +47,9 @@ def scaffold(
             return
         # SECURITY: Validate characters
         if not app_name.replace("_", "").replace("-", "").isalnum():
-            Style.error("Project name must contain only letters, numbers, hyphens, and underscores")
+            Style.error(
+                "Project name must contain only letters, numbers, hyphens, and underscores"
+            )
             return
 
     if tailwind is None:

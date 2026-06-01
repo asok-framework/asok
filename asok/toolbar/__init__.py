@@ -191,7 +191,9 @@ class DeveloperToolbar:
             session_dict = dict(self.request.session)
             # SECURITY: Limit session dict size to prevent DoS
             if len(session_dict) > 1000:
-                session_dict = {"error": f"Too many keys ({len(session_dict)}), display limited"}
+                session_dict = {
+                    "error": f"Too many keys ({len(session_dict)}), display limited"
+                }
         except Exception:
             session_dict = {}
 
@@ -199,10 +201,14 @@ class DeveloperToolbar:
             session_json = json.dumps(session_dict, indent=2)
             # SECURITY: Limit JSON size to prevent DoS
             if len(session_json) > 100_000:
-                session_json = json.dumps({"error": "Session data too large to display"}, indent=2)
+                session_json = json.dumps(
+                    {"error": "Session data too large to display"}, indent=2
+                )
             session_data = _html.escape(session_json)
         except (TypeError, ValueError):
-            session_data = _html.escape(json.dumps({"error": "Could not serialize session"}, indent=2))
+            session_data = _html.escape(
+                json.dumps({"error": "Could not serialize session"}, indent=2)
+            )
 
         session_keys = len(session_dict)
 
@@ -227,12 +233,20 @@ class DeveloperToolbar:
             # SECURITY: Limit request data size
             req_json = json.dumps(req_info, indent=2)
             if len(req_json) > 100_000:
-                req_json = json.dumps({"error": "Request data too large to display"}, indent=2)
+                req_json = json.dumps(
+                    {"error": "Request data too large to display"}, indent=2
+                )
             request_data = _html.escape(req_json)
         except (TypeError, ValueError) as e:
-            request_data = _html.escape(json.dumps({"error": f"Could not serialize request data: {str(e)}"}, indent=2))
+            request_data = _html.escape(
+                json.dumps(
+                    {"error": f"Could not serialize request data: {str(e)}"}, indent=2
+                )
+            )
         except Exception:
-            request_data = _html.escape(json.dumps({"error": "Could not serialize request data"}, indent=2))
+            request_data = _html.escape(
+                json.dumps({"error": "Could not serialize request data"}, indent=2)
+            )
 
         # 5. Redirect info block for Request tab
         redir_info_html = ""

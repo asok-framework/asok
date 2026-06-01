@@ -173,7 +173,11 @@ def test_asgi_middleware_does_not_create_event_loops() -> None:
             sent_messages.append(message)
 
         from unittest.mock import patch
-        with patch("asyncio.new_event_loop") as mock_new_loop, patch("asyncio.run") as mock_run:
+
+        with (
+            patch("asyncio.new_event_loop") as mock_new_loop,
+            patch("asyncio.run") as mock_run,
+        ):
             await app(scope, receive, send)
             # Ensure we did not spin up a brand new event loop on the worker threads
             mock_new_loop.assert_not_called()

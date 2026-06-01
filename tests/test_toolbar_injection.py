@@ -25,7 +25,10 @@ def test_toolbar_injection_in_html(tmp_dir):
     print(response.text)
 
     # Assert that the toolbar trigger is present in the response
-    assert '<div id="asok-debug-trigger"' in response.text or 'id="asok-debug-trigger"' in response.text
+    assert (
+        '<div id="asok-debug-trigger"' in response.text
+        or 'id="asok-debug-trigger"' in response.text
+    )
     # Assert it is only injected once, not twice!
     assert response.text.count('id="asok-debug-trigger"') == 1
 

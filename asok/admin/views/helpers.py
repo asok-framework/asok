@@ -141,8 +141,12 @@ class HelperViewsMixin:
                 engine = model.get_engine()
                 q_f = engine.quote_identifier(f)
                 q_table = engine.quote_identifier(model._table)
-                rows = engine.execute(f"SELECT DISTINCT {q_f} FROM {q_table} ORDER BY {q_f}")
-                values = [list(r.values())[0] for r in rows if list(r.values())[0] is not None]
+                rows = engine.execute(
+                    f"SELECT DISTINCT {q_f} FROM {q_table} ORDER BY {q_f}"
+                )
+                values = [
+                    list(r.values())[0] for r in rows if list(r.values())[0] is not None
+                ]
             except Exception:
                 values = []
             current = request.args.get(f"filter_{f}", "")

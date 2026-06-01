@@ -277,7 +277,9 @@ class TestQueryCache:
         assert results[0].name == "Alice"
 
         # Modify name directly in DB to bypass cache
-        User.get_engine().execute("UPDATE users SET name = 'Bob' WHERE email = 'alice@example.com'")
+        User.get_engine().execute(
+            "UPDATE users SET name = 'Bob' WHERE email = 'alice@example.com'"
+        )
 
         # Fetch again with caching enabled
         cached_results = User.query().where("name", "Alice").cache(60).get()
@@ -297,6 +299,7 @@ class TestQueryCache:
         monkeypatch.setattr(default_cache, "backend", "file")
         monkeypatch.setattr(default_cache, "_path", str(tmp_path / "cache"))
         import os
+
         os.makedirs(default_cache._path, exist_ok=True)
 
         create_user("Alice", "alice@example.com")
@@ -308,7 +311,9 @@ class TestQueryCache:
         assert results[0].name == "Alice"
 
         # Modify name in DB
-        User.get_engine().execute("UPDATE users SET name = 'Bob' WHERE email = 'alice@example.com'")
+        User.get_engine().execute(
+            "UPDATE users SET name = 'Bob' WHERE email = 'alice@example.com'"
+        )
 
         # Fetch again with caching enabled, should read from file cache
         cached_results = User.query().where("name", "Alice").cache(60).get()
@@ -355,7 +360,7 @@ class TestCompoundQueries:
         # 4. Test INTERSECT
         # Users with name Alice OR Bob
         qa = User.query().where("name", "Alice")
-        qb = User.query().where("name", "Alice") # matches Alice
+        qb = User.query().where("name", "Alice")  # matches Alice
         intersect_q = qa.intersect(qb)
         assert intersect_q.count() == 1
         assert intersect_q.pluck("name") == ["Alice"]
@@ -377,3 +382,26 @@ class TestCompoundQueries:
 
         with pytest.raises(ValueError, match="Cannot delete a compound query"):
             union_q.force_delete()
+
+
+class TestEnvVarDbPath:
+    def test_env_var_db_path_resolution(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "env_test.db")
+
+        class EnvModel(Model):
+            _db_path = "MY_TEST_DATABASE_URL"
+            name = Field.String()
+
+        monkeypatch.setenv("MY_TEST_DATABASE_URL", db_path)
+        EnvModel.close_connections()
+
+        # Verify it resolves correctly
+        engine = EnvModel.get_engine()
+        assert engine.db_path == db_path
+
+        # Verify creating table works
+        EnvModel.create_table()
+        EnvModel.create(name="Hello Env")
+        assert EnvModel.count() == 1
+        EnvModel.close_connections()
+

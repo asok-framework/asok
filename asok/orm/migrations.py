@@ -10,7 +10,9 @@ class Migrations:
         from .model import Model
 
         engine = engine or Model.get_engine()
-        pk_def = getattr(engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT")
+        pk_def = getattr(
+            engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
+        )
 
         # Define table structure dynamically to support SQLite, Postgres, MySQL
         sql = f"""

@@ -49,9 +49,7 @@ class FileRef(str):
 
         # SECURITY: Block null bytes that could truncate paths
         if "\x00" in component:
-            raise ValueError(
-                f"SECURITY: Null bytes not allowed in {param_name}"
-            )
+            raise ValueError(f"SECURITY: Null bytes not allowed in {param_name}")
 
         # SECURITY: Block other control characters that could cause issues
         # Control characters are in range 0x00-0x1F (except tab 0x09 which we allow)
@@ -71,6 +69,7 @@ class FileRef(str):
             cls._validate_path_component(upload_to, "upload_to")
 
             from ..core.storage import get_storage
+
             url = get_storage().url(name, upload_to)
             instance = super().__new__(cls, url)
         instance.name = name
