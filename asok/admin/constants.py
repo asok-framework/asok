@@ -20,7 +20,7 @@ ALLOWED_UPLOAD_MIMES = {
     "image/png",
     "image/gif",
     "image/webp",
-    # "image/svg+xml",  # SECURITY: REMOVED - SVG can contain JavaScript and cause XSS
+    "image/svg+xml",  # SECURITY: Safe with automatic sanitization in UploadedFile.save()
     "image/bmp",
     "image/x-icon",  # Favicon
     # Documents
@@ -92,7 +92,7 @@ _IMAGE_EXTS = (
     ".png",
     ".gif",
     ".webp",
-    # ".svg",  # SECURITY: REMOVED - SVG can contain JavaScript
+    ".svg",  # SECURITY: Safe with automatic sanitization in UploadedFile.save()
     ".avif",
     ".bmp",
     ".ico",

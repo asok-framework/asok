@@ -183,6 +183,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _discover(self) -> None:
         import logging
+
         logger = logging.getLogger(__name__)
 
         for model in self.app.models:
@@ -225,9 +226,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             except Exception as e:
                 # Skip malformed models instead of crashing the entire admin
                 model_name = getattr(model, "__name__", str(model))
-                logger.warning(
-                    f"Failed to register model {model_name} in admin: {e}"
-                )
+                logger.warning(f"Failed to register model {model_name} in admin: {e}")
                 continue
 
     def _default_columns(self, model: Any) -> list[str]:
@@ -402,9 +401,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         1. Explicit ?lang=xx
         2. Session 'admin_locale'
         3. Cookie 'asok_lang' (persists across logout)
-        4. Request.user's preferred language (not yet implemented)
-        5. Accept-Language header
-        6. Fallback to default_locale
+        4. Fallback to default_locale
         """
         # 1. Query param
         lang = request.args.get("lang")
@@ -421,16 +418,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if lang in MESSAGES:
             return lang
 
-        # 4. Accept-Language
-        header = request.environ.get("HTTP_ACCEPT_LANGUAGE", "")
-        if header:
-            # e.g. "fr-CH, fr;q=0.9, en;q=0.8, *;q=0.5"
-            for part in header.split(","):
-                code = part.split(";")[0].split("-")[0].strip().lower()
-                if code in MESSAGES:
-                    return code
-
-        # 5. Fallback
+        # 4. Fallback
         return self.default_locale
 
     def _set_locale(self, request: Any) -> str:
@@ -469,7 +457,11 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             request.environ["HTTP_X_BLOCK"] = "page-body"
 
         result = self._render(
-            request, "error.html", error_code=code, error_title=title, error_message=message
+            request,
+            "error.html",
+            error_code=code,
+            error_title=title,
+            error_message=message,
         )
 
         # Restore original X-Block header for any subsequent processing
@@ -789,7 +781,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                     request.session.pop("impersonator_id", None)
                     request.session.pop("impersonate_started_at", None)
                     request.session["user_id"] = impersonator_id
-                    request.flash("info", self.t(request, "Impersonation expired (1 h max.)"))
+                    request.flash(
+                        "info", self.t(request, "Impersonation expired (1 h max.)")
+                    )
                 else:
                     auth_name = self.app.config.get("AUTH_MODEL", "User")
                     User = MODELS_REGISTRY.get(auth_name)
@@ -811,7 +805,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                         request.session.pop("impersonator_id", None)
                         request.session.pop("impersonate_started_at", None)
                         request.session["user_id"] = impersonator_id
-                        request.flash("error", self.t(request, "Unauthorized impersonation."))
+                        request.flash(
+                            "error", self.t(request, "Unauthorized impersonation.")
+                        )
         except Exception:
             pass
 

@@ -1,7 +1,7 @@
 import os
 import sys
 
-__version__ = "0.1.7"
+__version__ = "0.3.0"
 
 # Disable bytecode generation (__pycache__) by default to keep the file-system based routing clean.
 # Can be overridden by setting ASOK_WRITE_BYTECODE=true in the environment.
@@ -15,6 +15,7 @@ from .background import background as background
 from .cache import Cache as Cache
 from .cache import cache_page as cache_page
 from .component import Component as Component
+from .context import current_request as current_request
 from .core import Asok as Asok
 from .exceptions import (
     AbortException as AbortException,

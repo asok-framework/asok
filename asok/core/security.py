@@ -140,18 +140,9 @@ class SecurityMixin:
         # Build CSP with configurable directives
         ws_port = self.config.get("WS_PORT", 8001)
 
-        # Check if reactive features are used in this response to enable unsafe-eval only when needed
-        # In DEBUG mode, always enable unsafe-eval for easier development with directives
-        needs_eval = self.config.get("CSP_UNSAFE_EVAL", False)
-
-        # SECURITY: Log when unsafe-eval is enabled for audit trail
-        # Only log if it's a dynamic activation (not explicitly set in config)
-        if (
-            needs_eval
-            and not self.config.get("DEBUG")
-            and self.config.get("CSP_UNSAFE_EVAL") is not True
-        ):
-            logger.info("CSP 'unsafe-eval' dynamically enabled for reactive features")
+        # SECURITY: Asok directives are pre-compiled server-side and injected as JavaScript
+        # source code in the HTML. No eval() or new Function() is used at runtime, so
+        # unsafe-eval is NOT required. This provides stronger CSP protection.
 
         # Default CSP directives
         csp_directives = {
@@ -176,7 +167,10 @@ class SecurityMixin:
             request_host = request.host.split(":")[0]
 
             # Only use request host if it matches the server name or is localhost/127.0.0.1
-            if request_host in (server_name, "localhost", "127.0.0.1") or not server_name:
+            if (
+                request_host in (server_name, "localhost", "127.0.0.1")
+                or not server_name
+            ):
                 host = request_host
                 csp_directives["connect-src"].extend(
                     [
@@ -206,18 +200,13 @@ class SecurityMixin:
                 ]
             )
 
-        # Add script-src based on nonce and reactive needs
+        # Add script-src based on nonce
         script_src = ["'self'"]
         if nonce:
             # Use 'strict-dynamic' with nonce for CSP Level 3 browsers.
             # 'self' is kept as fallback for older browsers that don't support strict-dynamic.
             # Note: 'unsafe-inline' is ignored when nonce is present, so we don't include it.
             script_src.extend([f"'nonce-{nonce}'", "'strict-dynamic'"])
-
-        if needs_eval:
-            script_src.append("'unsafe-eval'")
-
-        if nonce:
             csp_directives["script-src"] = script_src
         else:
             csp_directives["script-src"] = ["'self'"]

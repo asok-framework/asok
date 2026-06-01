@@ -6,6 +6,7 @@ from .fileref import FileRef as FileRef
 from .list import ModelList as ModelList
 from .migrations import Migrations as Migrations
 from .model import Model as Model
+from .model import close_all_db_connections as close_all_db_connections
 from .query import Query as Query
 from .relation import Relation as Relation
 from .utils import MODELS_REGISTRY as MODELS_REGISTRY

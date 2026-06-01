@@ -506,7 +506,9 @@ class WebSocketServer:
             # Security: Origin validation
             origin = headers.get("origin")
             if not self._is_origin_allowed(origin):
-                logger.warning("403: Origin '%s' forbidden for '%s'", origin, route_path)
+                logger.warning(
+                    "403: Origin '%s' forbidden for '%s'", origin, route_path
+                )
                 sock.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 sock.close()
                 # SECURITY: Decrement connection count on early exit

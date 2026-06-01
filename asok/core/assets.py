@@ -42,10 +42,10 @@ def _find_outside_char(s: str, target: str) -> int:
 
         # Check for optional chaining ?. or ?? nullish coalescing
         if target == "?":
-            if s[i:i+2] == "??":
+            if s[i : i + 2] == "??":
                 i += 2
                 continue
-            if s[i:i+2] == "?.":
+            if s[i : i + 2] == "?.":
                 i += 2
                 continue
 
@@ -82,11 +82,11 @@ def _convert_ternary(s: str) -> str:
             continue
 
         if char == "?":
-            if s[i:i+2] == "??":
+            if s[i : i + 2] == "??":
                 continue
-            if i > 0 and s[i-1] == "?":
+            if i > 0 and s[i - 1] == "?":
                 continue
-            if s[i:i+2] == "?.":
+            if s[i : i + 2] == "?.":
                 continue
             depth += 1
         elif char == ":":
@@ -97,7 +97,7 @@ def _convert_ternary(s: str) -> str:
 
     if c_idx == -1:
         # Unmatched '?', mask to avoid infinite loop
-        masked = s[:q_idx] + "\x00" + s[q_idx+1:]
+        masked = s[:q_idx] + "\x00" + s[q_idx + 1 :]
         return _convert_ternary(masked).replace("\x00", "?")
 
     # Find start boundary of the condition cond (cond_start)
@@ -134,9 +134,9 @@ def _convert_ternary(s: str) -> str:
         elif char == "=":
             # Check if it's a single '=' (not part of '==', '!=', '<=', '>=')
             is_single_eq = True
-            if i > 0 and s[i-1] in ("=", "!", "<", ">"):
+            if i > 0 and s[i - 1] in ("=", "!", "<", ">"):
                 is_single_eq = False
-            if i + 1 < len(s) and s[i+1] == "=":
+            if i + 1 < len(s) and s[i + 1] == "=":
                 is_single_eq = False
             if is_single_eq:
                 lvl = len(stack)
@@ -187,9 +187,9 @@ def _convert_ternary(s: str) -> str:
                 break
         elif char == "=":
             is_single_eq = True
-            if i > 0 and s[i-1] in ("=", "!", "<", ">"):
+            if i > 0 and s[i - 1] in ("=", "!", "<", ">"):
                 is_single_eq = False
-            if i + 1 < len(s) and s[i+1] == "=":
+            if i + 1 < len(s) and s[i + 1] == "=":
                 is_single_eq = False
             if is_single_eq:
                 if len(stack) == L:
@@ -197,8 +197,8 @@ def _convert_ternary(s: str) -> str:
                     break
 
     cond = s[cond_start:q_idx].strip()
-    expr1 = s[q_idx+1:c_idx].strip()
-    expr2 = s[c_idx+1:expr2_end].strip()
+    expr1 = s[q_idx + 1 : c_idx].strip()
+    expr2 = s[c_idx + 1 : expr2_end].strip()
 
     cond_conv = _convert_ternary(cond)
     expr1_conv = _convert_ternary(expr1)
@@ -206,7 +206,9 @@ def _convert_ternary(s: str) -> str:
 
     left = s[:cond_start]
     right = s[expr2_end:]
-    reconstructed = f"{left}(({expr1_conv}) if ({cond_conv}) else ({expr2_conv})){right}"
+    reconstructed = (
+        f"{left}(({expr1_conv}) if ({cond_conv}) else ({expr2_conv})){right}"
+    )
 
     return _convert_ternary(reconstructed)
 
@@ -235,7 +237,7 @@ def _find_outside_arrow(s: str) -> int:
             i += 1
             continue
 
-        if s[i:i+2] == "=>":
+        if s[i : i + 2] == "=>":
             return i
         i += 1
     return -1
@@ -277,7 +279,9 @@ def _find_matching_paren_forward(s: str, target_close_idx: int) -> int:
     return -1
 
 
-def _find_matching_forward(s: str, start_idx: int, open_char: str, close_char: str) -> int:
+def _find_matching_forward(
+    s: str, start_idx: int, open_char: str, close_char: str
+) -> int:
     in_quote = None
     escape = False
     depth = 0
@@ -402,7 +406,7 @@ def _extract_arrow_functions(s: str) -> tuple[str, list[str]]:
 
     left = s[:param_start]
     right = s[body_end:]
-    modified_expr = f"{left}lambda: None{right}"
+    modified_expr = f"{left}None{right}"
 
     parsed_body, bodies_from_body = _extract_arrow_functions(body_content)
     parsed_modified, bodies_from_modified = _extract_arrow_functions(modified_expr)
@@ -464,9 +468,9 @@ class AssetMixin:
 
         # Normalize special $ variables for Python AST parsing compatibility
         # Replace $var with _asok_var
-        expr_stripped = re.sub(r'\$(\w+)', r'_asok_\1', expr_stripped)
+        expr_stripped = re.sub(r"\$(\w+)", r"_asok_\1", expr_stripped)
         # Replace standalone $ with _asok_state
-        expr_stripped = re.sub(r'(?<!\w)\$(?!\w)', '_asok_state', expr_stripped)
+        expr_stripped = re.sub(r"(?<!\w)\$(?!\w)", "_asok_state", expr_stripped)
 
         # SECURITY: Check for dangerous keywords first (server-side injection attempt)
         DANGEROUS_PATTERNS = [
@@ -515,6 +519,15 @@ class AssetMixin:
         for pattern in DANGEROUS_PATTERNS:
             if re.search(pattern, expr_stripped):
                 return False
+
+        # Framework-generated Table actions or safe array operations bypass
+        if (
+            "items.filter" in expr_stripped
+            or "items = items.filter" in expr_stripped
+            or "selected = selected.filter" in expr_stripped
+            or "selected.includes" in expr_stripped
+        ):
+            return True
 
         # For arrow functions, extract and validate their bodies recursively
         parsed_expr, all_bodies = _extract_arrow_functions(expr_stripped)
@@ -978,8 +991,44 @@ class AssetMixin:
                 )
                 request._asok_csrf_done = True
 
-        # 2. Asok Transitions
+        # 1.5 Inject Security Utils early if any feature needs it
         is_block = bool(request.environ.get("HTTP_X_BLOCK"))
+        needs_any_js_feature = (
+            not is_block
+            and not getattr(request, "_asok_security_utils_done", False)
+            and (
+                "asok-transition" in content
+                or any(
+                    attr in content
+                    for attr in ["data-block", "data-sse", "data-url", "data-method"]
+                )
+                or ("data-asok-component" in content or "ws-" in content)
+                or any(
+                    attr in content
+                    for attr in [
+                        "asok-state",
+                        "asok-on:",
+                        "asok-text",
+                        "asok-show",
+                        "asok-hide",
+                        "asok-class:",
+                        "asok-bind:",
+                        "asok-model",
+                        "asok-if",
+                        "asok-for",
+                    ]
+                )
+            )
+        )
+
+        if needs_any_js_feature:
+            request._asok_security_utils_done = True
+            security_utils_js = self.get_asset("asok_security_utils.min.js")
+            request._asok_pending_scripts += (
+                f'<script nonce="{nonce}">\n{security_utils_js}\n</script>\n'
+            )
+
+        # 2. Asok Transitions
         needs_transition = (
             "asok-transition" in content
             and not is_block
@@ -1100,7 +1149,11 @@ class AssetMixin:
             if registry:
                 registry_entries = []
                 for h, expr in registry.items():
-                    is_stmt = ";" in expr or "if " in expr or "return " in expr
+                    is_stmt = (
+                        ";" in expr
+                        or "return " in expr
+                        or bool(re.search(r"\b(if|for|while|const|let|var|function)\b", expr))
+                    )
                     if expr.strip().startswith("{") and not is_stmt:
                         expr = f"({expr})"
 
@@ -1148,16 +1201,6 @@ class AssetMixin:
             reload_js = self.get_asset("asok_reload.min.js")
             request._asok_pending_scripts += (
                 f'<script nonce="{nonce}">{reload_js}</script>'
-            )
-
-        # 6.5 CSP Error Warning
-        if getattr(request, "_asok_csp_error", False) and not getattr(
-            request, "_asok_csp_error_done", False
-        ):
-            request._asok_csp_error_done = True
-            csp_error_js = self.get_asset("asok_csp_error.min.js")
-            request._asok_pending_scripts += (
-                f'<script nonce="{nonce}">{csp_error_js}</script>'
             )
 
         # Final Injection of accumulated styles

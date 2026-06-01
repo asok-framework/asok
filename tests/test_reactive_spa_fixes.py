@@ -330,12 +330,13 @@ def test_nested_arrow_functions_and_setTimeout():
     # 2. Test that dangerous functions are still blocked inside arrow function bodies
     unsafe_content = (
         "<html><head></head><body>"
-        '<button type="button" asok-on:click="navigator.clipboard.writeText(\'pip install asok\').then(() => { eval(\'unsafe\') })">'
+        "<button type=\"button\" asok-on:click=\"navigator.clipboard.writeText('pip install asok').then(() => { eval('unsafe') })\">"
         "Copy"
         "</button>"
         "</body></html>"
     )
     import pytest
+
     with pytest.raises(ValueError, match="SECURITY: Unsafe expression"):
         app._inject_assets(unsafe_content, request, "testnonce123")
 
@@ -355,7 +356,7 @@ def test_ternary_operator_validation():
     # Valid expression containing JS ternary operator
     content = (
         "<html><head></head><body>"
-        '<div asok-bind:class="\'p-3 text-xs \' + (activeTab === \'basic\' ? \'active font-bold\' : \'font-medium\')">'
+        "<div asok-bind:class=\"'p-3 text-xs ' + (activeTab === 'basic' ? 'active font-bold' : 'font-medium')\">"
         "Content"
         "</div>"
         "</body></html>"
@@ -369,14 +370,42 @@ def test_ternary_operator_validation():
     # Test that dangerous functions are still blocked inside ternary operands
     unsafe_content = (
         "<html><head></head><body>"
-        '<div asok-bind:class="activeTab === \'basic\' ? eval(\'unsafe\') : \'font-medium\'">'
+        "<div asok-bind:class=\"activeTab === 'basic' ? eval('unsafe') : 'font-medium'\">"
         "Content"
         "</div>"
         "</body></html>"
     )
     import pytest
+
     with pytest.raises(ValueError, match="SECURITY: Unsafe expression"):
         app._inject_assets(unsafe_content, request, "testnonce123")
 
+
+def test_directives_js_robustness_features():
+    """Verify that asok_directives.min.js has our robustness changes (circular protection, window.Asok.init hooks, cursor preservation)."""
+    app = Asok()
+    directives_js = app.get_asset("asok_directives.min.js")
+
+    # Circular serialization protection fallback
+    assert "circular-" in directives_js
+
+    # window.Asok.init fallback hooks in directives
+    assert "window.Asok.init" in directives_js
+
+    # Cursor preservation using setSelectionRange
+    assert "setSelectionRange" in directives_js
+
+    # Cloaking cleanup on non-document nodes
+    assert "asok-cloak" in directives_js
+    assert "removeAttribute" in directives_js
+
+    # Model path bracket/index notation support
+    assert "/\\[([^\\]]+)\\]/g" in directives_js or "replace" in directives_js
+
+    # Enforced focus hook
+    assert "focus" in directives_js
+
+    # Checked property sync for checkboxes/radios in bind
+    assert "checked" in directives_js
 
 

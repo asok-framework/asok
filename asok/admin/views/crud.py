@@ -646,9 +646,9 @@ class CRUDViewsMixin:
             self._build_permission_matrix(request, item) if is_role else None
         )
 
-        # SECURITY FIX: Vérifier les permissions RBAC pour le bouton delete
-        # Ne pas seulement vérifier entry["can_delete"] (option statique)
-        # mais aussi self._can() qui vérifie les permissions de l'utilisateur
+        # SECURITY FIX: Check RBAC permissions for the delete button
+        # Do not only check entry["can_delete"] (static option)
+        # but also self._can() which checks user permissions
         can_delete_permission = (
             entry["can_delete"]
             and not editing_self
@@ -674,9 +674,7 @@ class CRUDViewsMixin:
             editing_self=editing_self,
         )
 
-    def _detail(
-        self, request: Any, entry: dict[str, Any], item: Any
-    ) -> Any:
+    def _detail(self, request: Any, entry: dict[str, Any], item: Any) -> Any:
         """Render detail view (read-only) for an item."""
         name = entry["label"][:-1] if entry["label"].endswith("s") else entry["label"]
         title = _display(item) if item else self.t(request, name)
@@ -857,7 +855,9 @@ class CRUDViewsMixin:
 
                     # Save the file
                     try:
-                        upload.save(os.path.join(field.upload_to or "", upload.filename))
+                        upload.save(
+                            os.path.join(field.upload_to or "", upload.filename)
+                        )
                         setattr(item, name, upload.filename)
                     except ValueError as e:
                         # Capture validation errors (invalid magic bytes, etc.)
@@ -868,6 +868,7 @@ class CRUDViewsMixin:
             # SECURITY: Sanitize WYSIWYG content to prevent Stored XSS
             if getattr(field, "wysiwyg", False) and raw:
                 from ...utils.html_sanitizer import sanitize_html
+
                 raw = sanitize_html(raw)
 
             if field.sql_type == "INTEGER":
@@ -917,8 +918,8 @@ class CRUDViewsMixin:
                         "error",
                         self.t(
                             request,
-                            "You cannot remove all your roles. Keep at least one role to maintain access."
-                        )
+                            "You cannot remove all your roles. Keep at least one role to maintain access.",
+                        ),
                     )
                     continue  # Skip this sync, keep existing roles
 

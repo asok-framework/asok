@@ -69,7 +69,11 @@ class MediaViewsMixin:
         normalized = os.path.normpath(rel_path)
 
         # Check for path traversal sequences in normalized path
-        if ".." in normalized or normalized.startswith("/") or normalized.startswith("\\"):
+        if (
+            ".." in normalized
+            or normalized.startswith("/")
+            or normalized.startswith("\\")
+        ):
             return self._forbid(request)
 
         base_dir = os.path.abspath(

@@ -267,6 +267,17 @@ class WSGIMixin:
             tpl_root = self._tpl_root
 
             def core_layer(req):
+
+                def resolve_if_coro(r):
+                    if inspect.iscoroutine(r):
+                        if req.environ.get("asok.asgi"):
+                            return r
+                        else:
+                            from .asgi import async_to_sync
+
+                            return async_to_sync(r)
+                    return r
+
                 if self.config.get("CSRF") and req.method in (
                     "POST",
                     "PUT",
@@ -345,7 +356,8 @@ class WSGIMixin:
                         if action_name:
                             action_func = getattr(module, f"action_{action_name}", None)
                             if callable(action_func):
-                                req.verify_csrf()
+                                if self.config.get("CSRF"):
+                                    req.verify_csrf()
                                 res = action_func(req)
                                 if res is None:
                                     req.abort(
@@ -353,7 +365,7 @@ class WSGIMixin:
                                         f"Action handler 'action_{action_name}' in {page_file} returned None. "
                                         "Ensure your action returns request.html(), request.json(), or calls request.redirect().",
                                     )
-                                return res
+                                return resolve_if_coro(res)
 
                     method_func = getattr(module, req.method.lower(), None)
                     if callable(method_func):
@@ -363,7 +375,7 @@ class WSGIMixin:
                                 500,
                                 f"Method function '{req.method.lower()}' in {page_file} returned None.",
                             )
-                        return res
+                        return resolve_if_coro(res)
 
                     if hasattr(module, "render"):
                         res = module.render(req)
@@ -374,7 +386,7 @@ class WSGIMixin:
                                 500,
                                 f"render() in {page_file} returned None. Check your logic.",
                             )
-                        return res
+                        return resolve_if_coro(res)
 
                     if hasattr(module, "CONTENT"):
                         return module.CONTENT
@@ -396,9 +408,48 @@ class WSGIMixin:
                 req.status = "404 Not Found"
                 return "<h1>404 Not Found</h1><p>The requested route does not provide a valid handler.</p>"
 
-            chain = self._get_middleware_chain(core_layer)
-            with request_context(request):
-                content_str = chain(request)
+            import asyncio
+
+            try:
+                loop_running = asyncio.get_running_loop().is_running()
+            except RuntimeError:
+                loop_running = False
+
+            if loop_running:
+                chain = self._get_async_middleware_chain(core_layer)
+                with request_context(request):
+                    content_str = chain(request)
+            else:
+                is_async_controller = False
+                if module:
+                    method_func = getattr(module, request.method.lower(), None)
+                    if callable(method_func) and inspect.iscoroutinefunction(method_func):
+                        is_async_controller = True
+                    elif request.method == "POST":
+                        action_name = (
+                            request.form.get("_action")
+                            or request.args.get("_action")
+                            or request.args.get("action")
+                        )
+                        if action_name:
+                            action_func = getattr(module, f"action_{action_name}", None)
+                            if callable(action_func) and inspect.iscoroutinefunction(action_func):
+                                is_async_controller = True
+                    if not is_async_controller and hasattr(module, "render") and inspect.iscoroutinefunction(module.render):
+                        is_async_controller = True
+
+                has_async_middleware = any(inspect.iscoroutinefunction(mw) for mw in self.middleware_handlers)
+
+                if has_async_middleware or is_async_controller:
+                    chain = self._get_async_middleware_chain(core_layer)
+                    from .asgi import async_to_sync
+                    with request_context(request):
+                        coro = chain(request)
+                        content_str = async_to_sync(coro)
+                else:
+                    chain = self._get_middleware_chain(core_layer)
+                    with request_context(request):
+                        content_str = chain(request)
 
             status_code = request.status.split(" ")[0]
             is_default_error = False
@@ -539,38 +590,8 @@ class WSGIMixin:
             start_response(request.status, headers)
             return [b""] if is_head else [output]
 
-        if inspect.isgenerator(content_str):
-            headers = [("Content-Type", request.content_type)]
-            headers += self._cookie_headers(request, environ)
-            headers += self._security_headers(
-                request=request, nonce=getattr(request, "nonce", None)
-            )
-
-            use_gzip = (
-                self.config.get("GZIP", False)
-                and "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
-            )
-            if use_gzip:
-                headers.append(("Content-Encoding", "gzip"))
-            start_response(request.status, headers)
-            return SmartStreamer(content_str, request, self)
-
-        if "text/html" in request.content_type:
-            content_str = self._inject_assets(
-                content_str, request, getattr(request, "nonce", None)
-            )
-
-            should_minify = self.config.get("HTML_MINIFY")
-            if should_minify is None:
-                should_minify = not self.config.get("DEBUG")
-
-            if should_minify:
-                content_str = minify_html(str(content_str))
-
-        output = str(content_str).encode("utf-8")
-
+        # Build base headers
         headers = [("Content-Type", request.content_type)]
-
         headers += self._cookie_headers(request, environ)
         headers += self._security_headers(
             request=request, nonce=getattr(request, "nonce", None)
@@ -602,6 +623,50 @@ class WSGIMixin:
                         "Content-Type, X-CSRF-Token, X-Block",
                     )
                 )
+
+        if inspect.isgenerator(content_str):
+            use_gzip = (
+                self.config.get("GZIP", False)
+                and "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
+            )
+            if use_gzip:
+                headers.append(("Content-Encoding", "gzip"))
+                headers.append(("Vary", "Accept-Encoding"))
+
+            block_header = environ.get("HTTP_X_BLOCK")
+            if block_header:
+                headers.append(("X-Asok-Blocks", block_header))
+                # Update Access-Control-Expose-Headers to expose X-Asok-Blocks
+                exposed = [h[1] for h in headers if h[0] == "Access-Control-Expose-Headers"]
+                if exposed:
+                    headers = [
+                        h for h in headers if h[0] != "Access-Control-Expose-Headers"
+                    ]
+                    headers.append(
+                        (
+                            "Access-Control-Expose-Headers",
+                            f"{exposed[0]}, X-Asok-Blocks",
+                        )
+                    )
+                else:
+                    headers.append(("Access-Control-Expose-Headers", "X-Asok-Blocks"))
+
+            start_response(request.status, headers)
+            return SmartStreamer(content_str, request, self)
+
+        if "text/html" in request.content_type:
+            content_str = self._inject_assets(
+                content_str, request, getattr(request, "nonce", None)
+            )
+
+            should_minify = self.config.get("HTML_MINIFY")
+            if should_minify is None:
+                should_minify = not self.config.get("DEBUG")
+
+            if should_minify:
+                content_str = minify_html(str(content_str))
+
+        output = str(content_str).encode("utf-8")
 
         if (
             self.config.get("GZIP", False)
@@ -662,7 +727,7 @@ class WSGIMixin:
         start_response(request.status, headers)
         return [b""] if is_head else [output]
 
-    def __call__(
+    def _wsgi_call(
         self, environ: dict[str, Any], start_response: Callable
     ) -> list[bytes]:
         """Main WSGI entry point for the Asok framework."""
@@ -784,11 +849,18 @@ class WSGIMixin:
                         "500 Internal Server Error",
                         [("Content-Type", "text/html; charset=utf-8")],
                     )
-                    return [error_page.encode("utf-8") if isinstance(error_page, str) else error_page]
+                    return [
+                        error_page.encode("utf-8")
+                        if isinstance(error_page, str)
+                        else error_page
+                    ]
 
             # Finalize Response
             return self._finalize_response(
                 request, result, environ, is_head, start_response
             )
         finally:
+            from ..orm import close_all_db_connections
+
+            close_all_db_connections()
             request_var.reset(token)

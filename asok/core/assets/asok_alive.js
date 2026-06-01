@@ -1,14 +1,28 @@
 window.asokWS = function (path) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  let host = location.hostname + ":" + (window.ASOK_WS_PORT || 8001);
+  let host;
+
+  // SECURITY: Only allow configurable port in development (localhost)
   if (
-    location.hostname !== "localhost" &&
-    location.hostname !== "127.0.0.1" &&
-    location.hostname !== "0.0.0.0" &&
-    !location.hostname.startsWith("192.168.")
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1" ||
+    location.hostname === "0.0.0.0" ||
+    location.hostname.startsWith("192.168.")
   ) {
+    const port = window.ASOK_WS_PORT || 8001;
+    // SECURITY: Validate port range to prevent hijacking
+    if (window.AsokSecurity && window.AsokSecurity.isValidPort) {
+      if (!window.AsokSecurity.isValidPort(port)) {
+        console.error('[Asok Security] Invalid WebSocket port:', port);
+        throw new Error('Invalid WebSocket port configuration');
+      }
+    }
+    host = location.hostname + ":" + port;
+  } else {
+    // Production: always use same host
     host = location.host + "/ws";
   }
+
   return new WebSocket(protocol + "//" + host + path);
 };
 
@@ -44,7 +58,23 @@ window.asokWS = function (path) {
     };
 
     ws.onmessage = function (e) {
-      const d = JSON.parse(e.data);
+      // SECURITY: Safe JSON parsing with error handling
+      const d = window.AsokSecurity && window.AsokSecurity.safeJsonParse ?
+        window.AsokSecurity.safeJsonParse(e.data) : JSON.parse(e.data);
+
+      if (!d) {
+        console.error('[Asok] Invalid WebSocket message');
+        return;
+      }
+
+      // SECURITY: Validate message structure
+      if (window.AsokSecurity && window.AsokSecurity.validateWsMessage) {
+        if (!window.AsokSecurity.validateWsMessage(d)) {
+          console.error('[Asok Security] Invalid message structure');
+          return;
+        }
+      }
+
       if (d.op === "render") {
         const el = document.getElementById("asok-" + d.cid);
         if (el) {
@@ -54,7 +84,8 @@ window.asokWS = function (path) {
               code += "window.__asok_registry[" + JSON.stringify(h) + "] = (" + d.registry[h] + ");\n";
             }
             const s = document.createElement("script");
-            s.nonce = window.Asok.nonce;
+            const nonce = window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+            if (nonce) s.nonce = nonce;
             s.textContent = code;
             document.head.appendChild(s);
             s.remove();
@@ -62,10 +93,35 @@ window.asokWS = function (path) {
           if (d.invalidate_cache) {
             if (window.__asokClearCache) window.__asokClearCache();
           }
-          const newEl = new DOMParser().parseFromString(d.html, "text/html").body.firstElementChild;
+
+          // SECURITY: Sanitize HTML before parsing (defense-in-depth)
+          const safeHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
+            window.AsokSecurity.sanitizeHtml(d.html) : d.html;
+
+          const newEl = new DOMParser().parseFromString(safeHtml, "text/html").body.firstElementChild;
           el.replaceWith(newEl);
           const updated = document.getElementById("asok-" + d.cid);
           if (updated) {
+            // Execute nested scripts inside the updated component subtree
+            const componentScripts = [];
+            if (updated.tagName === 'SCRIPT') {
+              componentScripts.push(updated);
+            }
+            updated.querySelectorAll('script').forEach(function (script) {
+              componentScripts.push(script);
+            });
+
+            componentScripts.forEach(function (script) {
+              if (script.dataset.run || script.id === 'asok-scoped-js') return;
+              const newScript = document.createElement('script');
+              const nonce = window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+              if (nonce) newScript.nonce = nonce;
+              if (script.src) newScript.src = script.src;
+              newScript.textContent = script.textContent;
+              newScript.dataset.run = '1';
+              script.parentNode.replaceChild(newScript, script);
+            });
+
             if (window.AsokDirectives && window.AsokDirectives.init) {
               window.AsokDirectives.init(updated);
             }

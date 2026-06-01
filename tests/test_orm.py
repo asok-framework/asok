@@ -233,3 +233,175 @@ class TestPost:
         Post.create(title="Post 1")
         Post.create(title="Post 2")
         assert Post.count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+
+
+class TestTransaction:
+    def test_transaction_commit(self):
+        with User.transaction():
+            u = create_user(name="TxCommit", email="txcommit@example.com")
+            assert u.id is not None
+            assert User.find(id=u.id) is not None
+
+        fetched = User.find(email="txcommit@example.com")
+        assert fetched is not None
+        assert fetched.name == "TxCommit"
+
+    def test_transaction_rollback(self):
+        try:
+            with User.transaction():
+                create_user(name="TxRollback", email="txrollback@example.com")
+                raise ValueError("Forced rollback")
+        except ValueError:
+            pass
+
+        assert User.find(email="txrollback@example.com") is None
+
+
+# ---------------------------------------------------------------------------
+# Query Cache
+# ---------------------------------------------------------------------------
+
+
+class TestQueryCache:
+    def test_query_cache_memory(self):
+        create_user("Alice", "alice@example.com")
+        # Cache for 60 seconds
+        q = User.query().where("name", "Alice").cache(60)
+        results = q.get()
+        assert len(results) == 1
+        assert results[0].name == "Alice"
+
+        # Modify name directly in DB to bypass cache
+        User.get_engine().execute(
+            "UPDATE users SET name = 'Bob' WHERE email = 'alice@example.com'"
+        )
+
+        # Fetch again with caching enabled
+        cached_results = User.query().where("name", "Alice").cache(60).get()
+        assert len(cached_results) == 1
+        # Should return cached Alice
+        assert cached_results[0].name == "Alice"
+
+        # Fetch without cache
+        fresh_results = User.query().where("name", "Bob").get()
+        assert len(fresh_results) == 1
+        assert fresh_results[0].name == "Bob"
+
+    def test_query_cache_file_backend(self, tmp_path, monkeypatch):
+        from asok.cache import default_cache
+
+        # Change backend to file and set _path to tmp_path / "cache"
+        monkeypatch.setattr(default_cache, "backend", "file")
+        monkeypatch.setattr(default_cache, "_path", str(tmp_path / "cache"))
+        import os
+
+        os.makedirs(default_cache._path, exist_ok=True)
+
+        create_user("Alice", "alice@example.com")
+
+        # Verify it serializes and deserializes without error on a file backend
+        q = User.query().where("name", "Alice").cache(60)
+        results = q.get()
+        assert len(results) == 1
+        assert results[0].name == "Alice"
+
+        # Modify name in DB
+        User.get_engine().execute(
+            "UPDATE users SET name = 'Bob' WHERE email = 'alice@example.com'"
+        )
+
+        # Fetch again with caching enabled, should read from file cache
+        cached_results = User.query().where("name", "Alice").cache(60).get()
+        assert len(cached_results) == 1
+        assert cached_results[0].name == "Alice"
+
+
+# ---------------------------------------------------------------------------
+# Compound Queries
+# ---------------------------------------------------------------------------
+
+
+class TestCompoundQueries:
+    def test_union_and_intersect_aggregates(self):
+        # Create some users
+        create_user("Alice", "alice@example.com")
+        create_user("Bob", "bob@example.com")
+        create_user("Charlie", "charlie@example.com")
+
+        q1 = User.query().where("name", "Alice")
+        q2 = User.query().where("name", "Bob")
+        union_q = q1.union(q2)
+
+        # 1. Test count() on UNION
+        assert union_q.count() == 2
+
+        # 2. Test pluck() on UNION
+        plucked = union_q.pluck("name")
+        assert len(plucked) == 2
+        assert "Alice" in plucked
+        assert "Bob" in plucked
+
+        # 3. Test sum() on UNION using Post
+        Post.create(title="Post 1", author_id=10)
+        Post.create(title="Post 2", author_id=20)
+        Post.create(title="Post 3", author_id=30)
+
+        pq1 = Post.query().where("title", "Post 1")
+        pq2 = Post.query().where("title", "Post 2")
+        pq_union = pq1.union(pq2)
+
+        assert pq_union.sum("author_id") == 30
+
+        # 4. Test INTERSECT
+        # Users with name Alice OR Bob
+        qa = User.query().where("name", "Alice")
+        qb = User.query().where("name", "Alice")  # matches Alice
+        intersect_q = qa.intersect(qb)
+        assert intersect_q.count() == 1
+        assert intersect_q.pluck("name") == ["Alice"]
+
+    def test_compound_query_write_safeguards(self):
+        create_user("Alice", "alice@example.com")
+        create_user("Bob", "bob@example.com")
+
+        q1 = User.query().where("name", "Alice")
+        q2 = User.query().where("name", "Bob")
+        union_q = q1.union(q2)
+
+        # Verify bulk operations raise ValueError
+        with pytest.raises(ValueError, match="Cannot update a compound query"):
+            union_q.update(name="New Name")
+
+        with pytest.raises(ValueError, match="Cannot delete a compound query"):
+            union_q.delete()
+
+        with pytest.raises(ValueError, match="Cannot delete a compound query"):
+            union_q.force_delete()
+
+
+class TestEnvVarDbPath:
+    def test_env_var_db_path_resolution(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "env_test.db")
+
+        class EnvModel(Model):
+            _db_path = "MY_TEST_DATABASE_URL"
+            name = Field.String()
+
+        monkeypatch.setenv("MY_TEST_DATABASE_URL", db_path)
+        EnvModel.close_connections()
+
+        # Verify it resolves correctly
+        engine = EnvModel.get_engine()
+        assert engine.db_path == db_path
+
+        # Verify creating table works
+        EnvModel.create_table()
+        EnvModel.create(name="Hello Env")
+        assert EnvModel.count() == 1
+        EnvModel.close_connections()
+

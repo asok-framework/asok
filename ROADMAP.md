@@ -6,6 +6,47 @@ This roadmap outlines the planned features and improvements for upcoming Asok re
 
 ## Current Stable Release
 
+### v0.3.0 (Released: June 2026)
+
+**Status**: ✅ Stable
+
+Modern async stack, enterprise database support, and developer tooling:
+
+**Core Framework:**
+- **Async/ASGI Support**: Full async/await support with ASGI/WSGI dual engine, async middlewares, and non-blocking database queries
+- **Multi-Database Support**: PostgreSQL and MySQL backends with connection pooling, cross-engine migrations, and config-driven DB binds
+- **Redis Integration**: Native Redis support for caching, session persistence, cache warming, and fragment caching
+- **Cloud Storage**: AWS S3 file storage with automatic mime-type detection
+- **Background Jobs**: `asok worker` command for background task processing with Redis resilience
+- **Database Fixtures**: New `asok dumpdata` and `asok loaddata` CLI commands for data seeding
+
+**Advanced ORM:**
+- **Polymorphic Relationships**: MorphTo/MorphMany for flexible model associations
+- **Self-Referencing Relationships**: Models can reference themselves (parent/child hierarchies)
+- **Nested Eager Loading**: Prevent N+1 queries with deep relation loading
+- **Custom Relationship Types**: Extensible relationship system
+- **Vector Similarity Search**: Built-in support for embedding-based search (PostgreSQL pgvector)
+- **Query Optimization Tools**: N+1 detection in development, query plan analysis, automatic index suggestions, slow query logging
+
+**Real-Time Features:**
+- **WebSocket Rooms**: Room-based broadcasting with join/leave for multi-user collaboration
+
+**Admin Panel Enhancements:**
+- **Inline Editing**: Quick updates without full page navigation
+- **Advanced Filtering**: Date ranges, multi-field filters, saved filter presets
+- **Column Customization**: Toggle column visibility for personalized views
+
+**Developer Experience:**
+- **VSCode Extension**: Official IDE integration with syntax highlighting, IntelliSense, template autocompletion, route navigation, and snippets
+- **Localization Tools**: Translation management UI and automatic string extraction for i18n
+- **Query Debugging**: Built-in tools for identifying and fixing performance issues
+
+[View Full Changelog](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md)
+
+---
+
+## Previous Releases
+
 ### v0.1.7 (Released: May 2026)
 
 **Status**: ✅ Stable
@@ -15,84 +56,11 @@ Framework refactoring and architecture overhaul for long-term maintainability:
 - **Asset Compilation**: Pre-compiled minified assets for admin, API, and developer toolbar. Added official Python 3.13 support.
 - **Enhanced Test Coverage**: Added dedicated suites for AJAX CSRF rotation, SPA reactivity fixes, developer toolbar, and API static files.
 
-
-[View Full Changelog](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md)
-
 ---
 
 ## Upcoming Releases
 
-### v0.2.0 - Enterprise Features (Q2 2026)
-
-**Status**: 🚧 In Progress
-
-#### Database & ORM
-
-- **PostgreSQL & MySQL Support** - Multi-database backend support beyond SQLite
-  - PostgreSQL support with JSONB, Arrays, and advanced types
-  - MySQL/MariaDB support with full compatibility
-  - Connection pooling and transaction management
-  - Migration compatibility layer
-  - Database switching via configuration
-  - Unified query builder across all databases
-
-- **Advanced Relationships** - Enhanced ORM capabilities
-  - Polymorphic relationships (morphTo/morphMany)
-  - Self-referencing relationships
-  - Nested eager loading optimization
-  - Query scopes and global scopes
-
-#### Real-time & Background Jobs
-
-- **WebSocket Rooms** - Multi-user real-time collaboration
-  - Room-based message broadcasting
-  - User presence tracking
-  - Room permissions and authentication
-  - Private messaging support
-
-- **Job Queue System** - Background task processing
-  - Redis/SQLite-based queue backends
-  - Delayed job execution
-  - Job retry with exponential backoff
-  - Job status monitoring and logging
-  - Priority queues
-
-#### Developer Experience
-
-- **Plugin System** - Extend Asok with third-party packages
-  - Plugin discovery and auto-registration
-  - Hook system for core events
-  - Plugin configuration API
-  - Official plugin registry
-
-- **CLI Enhancements** - Improved developer tools
-  - Performance profiling tools (flame graphs, memory usage)
-  - Database introspection commands (show schema, explain queries)
-  - Asset pipeline optimization (automatic sprite generation)
-  - Environment management (config validation, secrets vault)
-
-- **VSCode Extension** - Official IDE integration
-  - Syntax highlighting for Asok templates
-  - IntelliSense for template tags and filters
-  - Model field autocompletion
-  - Route navigation and URL reverse lookup
-  - Built-in snippets for common patterns
-  - Debug configuration templates
-  - Live preview for templates
-
-#### Admin Interface
-
-- **Admin UI Improvements** - Enhanced administration experience
-  - Inline editing for quick updates
-  - Drag-and-drop file uploads with progress
-  - Advanced filtering with date ranges
-  - Column visibility customization
-  - Saved filter presets
-  - Dashboard widgets and statistics
-
----
-
-### v0.3.0 - Modern Stack (Q3 2026)
+### v0.4.0 - GraphQL & Enterprise Scale (Q4 2026)
 
 **Status**: 📋 Planned
 
@@ -111,25 +79,47 @@ Framework refactoring and architecture overhaul for long-term maintainability:
   - API deprecation warnings and sunset headers
   - Version negotiation and content-type versioning
 
-#### Performance & Scalability
+#### Enterprise & Scalability
+
+- **Advanced WebSocket Features** - Enhanced real-time capabilities
+  - User presence tracking and status updates
+  - Room permissions and authentication
+  - Private messaging and direct messages
+  - Typing indicators and read receipts
+
+- **Multi-Database Scaling** - Horizontal scaling
+  - Read replicas configuration
+  - Sharding strategies for large datasets
+  - Multi-region database support
+  - Automatic read/write load balancing
+
+#### Developer Experience
+
+- **Plugin System** - Extend Asok with third-party packages
+  - Plugin discovery and auto-registration
+  - Hook system for core events
+  - Plugin configuration API
+  - Official plugin registry
+
+- **CLI Enhancements** - Advanced developer tools
+  - Performance profiling tools (flame graphs, memory usage)
+  - Database introspection commands (show schema, explain queries)
+  - Asset pipeline optimization (automatic sprite generation)
+  - Environment management (config validation, secrets vault)
+
+- **VSCode Extension Enhancements** - Advanced IDE features
+  - Debug configuration templates
+  - Live preview for templates
+  - Integrated test runner
+  - Visual database schema browser
+
+#### Performance & Rendering
 
 - **Advanced SSR & Hydration** - Enhanced rendering strategies
   - Hybrid rendering (SSR + Client-side hydration)
   - Selective/Partial hydration for islands architecture
   - Static site generation (SSG) for marketing pages
   - Incremental static regeneration (ISR)
-
-- **Multi-Database Support** - Horizontal scaling
-  - Read replicas configuration
-  - Sharding strategies
-  - Connection pooling per database
-  - Load balancing
-
-- **Async/Await Support** - ASGI compatibility
-  - Full async request handling
-  - Async ORM queries
-  - Async middleware support
-  - WebSocket async handlers
 
 #### Monitoring & Observability
 
@@ -140,17 +130,21 @@ Framework refactoring and architecture overhaul for long-term maintainability:
   - Health check endpoints
   - Integration with Prometheus/Grafana
 
-- **Query Optimization** - Automatic performance tuning
-  - N+1 query detection in development
-  - Query plan analysis
-  - Automatic index suggestions
-  - Slow query logging
+#### Admin Interface
+
+- **Admin Dashboard Enhancements** - Advanced administration features
+  - Drag-and-drop file uploads with progress
+  - Dashboard widgets and statistics
+  - Batch operations interface
+  - Advanced export/import tools
+
+---
 
 ---
 
 ## Long-term Vision (2027+)
 
-### v0.4.0 and Beyond
+### v0.5.0 and Beyond
 
 These features are under consideration based on community feedback:
 
@@ -193,9 +187,9 @@ Check [GitHub Discussions](https://github.com/asok-framework/asok/discussions) f
 | v0.1.4 | May 9, 2026 | ✅ Released | DX & Advanced UI |
 | v0.1.6 | May 15, 2026 | ✅ Released | Security & UI Transitions |
 | v0.1.7 | May 25, 2026 | ✅ Released | Architecture Overhaul |
-| v0.2.0 | June 2026 | 🚧 In Progress | Enterprise Features |
-| v0.3.0 | September 2026 | 📋 Planned | Modern Stack |
-| v0.4.0 | Q1 2027 | 💭 Conceptual | Advanced Features |
+| v0.3.0 | June 1, 2026 | ✅ Released | Async & Multi-DB Support |
+| v0.4.0 | Q4 2026 | 📋 Planned | Advanced Features |
+| v0.5.0 | Q2 2027 | 💭 Conceptual | Enterprise Scale |
 
 **Note**: Dates are approximate and subject to change based on community priorities and development capacity.
 
@@ -223,6 +217,6 @@ We maintain backward compatibility within major versions and provide clear upgra
 
 ---
 
-**Last Updated**: May 25, 2026
+**Last Updated**: June 1, 2026
 
 For the most up-to-date information, check the [GitHub Projects board](https://github.com/asok-framework/asok/projects).

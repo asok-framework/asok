@@ -487,7 +487,23 @@ class TemplateMixin:
                 if os.path.isfile(full_min):
                     target_path = min_path
 
-        url = "/" + target_path.lstrip("/")
+        serve_s3 = (
+            os.environ.get("ASOK_SERVE_STATIC_FROM_S3", "false").lower() == "true"
+        )
+        if serve_s3:
+            try:
+                from asok.core.storage import S3Storage, get_storage
+
+                storage = get_storage()
+                if isinstance(storage, S3Storage):
+                    url = storage.url(target_path.lstrip("/"))
+                else:
+                    url = "/" + target_path.lstrip("/")
+            except Exception:
+                url = "/" + target_path.lstrip("/")
+        else:
+            url = "/" + target_path.lstrip("/")
+
         if app_ref and not app_ref.config.get("DEBUG"):
             h = app_ref._static_hash(target_path)
             if h:

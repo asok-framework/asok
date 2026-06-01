@@ -198,6 +198,7 @@ class TestErrorPageRendering:
     def test_request_status_code_in_error_rendering(self):
         from asok.core import Asok
         from asok.request import Request
+
         app = Asok()
         req = Request(make_env("GET", "/some-route"))
         assert req.status_code() == 200

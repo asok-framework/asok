@@ -27,3 +27,6 @@ env/
 
 # Logs
 *.log
+
+db.sqlite3
+:memory:

@@ -23,7 +23,7 @@ class OpenAPIGenerator:
                 "title": app.config.get(
                     "API_TITLE", app.config.get("PROJECT_NAME", "Asok API")
                 ),
-                "version": app.config.get("VERSION", "0.1.7"),
+                "version": app.config.get("VERSION", "0.3.0"),
                 "description": app.config.get(
                     "API_DESCRIPTION",
                     "A sleek, automatically generated reference for your Asok API endpoints.",
@@ -48,7 +48,7 @@ class OpenAPIGenerator:
         # SECURITY: Limit directory traversal depth to prevent DoS
         for root, _, files in os.walk(pages_dir):
             # Calculate depth relative to pages_dir
-            depth = root[len(pages_dir):].count(os.sep)
+            depth = root[len(pages_dir) :].count(os.sep)
             if depth >= self._MAX_DEPTH:
                 continue
 

@@ -25,7 +25,7 @@ def secure_filename(filename: str) -> str:
         # Keep extension if present
         name, ext = os.path.splitext(filename)
         if ext:
-            filename = name[:250 - len(ext)] + ext
+            filename = name[: 250 - len(ext)] + ext
         else:
             filename = filename[:255]
 
@@ -51,7 +51,7 @@ def secure_filename(filename: str) -> str:
     if len(filename) > 255:
         name, ext = os.path.splitext(filename)
         if ext:
-            filename = name[:250 - len(ext)] + ext
+            filename = name[: 250 - len(ext)] + ext
         else:
             filename = filename[:255]
 

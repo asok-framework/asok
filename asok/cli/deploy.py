@@ -5,13 +5,19 @@ import os
 from .style import Style
 
 
-def run_deploy(root: str) -> None:
+def run_deploy(root: str, prod_dir: str | None = None) -> None:
     """Generate professional, generic production deployment configurations."""
     app_name = os.path.basename(root)
     deploy_dir = os.path.join(root, "deployment")
     os.makedirs(deploy_dir, exist_ok=True)
 
+    if prod_dir:
+        prod_root = os.path.abspath(prod_dir)
+    else:
+        prod_root = f"/var/www/{app_name}"
+
     Style.heading("GENERATING PRODUCTION DEPLOYMENT STACK")
+    Style.info(f"Target production directory: {Style.BOLD}{prod_root}{Style.RESET}")
 
     # Try to grab SECRET_KEY from current .env
     secret_key = "CHANGE_ME_TO_A_LONG_SECURE_STRING"
@@ -27,7 +33,7 @@ def run_deploy(root: str) -> None:
     gunicorn_conf = f"""# Gunicorn configuration for {app_name}
 import multiprocessing
 
-bind = "unix:{root}/{app_name}.sock"
+bind = "unix:{prod_root}/{app_name}.sock"
 workers = multiprocessing.cpu_count() * 2 + 1
 worker_class = "sync"
 timeout = 30
@@ -60,7 +66,7 @@ loglevel = "info"
     gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss image/svg+xml;
 
     location / {{
-        proxy_pass http://unix:{root}/{app_name}.sock;
+        proxy_pass http://unix:{prod_root}/{app_name}.sock;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -68,7 +74,7 @@ loglevel = "info"
     }}
 
     location /static/ {{
-        alias {os.path.join(root, "src/partials/")};
+        alias {prod_root}/src/partials/;
         expires 30d;
         add_header Cache-Control "public, no-transform";
     }}
@@ -87,7 +93,7 @@ loglevel = "info"
         f.write(nginx_conf)
     print(f"  {Style.GREEN}✓{Style.RESET} Generated nginx.conf (Gzip + Security)")
 
-    # 3. SystemD Service
+    # 3. SystemD App Service
     service_conf = f"""[Unit]
 Description=Asok Application: {app_name}
 After=network.target
@@ -95,20 +101,46 @@ After=network.target
 [Service]
 User=www-data
 Group=www-data
-WorkingDirectory={root}
+WorkingDirectory={prod_root}
 # Automatically detect virtualenv
-Environment="PATH={root}/venv/bin"
+Environment="PATH={prod_root}/venv/bin"
 Environment="SECRET_KEY={secret_key}"
 Environment="DEBUG=false"
-Environment="PYTHONPATH={root}"
-ExecStart={root}/venv/bin/gunicorn wsgi:app -c deployment/gunicorn_conf.py
+Environment="PYTHONPATH={prod_root}"
+ExecStart={prod_root}/venv/bin/gunicorn wsgi:app -c deployment/gunicorn_conf.py
 
 [Install]
 WantedBy=multi-user.target
 """
     with open(os.path.join(deploy_dir, f"{app_name}.service"), "w") as f:
         f.write(service_conf)
-    print(f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}.service (Stateless)")
+    print(f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}.service (App web server)")
+
+    # 3.5. SystemD Worker Service
+    worker_service_conf = f"""[Unit]
+Description=Asok Background Task Worker: {app_name}
+After=network.target redis-server.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory={prod_root}
+# Automatically detect virtualenv
+Environment="PATH={prod_root}/venv/bin"
+Environment="SECRET_KEY={secret_key}"
+Environment="DEBUG=false"
+Environment="PYTHONPATH={prod_root}"
+Environment="ASOK_QUEUE_BACKEND=redis"
+ExecStart={prod_root}/venv/bin/asok worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+    with open(os.path.join(deploy_dir, f"{app_name}-worker.service"), "w") as f:
+        f.write(worker_service_conf)
+    print(f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}-worker.service (Background tasks)")
 
     # 4. Setup Script (Automated)
     setup_sh = f"""#!/bin/bash
@@ -120,15 +152,19 @@ echo "  ASOK PRODUCTION SETUP: {app_name}"
 echo "--------------------------------------------------------"
 
 # 1. System Dependencies
-echo "[1/5] Installing system dependencies..."
+echo "[1/5] Installing system dependencies (including Redis)..."
 sudo apt update
-sudo apt install -y nginx python3-pip python3-venv
+sudo apt install -y nginx python3-pip python3-venv redis-server
+
+# Ensure Redis is running
+sudo systemctl enable redis-server
+sudo systemctl restart redis-server
 
 # 2. Virtual Environment
 echo "[2/5] Setting up virtual environment..."
 python3 -m venv venv
 ./venv/bin/pip install --upgrade pip
-./venv/bin/pip install gunicorn asok
+./venv/bin/pip install gunicorn asok redis
 
 # Attempt to install requirements if they exist
 if [ -f "requirements.txt" ]; then
@@ -147,11 +183,14 @@ if [ -f "db.sqlite3" ]; then
 fi
 
 # 4. SystemD Config
-echo "[4/5] Configuring SystemD service..."
+echo "[4/5] Configuring SystemD services..."
 sudo cp deployment/{app_name}.service /etc/systemd/system/
+sudo cp deployment/{app_name}-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable {app_name}
+sudo systemctl enable {app_name}-worker
 sudo systemctl restart {app_name}
+sudo systemctl restart {app_name}-worker
 
 # 5. Nginx Config
 echo "[5/5] Configuring Nginx reverse-proxy..."
@@ -161,7 +200,7 @@ sudo nginx -t
 sudo systemctl restart nginx
 
 echo "--------------------------------------------------------"
-echo "  SUCCESS! YOUR APP IS NOW LIVE."
+echo "  SUCCESS! YOUR APP & WORKER ARE NOW LIVE."
 echo "--------------------------------------------------------"
 echo "Next steps:"
 echo "1. Update yourdomain.com in /etc/nginx/sites-available/{app_name}"

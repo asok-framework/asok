@@ -24,7 +24,8 @@ class FormField:
     ):
         # SECURITY: Validate field name to prevent injection in HTML attributes
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
             raise ValueError(
                 f"Invalid field name '{name}': must start with letter/underscore "
                 f"and contain only alphanumeric characters and underscores"

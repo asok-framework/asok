@@ -114,8 +114,14 @@ class Mail:
 
         # Validate all recipient emails
         to = [Mail._validate_email(e) for e in to]
-        cc_list = [Mail._validate_email(e) for e in ([cc] if isinstance(cc, str) else (cc or []))]
-        bcc_list = [Mail._validate_email(e) for e in ([bcc] if isinstance(bcc, str) else (bcc or []))]
+        cc_list = [
+            Mail._validate_email(e)
+            for e in ([cc] if isinstance(cc, str) else (cc or []))
+        ]
+        bcc_list = [
+            Mail._validate_email(e)
+            for e in ([bcc] if isinstance(bcc, str) else (bcc or []))
+        ]
 
         # SECURITY: Limit total recipients across to/cc/bcc (max 100)
         all_recipients = (to + cc_list + bcc_list)[:100]
@@ -161,9 +167,12 @@ class Mail:
                 raise_on_error=True,
             )
         else:
-            t = threading.Thread(
-                target=Mail._do_send,
-                args=(
+            backend = os.environ.get("ASOK_QUEUE_BACKEND", "local").lower()
+            if backend == "redis":
+                from .background import background
+
+                background(
+                    _send_mail_task,
                     sender,
                     all_recipients,
                     msg_string,
@@ -172,7 +181,45 @@ class Mail:
                     username,
                     password,
                     use_tls,
-                ),
-                daemon=True,
-            )
-            t.start()
+                )
+                return None
+            else:
+                t = threading.Thread(
+                    target=Mail._do_send,
+                    args=(
+                        sender,
+                        all_recipients,
+                        msg_string,
+                        host,
+                        port,
+                        username,
+                        password,
+                        use_tls,
+                    ),
+                    daemon=True,
+                )
+                t.start()
+                return t
+
+
+def _send_mail_task(
+    sender: str,
+    all_recipients: list[str],
+    msg_string: str,
+    host: str,
+    port: int,
+    username: Optional[str],
+    password: Optional[str],
+    use_tls: bool,
+) -> None:
+    Mail._do_send(
+        sender=sender,
+        all_recipients=all_recipients,
+        msg_string=msg_string,
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        use_tls=use_tls,
+        raise_on_error=False,
+    )

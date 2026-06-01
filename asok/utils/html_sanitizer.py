@@ -8,13 +8,36 @@ from html import escape
 
 # Whitelist of safe HTML tags and attributes
 ALLOWED_TAGS = {
-    "p", "br", "strong", "em", "u", "s", "del", "ins",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "ul", "ol", "li",
-    "blockquote", "pre", "code",
-    "a", "img",
-    "table", "thead", "tbody", "tr", "th", "td",
-    "span", "div",
+    "p",
+    "br",
+    "strong",
+    "em",
+    "u",
+    "s",
+    "del",
+    "ins",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "pre",
+    "code",
+    "a",
+    "img",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+    "span",
+    "div",
 }
 
 ALLOWED_ATTRIBUTES = {
@@ -29,8 +52,15 @@ ALLOWED_ATTRIBUTES = {
 
 # Safe CSS properties for style attribute
 ALLOWED_STYLES = {
-    "color", "background-color", "font-size", "font-weight", "font-style",
-    "text-align", "text-decoration", "padding", "margin",
+    "color",
+    "background-color",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "text-align",
+    "text-decoration",
+    "padding",
+    "margin",
 }
 
 
@@ -63,29 +93,33 @@ def sanitize_html(html: str) -> str:
         return escape(html[:1000]) + "... [content too large]"
 
     # Remove comments
-    html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
 
     # Remove dangerous tags entirely
-    dangerous_tags = r'<\s*(script|style|iframe|object|embed|applet|link|meta|base|form|input|textarea|button)[^>]*?>.*?</\1>|<\s*(script|style|iframe|object|embed|applet|link|meta|base|form|input|textarea|button)[^>]*?/?>'
-    html = re.sub(dangerous_tags, '', html, flags=re.IGNORECASE | re.DOTALL)
+    dangerous_tags = r"<\s*(script|style|iframe|object|embed|applet|link|meta|base|form|input|textarea|button)[^>]*?>.*?</\1>|<\s*(script|style|iframe|object|embed|applet|link|meta|base|form|input|textarea|button)[^>]*?/?>"
+    html = re.sub(dangerous_tags, "", html, flags=re.IGNORECASE | re.DOTALL)
 
     # Remove event handlers (onclick, onerror, onload, etc.)
-    html = re.sub(r'\s*on\w+\s*=\s*["\'][^"\']*["\']', '', html, flags=re.IGNORECASE)
-    html = re.sub(r'\s*on\w+\s*=\s*\w+', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s*on\w+\s*=\s*["\'][^"\']*["\']', "", html, flags=re.IGNORECASE)
+    html = re.sub(r"\s*on\w+\s*=\s*\w+", "", html, flags=re.IGNORECASE)
 
     # Remove javascript: protocol (remove entire value)
-    html = re.sub(r'(href|src)\s*=\s*["\']javascript:[^"\']*["\']', '', html, flags=re.IGNORECASE)
+    html = re.sub(
+        r'(href|src)\s*=\s*["\']javascript:[^"\']*["\']', "", html, flags=re.IGNORECASE
+    )
 
     # Remove data: protocol except for images
-    html = re.sub(r'(<img[^>]+src\s*=\s*["\'])data:(?!image/)', r'\1', html, flags=re.IGNORECASE)
-    html = re.sub(r'(<a[^>]+href\s*=\s*["\'])data:', r'\1', html, flags=re.IGNORECASE)
+    html = re.sub(
+        r'(<img[^>]+src\s*=\s*["\'])data:(?!image/)', r"\1", html, flags=re.IGNORECASE
+    )
+    html = re.sub(r'(<a[^>]+href\s*=\s*["\'])data:', r"\1", html, flags=re.IGNORECASE)
 
     # Parse and rebuild HTML with whitelist
     result = []
     pos = 0
 
     # Simple tag parser (not a full HTML parser, but sufficient for WYSIWYG content)
-    tag_pattern = re.compile(r'<(/?)(\w+)([^>]*)>', re.IGNORECASE)
+    tag_pattern = re.compile(r"<(/?)(\w+)([^>]*)>", re.IGNORECASE)
 
     # SECURITY: Limit number of tags processed to prevent DoS
     tag_count = 0
@@ -96,7 +130,7 @@ def sanitize_html(html: str) -> str:
         if tag_count > max_tags:
             break
         # Add text before tag
-        text_before = html[pos:match.start()]
+        text_before = html[pos : match.start()]
         if text_before:
             result.append(escape(text_before))
 
@@ -108,14 +142,14 @@ def sanitize_html(html: str) -> str:
         if tag in ALLOWED_TAGS:
             # Closing tag
             if closing:
-                result.append(f'</{tag}>')
+                result.append(f"</{tag}>")
             else:
                 # Opening tag - sanitize attributes
                 sanitized_attrs = _sanitize_attributes(tag, attrs)
                 if sanitized_attrs:
-                    result.append(f'<{tag} {sanitized_attrs}>')
+                    result.append(f"<{tag} {sanitized_attrs}>")
                 else:
-                    result.append(f'<{tag}>')
+                    result.append(f"<{tag}>")
         # else: skip unknown tags
 
         pos = match.end()
@@ -124,23 +158,31 @@ def sanitize_html(html: str) -> str:
     if pos < len(html):
         result.append(escape(html[pos:]))
 
-    return ''.join(result)
+    return "".join(result)
 
 
 def _sanitize_attributes(tag: str, attrs: str) -> str:
-    """Sanitize HTML attributes for a given tag."""
+    """Sanitize HTML attributes for a given tag.
+
+    SECURITY: Improved parser handles both quoted and unquoted attributes.
+    """
     if not attrs or tag not in ALLOWED_ATTRIBUTES:
         return ""
 
     allowed = ALLOWED_ATTRIBUTES[tag]
     sanitized = []
 
-    # Parse attributes (simple regex, not perfect but sufficient)
-    attr_pattern = re.compile(r'(\w+)\s*=\s*(["\'])([^"\']*)\2', re.IGNORECASE)
+    # SECURITY: Enhanced regex to match both quoted and unquoted attributes
+    # Matches: name="value", name='value', name=value
+    attr_pattern = re.compile(
+        r'(\w+)\s*=\s*(?:(["\'])((?:(?!\2).)*)\2|([^\s>]+))',
+        re.IGNORECASE
+    )
 
     for match in attr_pattern.finditer(attrs):
         attr_name = match.group(1).lower()
-        attr_value = match.group(3)
+        # Get value from either quoted (group 3) or unquoted (group 4)
+        attr_value = match.group(3) if match.group(3) is not None else match.group(4)
 
         if attr_name in allowed:
             # Special handling for style attribute
@@ -160,7 +202,7 @@ def _sanitize_attributes(tag: str, attrs: str) -> str:
             # Escape attribute value
             sanitized.append(f'{attr_name}="{escape(attr_value, quote=True)}"')
 
-    return ' '.join(sanitized)
+    return " ".join(sanitized)
 
 
 def _sanitize_style(style: str) -> str:
@@ -170,24 +212,24 @@ def _sanitize_style(style: str) -> str:
 
     # Parse style declarations
     safe_rules = []
-    for rule in style.split(';'):
+    for rule in style.split(";"):
         rule = rule.strip()
-        if ':' not in rule:
+        if ":" not in rule:
             continue
 
-        prop, value = rule.split(':', 1)
+        prop, value = rule.split(":", 1)
         prop = prop.strip().lower()
         value = value.strip()
 
         # Check if property is allowed
         if prop in ALLOWED_STYLES:
             # Remove dangerous values
-            if re.search(r'expression|javascript|import|url\(', value, re.IGNORECASE):
+            if re.search(r"expression|javascript|import|url\(", value, re.IGNORECASE):
                 continue
             # Don't escape the value here, just validate it
-            safe_rules.append(f'{prop}: {value}')
+            safe_rules.append(f"{prop}: {value}")
 
-    return '; '.join(safe_rules) if safe_rules else ""
+    return "; ".join(safe_rules) if safe_rules else ""
 
 
 def _is_safe_url(url: str, allow_data_images: bool = False) -> bool:
@@ -198,9 +240,11 @@ def _is_safe_url(url: str, allow_data_images: bool = False) -> bool:
     url_lower = url.lower().strip()
 
     # Block dangerous protocols
-    if any(url_lower.startswith(proto) for proto in ['javascript:', 'data:', 'vbscript:']):
+    if any(
+        url_lower.startswith(proto) for proto in ["javascript:", "data:", "vbscript:"]
+    ):
         # Allow data:image/* if specified
-        if allow_data_images and url_lower.startswith('data:image/'):
+        if allow_data_images and url_lower.startswith("data:image/"):
             return True
         return False
 

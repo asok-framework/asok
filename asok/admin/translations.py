@@ -175,7 +175,6 @@ MESSAGES = {
         "Stopped impersonation": "Impersonnalisation arrêtée",
         "Impersonation expired (1 h max.)": "Impersonnalisation expirée (1 h max.).",
         "Unauthorized impersonation.": "Impersonnalisation non autorisée.",
-
         "File deleted": "Fichier supprimé",
         "File not found": "Fichier introuvable",
         "No files selected": "Aucun fichier sélectionné",
@@ -447,7 +446,6 @@ MESSAGES = {
         "Stopped impersonation": "Suplantación detenida",
         "Impersonation expired (1 h max.)": "Suplantación expirada (1 h máx.).",
         "Unauthorized impersonation.": "Suplantación no autorizada.",
-
         "File deleted": "Archivo eliminado",
         "File not found": "Archivo no encontrado",
         "No files selected": "No se seleccionaron archivos",

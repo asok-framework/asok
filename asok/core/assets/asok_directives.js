@@ -158,19 +158,25 @@
         el.offsetHeight; // Force reflow
         requestAnimationFrame(() => {
           el.classList.add('is-entering');
+          // SECURITY: Validate and cap duration to prevent timing attacks
+          const safeDur = window.AsokSecurity && window.AsokSecurity.safeDuration ?
+            window.AsokSecurity.safeDuration(activeDuration, 5000) : Math.min(activeDuration, 5000);
           setTimeout(() => {
             el.classList.remove(`asok-${baseName}-in`, 'is-entering');
-          }, activeDuration);
+          }, safeDur);
         });
       } else {
         el.classList.add(`asok-${baseName}-out`);
         el.offsetHeight; // Force reflow
         requestAnimationFrame(() => {
           el.classList.add('is-leaving');
+          // SECURITY: Validate and cap duration to prevent timing attacks
+          const safeDur = window.AsokSecurity && window.AsokSecurity.safeDuration ?
+            window.AsokSecurity.safeDuration(activeDuration, 5000) : Math.min(activeDuration, 5000);
           setTimeout(() => {
             if (callback) callback();
             el.classList.remove(`asok-${baseName}-out`, 'is-leaving');
-          }, activeDuration);
+          }, safeDur);
         });
       }
     } else {
@@ -213,8 +219,14 @@
     if (el.hasAttribute('asok-html-ref')) {
       const val = evaluateExpression(getAttr('asok-html-ref'), state, el);
       if (val !== undefined) {
-        // Strip script tags to avoid XSS execution
-        el.innerHTML = String(val).replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+        // SECURITY: Sanitize HTML to prevent XSS attacks
+        // Use AsokSecurity.sanitizeHtml if available, fallback to textContent
+        if (window.AsokSecurity && window.AsokSecurity.sanitizeHtml) {
+          el.innerHTML = window.AsokSecurity.sanitizeHtml(String(val));
+        } else {
+          // Fallback: use textContent for safety if security utils not loaded
+          el.textContent = String(val);
+        }
       }
     }
 
@@ -308,11 +320,31 @@
       // asok-bind:name
       if (attr.name.startsWith('asok-bind-ref:')) {
         const attrName = attr.name.substring(14);
+
+        // SECURITY: Validate attribute name to prevent event handler injection
+        if (window.AsokSecurity && !window.AsokSecurity.isSafeAttribute(attrName)) {
+          console.warn('[Asok] Blocked unsafe attribute binding:', attrName);
+          return;
+        }
+
         const val = evaluateExpression(attr.value, state, el);
-        if (val !== undefined && val !== null && val !== false) {
-          el.setAttribute(attrName, String(val));
+        const isTruthy = val !== undefined && val !== null && val !== false;
+        if (isTruthy) {
+          const strVal = String(val);
+
+          // SECURITY: Validate URLs in href/src attributes
+          if ((attrName === 'href' || attrName === 'src') &&
+              window.AsokSecurity && !window.AsokSecurity.isSafeUrl(strVal)) {
+            console.warn('[Asok] Blocked unsafe URL in attribute:', attrName);
+            return;
+          }
+
+          el.setAttribute(attrName, strVal);
         } else {
           el.removeAttribute(attrName);
+        }
+        if (attrName === 'checked' && (el.type === 'checkbox' || el.type === 'radio')) {
+          el.checked = !!isTruthy;
         }
       }
     });
@@ -345,7 +377,7 @@
           item._n = fragment.firstElementChild;
           item.parentNode.insertBefore(fragment, item.nextSibling);
           contexts.set(item._n, contexts.get(el) || { state: state, refs: {} });
-          init(item._n);
+          if (window.Asok && window.Asok.init) window.Asok.init(item._n); else init(item._n);
         }
         conditionMet = 1;
       } else if (item._n) {
@@ -361,7 +393,12 @@
     const ref = el.getAttribute('asok-for-ref');
     const varName = el.getAttribute('asok-for-var');
     const items = evaluateExpression(ref, state, el) || [];
-    const itemsJSON = JSON.stringify(items);
+    let itemsJSON;
+    try {
+      itemsJSON = JSON.stringify(items);
+    } catch (e) {
+      itemsJSON = 'circular-' + Date.now();
+    }
     
     if (el._lastItems === itemsJSON) return;
     el._lastItems = itemsJSON;
@@ -390,7 +427,7 @@
       contexts.set(child, { state: subState, refs: {}, cleanup: [] });
       el.parentNode.insertBefore(fragment, el._marker);
       el._children.push(child);
-      init(child);
+      if (window.Asok && window.Asok.init) window.Asok.init(child); else init(child);
     });
   };
 
@@ -413,6 +450,11 @@
     scope.querySelectorAll('*').forEach(el => {
       if (el._updateValue) el._updateValue();
       if (el.tagName === 'TEMPLATE') {
+        let parent = el.parentElement;
+        while (parent && parent !== scope) {
+          if (parent && parent.hasAttribute('asok-state-ref')) return;
+          parent = parent.parentElement;
+        }
         const owner = findStateOwner(el);
         const ownerState = owner ? contexts.get(owner).state : ctx.state;
         if (el.hasAttribute('asok-if-ref')) updateIfDirective(el, ownerState);
@@ -508,9 +550,9 @@
     const state = contexts.get(owner).state;
     el._modelInitialized = 1;
 
-    const getValue = (obj, path) => path.split('.').reduce((acc, k) => acc && acc[k], obj);
+    const getValue = (obj, path) => path.replace(/\[([^\]]+)\]/g, '.$1').split('.').reduce((acc, k) => acc && acc[k], obj);
     const setValue = (obj, path, val) => {
-      const keys = path.split('.');
+      const keys = path.replace(/\[([^\]]+)\]/g, '.$1').split('.');
       const lastKey = keys.pop();
       const target = keys.reduce((acc, x) => acc[x] = acc[x] || {}, obj);
       target[lastKey] = val;
@@ -519,10 +561,34 @@
     el._updateValue = () => {
       const val = getValue(state, modelAttr);
       const displayVal = (val !== undefined && val !== null) ? val : '';
-      if (el.value !== String(displayVal) && document.activeElement !== el) {
-        if (el.type === 'checkbox') el.checked = !!displayVal;
-        else if (el.type === 'radio') el.checked = el.value === displayVal;
-        else el.value = displayVal;
+      if (el.value !== String(displayVal)) {
+        if (el.type === 'checkbox') {
+          el.checked = !!displayVal;
+        } else if (el.type === 'radio') {
+          el.checked = el.value === displayVal;
+        } else {
+          const isFocused = document.activeElement === el;
+          if (isFocused && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+            let hasSelection = false;
+            let selectionStart, selectionEnd;
+            try {
+              selectionStart = el.selectionStart;
+              selectionEnd = el.selectionEnd;
+              hasSelection = typeof selectionStart === 'number' && typeof selectionEnd === 'number';
+            } catch (e) {}
+            
+            el.value = displayVal;
+            
+            if (hasSelection) {
+              try {
+                el.setSelectionRange(selectionStart, selectionEnd);
+              } catch (e) {}
+            }
+            try { el.focus(); } catch (e) {}
+          } else {
+            el.value = displayVal;
+          }
+        }
       }
     };
 
@@ -758,7 +824,7 @@
           ownerCtx._teleportedScopes.push(child);
           
           target.appendChild(fragment);
-          init(child);
+          if (window.Asok && window.Asok.init) window.Asok.init(child); else init(child);
           el._teleportInitialized = 1;
           el.style.display = 'none';
         }
@@ -796,8 +862,14 @@
     });
 
     // Cloaking cleanup
+    const cleanRoot = root === document ? document : root;
+    if (cleanRoot.querySelectorAll) {
+      if (cleanRoot.hasAttribute && cleanRoot.hasAttribute('asok-cloak')) {
+        cleanRoot.removeAttribute('asok-cloak');
+      }
+      cleanRoot.querySelectorAll('[asok-cloak]').forEach(e => e.removeAttribute('asok-cloak'));
+    }
     if (root === document) {
-      document.querySelectorAll('[asok-cloak]').forEach(e => e.removeAttribute('asok-cloak'));
       document.querySelectorAll('script').forEach(s => s.dataset.run = '1');
     }
   };
@@ -925,9 +997,15 @@
 
   window.Asok.updateWysiwyg = (event, state, inputEl) => {
     const html = event.target.innerHTML;
-    state.content = html;
+
+    // SECURITY: Sanitize WYSIWYG content to prevent Stored XSS
+    // Note: Server-side validation is still required for defense-in-depth
+    const sanitized = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
+      window.AsokSecurity.sanitizeHtml(html) : html;
+
+    state.content = sanitized;
     if (inputEl) {
-      inputEl.value = html;
+      inputEl.value = sanitized;
       inputEl.dispatchEvent(new Event('change'));
     }
   };
@@ -984,13 +1062,18 @@
     ctx.moveTo(event.clientX - rect.left, event.clientY - rect.top);
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = '#000';
+    const isLight = document.body.classList.contains('light-mode');
+    ctx.strokeStyle = isLight ? '#0f172a' : '#f8fafc';
   };
 
   window.Asok.drawSignature = (event, state, canvasEl) => {
     if (state.drawing) {
       const ctx = canvasEl.getContext('2d');
       const rect = canvasEl.getBoundingClientRect();
+      const isLight = document.body.classList.contains('light-mode');
+      ctx.strokeStyle = isLight ? '#0f172a' : '#f8fafc';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
       ctx.lineTo(event.clientX - rect.left, event.clientY - rect.top);
       ctx.stroke();
     }

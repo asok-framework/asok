@@ -92,8 +92,11 @@ class Request(
             except Exception:
                 # Fallback to manual parsing if SimpleCookie fails
                 import logging
+
                 logger = logging.getLogger("asok.request")
-                logger.warning("Failed to parse cookies with SimpleCookie, using fallback")
+                logger.warning(
+                    "Failed to parse cookies with SimpleCookie, using fallback"
+                )
                 for pair in cookie_header.split(";"):
                     pair = pair.strip()
                     if "=" in pair:
@@ -147,6 +150,7 @@ class Request(
             except Exception as e:
                 # SECURITY: Log failed flash message deserialization (could indicate tampering)
                 import logging
+
                 logger = logging.getLogger("asok.security")
                 logger.warning("Failed to deserialize flash messages: %s", e)
 
@@ -185,6 +189,7 @@ class Request(
                     # Log deeply nested JSON attempts for security monitoring
                     if isinstance(e, RecursionError):
                         import logging
+
                         logger = logging.getLogger("asok.security")
                         logger.warning(
                             "Rejected deeply nested JSON payload (possible DoS attempt)"
@@ -193,7 +198,9 @@ class Request(
             elif "multipart/form-data" in enc_content_type:
                 # SECURITY: Extract boundary with proper quote handling (RFC 2046)
                 # Boundary may be quoted: boundary="----WebKitFormBoundary"
-                boundary_match = re.search(r'boundary=([^;\s]+|"[^"]+")', enc_content_type)
+                boundary_match = re.search(
+                    r'boundary=([^;\s]+|"[^"]+")', enc_content_type
+                )
                 if boundary_match:
                     boundary_raw = boundary_match.group(1).strip()
                     # Remove quotes if present
@@ -431,7 +438,23 @@ class Request(
         # 2. Enrich with framework country data
         from asok.utils.geo import Countries
 
-        country_info = Countries.get(loc.get("country", "")) or {
+        country_code = loc.get("country", "")
+        if not country_code or country_code == "Unknown":
+            # Fallback based on request language
+            lang_to_country = {
+                "fr": "FR",
+                "en": "US",
+                "es": "ES",
+                "de": "DE",
+                "it": "IT",
+                "ja": "JP",
+                "zh": "CN",
+                "pt": "BR",
+                "ru": "RU",
+            }
+            country_code = lang_to_country.get(self.lang, "US")
+
+        country_info = Countries.get(country_code) or {
             "iso": "Unknown",
             "name": "Unknown",
             "dial_code": "",
@@ -442,10 +465,14 @@ class Request(
             "languages": "Unknown",
         }
 
+        city = loc.get("city", "Unknown")
+        if (not city or city == "Unknown") and country_info.get("capital") != "Unknown":
+            city = country_info.get("capital", "Unknown")
+
         geo_data = {
             "ip": self.ip,
-            "city": loc.get("city", "Unknown"),
-            "country": loc.get("country", "Unknown"),
+            "city": city,
+            "country": country_code,
             "lat": loc.get("lat", 0.0),
             "lon": loc.get("lon", 0.0),
             **country_info,
@@ -478,6 +505,7 @@ class Request(
             if next_url and ("://" in next_url or next_url.startswith("//")):
                 # Absolute URL - potential open redirect attack
                 import logging
+
                 logger = logging.getLogger("asok.security")
                 logger.warning("Open redirect attempt blocked: %s", next_url)
                 next_url = "/"
@@ -501,6 +529,7 @@ class Request(
         # Block control characters that could be used in attacks
         if any(c in host for c in ("\r", "\n", "\t", " ", "\x00")):
             import logging
+
             logger = logging.getLogger("asok.security")
             logger.warning("Malformed Host header detected: %r", host)
             return "localhost"

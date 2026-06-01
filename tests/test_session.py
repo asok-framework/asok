@@ -169,3 +169,62 @@ class TestSessionDict:
         s = Session(a=1, b=2)
         keys = list(s.keys())
         assert "a" in keys and "b" in keys
+
+
+class TestRedisStore:
+    @pytest.fixture
+    def mock_redis(self):
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        store = {}
+
+        def mock_get(key):
+            return store.get(key)
+
+        def mock_setex(key, ttl, val):
+            store[key] = val
+
+        def mock_delete(key):
+            store.pop(key, None)
+
+        mock_client.get.side_effect = mock_get
+        mock_client.setex.side_effect = mock_setex
+        mock_client.delete.side_effect = mock_delete
+        return mock_client
+
+    @pytest.fixture
+    def store(self, mock_redis):
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        mock_redis_module = MagicMock()
+        mock_redis_module.Redis.from_url.return_value = mock_redis
+
+        with patch.dict(sys.modules, {"redis": mock_redis_module}):
+            s = SessionStore(backend="redis", ttl=3600)
+            s._redis = mock_redis
+            return s
+
+    def test_save_and_load(self, store, mock_redis):
+        sid = store.generate_sid()
+        store.save(sid, {"user_id": 1, "name": "Alice"})
+        data = store.load(sid)
+        assert data == {"user_id": 1, "name": "Alice"}
+        mock_redis.setex.assert_called_once()
+
+    def test_load_missing_returns_none(self, store):
+        assert store.load("nonexistent-sid-xyz") is None
+
+    def test_delete_removes_session(self, store, mock_redis):
+        sid = store.generate_sid()
+        store.save(sid, {"x": 1})
+        store.delete(sid)
+        assert store.load(sid) is None
+        mock_redis.delete.assert_called_with(f"session:{sid}")
+
+    def test_overwrite_session(self, store):
+        sid = store.generate_sid()
+        store.save(sid, {"step": 1})
+        store.save(sid, {"step": 2})
+        assert store.load(sid) == {"step": 2}

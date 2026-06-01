@@ -261,10 +261,10 @@ class TestUserWithoutRoleBlocked:
         # Try to log in. In Asok, if login fails, it returns the rendered page or throws an error.
         # But wait, RedirectException is raised on success. Let's verify it doesn't redirect.
         try:
-            client.post("/admin/login", data={
-                "email": "norole@example.com",
-                "password": "password123"
-            })
+            client.post(
+                "/admin/login",
+                data={"email": "norole@example.com", "password": "password123"},
+            )
             # If it didn't redirect, it stayed on the login screen, which is correct.
         except RedirectException:
             pytest.fail("Should not redirect to admin dashboard for user without roles")
@@ -272,6 +272,7 @@ class TestUserWithoutRoleBlocked:
     def test_user_without_roles_access_denied(self, app):
         """Test that a logged-in user without roles gets blocked when accessing admin routes directly."""
         from asok.exceptions import RedirectException
+
         _, admin = app
 
         # Create a user with NO roles
@@ -289,4 +290,3 @@ class TestUserWithoutRoleBlocked:
         with pytest.raises(RedirectException) as excinfo:
             admin._require_admin(request)
         assert "/admin/login" in excinfo.value.url
-

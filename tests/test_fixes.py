@@ -135,6 +135,12 @@ def test_belongs_to_many_attach_detach():
     Article.create_table()
     Tag.create_table()
 
+    # Clean up any leftover data from previous tests
+    engine = Tag.get_engine()
+    engine.execute("DELETE FROM article_tags")
+    engine.execute("DELETE FROM tags")
+    engine.execute("DELETE FROM articles")
+
     # Create some tags
     tag1 = Tag.create(name="Python")
     tag2 = Tag.create(name="Django")

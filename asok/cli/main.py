@@ -6,7 +6,13 @@ import sys
 
 from .. import __version__
 from .build import run_build
-from .database import run_createsuperuser, run_migrate, run_seed
+from .database import (
+    run_createsuperuser,
+    run_dumpdata,
+    run_loaddata,
+    run_migrate,
+    run_seed,
+)
 from .deploy import run_deploy
 from .generators import (
     make_component,
@@ -53,6 +59,7 @@ def print_help() -> None:
         ],
         "Development": [
             ("dev", "Start the development server with hot-reload"),
+            ("worker", "Start the background task processing worker"),
             ("preview", "Start the production-ready server locally"),
             ("shell", "Open an interactive Python shell with app context"),
             ("routes", "Display all registered routes"),
@@ -62,6 +69,8 @@ def print_help() -> None:
             ("migrate", "Apply pending migrations (--rollback, --status)"),
             ("seed", "Run database seeders"),
             ("createsuperuser", "Create or update an administrative user"),
+            ("dumpdata", "Dump database records to a JSON fixture file"),
+            ("loaddata", "Load records from a JSON fixture file"),
         ],
         "Tools": [
             ("tailwind", "Manage Tailwind CSS (install/build/enable)"),
@@ -88,10 +97,47 @@ def print_help() -> None:
         print()
 
 
+def _add_virtualenv_to_path(root: str | None) -> None:
+    """Detect local or active virtual environments and add their site-packages to sys.path."""
+    venv_paths = []
+
+    # 1. Check active virtual environment
+    active_venv = os.environ.get("VIRTUAL_ENV")
+    if active_venv:
+        venv_paths.append(active_venv)
+
+    # 2. Check local directories in the project root
+    if root:
+        for folder in (".venv", "venv", "env"):
+            p = os.path.join(root, folder)
+            if os.path.isdir(p) and p not in venv_paths:
+                # Ensure it looks like a virtual environment
+                if os.path.isdir(os.path.join(p, "lib")) or os.path.isdir(
+                    os.path.join(p, "Lib")
+                ):
+                    venv_paths.append(p)
+
+    for venv_path in venv_paths:
+        # Check for Unix-style virtual environment site-packages
+        lib_path = os.path.join(venv_path, "lib")
+        if os.path.isdir(lib_path):
+            for item in os.listdir(lib_path):
+                if item.startswith("python"):
+                    site_path = os.path.join(lib_path, item, "site-packages")
+                    if os.path.isdir(site_path) and site_path not in sys.path:
+                        sys.path.insert(0, site_path)
+
+        # Check for Windows-style virtual environment site-packages
+        win_site = os.path.join(venv_path, "Lib", "site-packages")
+        if os.path.isdir(win_site) and win_site not in sys.path:
+            sys.path.insert(0, win_site)
+
+
 def main() -> None:
     """Terminal entry point for the 'asok' CLI."""
     # Load .env early so that all components (like ORM) see the environment
     root = _find_project_root()
+    _add_virtualenv_to_path(root)
     if root:
         env_path = os.path.join(root, ".env")
         if os.path.exists(env_path):
@@ -124,7 +170,7 @@ def main() -> None:
         if "DATABASE_URL" in os.environ:
             from ..orm import Model
 
-            Model._db_path = os.environ["DATABASE_URL"]
+            Model._db_path = (os.environ["DATABASE_URL"] or "").strip() or None
 
     os.environ["ASOK_CLI"] = "true"
     parser = argparse.ArgumentParser(description="Asok Framework CLI", add_help=False)
@@ -162,7 +208,12 @@ def main() -> None:
     assets_parser.add_argument("--install", action="store_true")
     assets_parser.add_argument("--minify", action="store_true")
 
-    subparsers.add_parser("deploy")
+    deploy_parser = subparsers.add_parser("deploy")
+    deploy_parser.add_argument(
+        "--prod-dir",
+        default=None,
+        help="Target directory on the production server (defaults to /var/www/<app_name>)"
+    )
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument(
         "--keep-source",
@@ -188,11 +239,32 @@ def main() -> None:
     migrate_parser.add_argument("--rollback", action="store_true")
     migrate_parser.add_argument("--status", action="store_true")
     migrate_parser.add_argument("--fake", action="store_true")
+    migrate_parser.add_argument(
+        "--database", default=None, help="Database DSN or name to apply migrations to"
+    )
+
+    dumpdata_parser = subparsers.add_parser("dumpdata")
+    dumpdata_parser.add_argument(
+        "model", nargs="?", default=None, help="Specific model name to dump"
+    )
+    dumpdata_parser.add_argument("--output", default=None, help="Output JSON file path")
+
+    loaddata_parser = subparsers.add_parser("loaddata")
+    loaddata_parser.add_argument("file", help="Path to JSON fixture file")
 
     subparsers.add_parser("seed")
     subparsers.add_parser("routes")
     subparsers.add_parser("shell")
     subparsers.add_parser("test").add_argument("path", nargs="?", default=None)
+    worker_parser = subparsers.add_parser("worker")
+    worker_parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["run", "status"],
+        default="run",
+        help="Action to perform: 'run' (default) starts the worker, 'status' shows queue status.",
+    )
+
 
     make_parser = subparsers.add_parser("make")
     make_parser.add_argument(
@@ -277,7 +349,7 @@ def main() -> None:
         if not root:
             Style.error("Not inside an Asok project (no wsgi.py/c found).")
             return
-        run_deploy(root)
+        run_deploy(root, prod_dir=args.prod_dir)
     elif args.command == "build":
         root = _find_project_root()
         if not root:
@@ -294,7 +366,16 @@ def main() -> None:
     elif args.command == "preview":
         run_preview(args.port)
     elif args.command == "migrate":
-        run_migrate(rollback=args.rollback, status=args.status, fake=args.fake)
+        run_migrate(
+            rollback=args.rollback,
+            status=args.status,
+            fake=args.fake,
+            database=args.database,
+        )
+    elif args.command == "dumpdata":
+        run_dumpdata(model_name=args.model, output_file=args.output)
+    elif args.command == "loaddata":
+        run_loaddata(file_path=args.file)
     elif args.command == "seed":
         run_seed()
     elif args.command == "routes":
@@ -303,6 +384,10 @@ def main() -> None:
         run_shell()
     elif args.command == "test":
         run_test(args.path)
+    elif args.command == "worker":
+        from .worker import run_worker
+
+        run_worker(action=args.action)
     elif args.command == "make":
         if args.type == "migration":
             make_migration(args.name or "auto_migration")

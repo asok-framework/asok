@@ -16,9 +16,9 @@ def test_default_csp():
     # Check default directives
     assert "default-src 'self'" in csp
     assert "style-src 'self' 'unsafe-inline'" in csp
-    # SECURITY: unsafe-eval et unsafe-inline ont été retirés de script-src pour sécurité
+    # SECURITY: unsafe-eval and unsafe-inline were removed from script-src for security
     assert "script-src 'self'" in csp
-    # Vérifier que script-src ne contient PAS unsafe-eval ou unsafe-inline
+    # Verify that script-src does NOT contain unsafe-eval or unsafe-inline
     assert "script-src 'self' 'unsafe-eval'" not in csp
     assert "script-src 'self' 'unsafe-inline'" not in csp
 

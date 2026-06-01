@@ -183,9 +183,11 @@ class AuthMixin:
                 if not user:
                     # SECURITY: Log when user ID in session doesn't exist (deleted/disabled user)
                     import logging
+
                     logger = logging.getLogger("asok.security")
                     logger.warning(
-                        "User ID %d found in session but user doesn't exist (deleted?)", uid
+                        "User ID %d found in session but user doesn't exist (deleted?)",
+                        uid,
                     )
                     self._user_instance = None
                 else:
@@ -193,12 +195,14 @@ class AuthMixin:
             except (ValueError, TypeError) as e:
                 # SECURITY: Log invalid user ID format in session (possible tampering)
                 import logging
+
                 logger = logging.getLogger("asok.security")
                 logger.warning("Invalid user ID in session: %s (error: %s)", user_id, e)
                 self._user_instance = None
             except Exception as e:
                 # Unexpected error - log it for monitoring
                 import logging
+
                 logger = logging.getLogger("asok.security")
                 logger.error("Unexpected error loading user from session: %s", e)
                 self._user_instance = None

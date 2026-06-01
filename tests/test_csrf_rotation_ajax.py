@@ -43,7 +43,9 @@ def test_csrf_token_rotation_in_headers():
     request1.verify_csrf()
 
     assert request1.csrf_token_value != initial_token
-    assert len(request1.csrf_token_value) == 64  # secrets.token_hex(32) produces 64 hex chars
+    assert (
+        len(request1.csrf_token_value) == 64
+    )  # secrets.token_hex(32) produces 64 hex chars
     new_token = request1.csrf_token_value
 
     # Test 2: Token rotation after second request
