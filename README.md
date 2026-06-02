@@ -24,7 +24,7 @@
 
 ### Zero Runtime Dependencies, Maximum Power
 Asok requires **no external runtime dependencies** - just Python 3.10+. No Werkzeug, no Jinja2, no SQLAlchemy. The core framework is built from the Python standard library, making it:
-- ✅ **Extremely lightweight** (~360KB, ~20K lines of code)
+- ✅ **Extremely lightweight** (~360KB)
 - ✅ **Easy to audit** (everything in one codebase, no hidden dependencies)
 - ✅ **Forever stable** (no dependency hell or supply chain risks)
 
