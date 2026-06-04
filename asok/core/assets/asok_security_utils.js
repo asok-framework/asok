@@ -72,7 +72,8 @@
         return false;
       }
 
-      const urlLower = url.trim().toLowerCase();
+      // Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
+      const cleanUrl = url.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
 
       // Block dangerous protocols
       const dangerousProtocols = [
@@ -85,7 +86,7 @@
       ];
 
       for (let i = 0; i < dangerousProtocols.length; i++) {
-        if (urlLower.startsWith(dangerousProtocols[i])) {
+        if (cleanUrl.startsWith(dangerousProtocols[i])) {
           console.warn('[Asok Security] Blocked dangerous URL:', url.substring(0, 50));
           return false;
         }
@@ -95,8 +96,8 @@
       const safeProtocolPattern = /^(https?:\/\/|mailto:|tel:|\/|#|\?)/i;
 
       // If URL has a protocol, it must be safe
-      if (url.indexOf(':') !== -1 && url.indexOf(':') < 10) {
-        return safeProtocolPattern.test(url);
+      if (cleanUrl.indexOf(':') !== -1 && cleanUrl.indexOf(':') < 10) {
+        return safeProtocolPattern.test(cleanUrl);
       }
 
       // Relative URLs without protocol are safe

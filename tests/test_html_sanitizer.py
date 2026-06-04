@@ -66,6 +66,20 @@ class TestXSSPrevention:
         assert "<object" not in result
         assert "<embed" not in result
 
+    def test_obfuscated_protocols_blocked(self):
+        """Test that javascript: protocol with internal control characters is blocked."""
+        # Test literal tab, newline, carriage return inside protocol name
+        vectors = [
+            '<a href="java\tscript:alert(1)">Click</a>',
+            '<a href="java\nscript:alert(1)">Click</a>',
+            '<a href="java\rscript:alert(1)">Click</a>',
+            '<a href="ja\x09va\x0ascript:alert(1)">Click</a>',
+        ]
+        for v in vectors:
+            result = sanitize_html(v)
+            assert "javascript:" not in result.lower()
+            assert "alert" not in result
+
 
 class TestAllowedContent:
     """Test that legitimate WYSIWYG content is preserved."""

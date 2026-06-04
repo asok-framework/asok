@@ -409,3 +409,215 @@ def test_directives_js_robustness_features():
     assert "checked" in directives_js
 
 
+def test_fetch_directives_validation():
+    """Test that asok-fetch-async (with await/fetch) passes security precompilation successfully."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    # Valid template containing both static asok-fetch and dynamic asok-fetch-async with await
+    content = (
+        "<html><head></head><body>"
+        '<div asok-state="{ data: null, users: null }" asok-fetch="/api/users" asok-fetch-as="users">'
+        '  <button type="button" asok-fetch-async="data = await fetch(\'/api/products\').then(r => r.json())">Fetch</button>'
+        "</div>"
+        "</body></html>"
+    )
+
+    # This should compile without raising ValueError
+    result = app._inject_assets(content, request, "testnonce123")
+    assert "window.__asok_registry = Object.assign" in result
+    assert "fetch('/api/products')" in result
+    # It must be compiled as an async function in the registry
+    assert "async function($, $store, $el, $event, $refs, $nextTick)" in result
+
+    # Test load trigger compiles as well
+    content_load = (
+        "<html><head></head><body>"
+        '<div asok-state="{ data: null }" asok-fetch-async="data = await fetch(\'/api/users\').then(r => r.json())" asok-fetch-on="load"></div>'
+        "</body></html>"
+    )
+    request_load = Request(environ)
+    result_load = app._inject_assets(content_load, request_load, "testnonce123")
+    assert "window.__asok_registry = Object.assign" in result_load
+    assert "fetch('/api/users')" in result_load
+    # It must be compiled as an async function in the registry
+    assert "async function($, $store, $el, $event, $refs, $nextTick)" in result_load
+
+
+def test_directive_validation_security_hardening():
+    """Verify recursive AST validation of semicolon-separated statements, if-statements, and extra blocked keywords."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    # 1. Test multiple statements in items.filter
+    content_valid = (
+        "<html><head></head><body>"
+        "<button asok-on:click=\"if(confirm('delete')) { fetch('/delete'); items = items.filter(x => x !== 1); }\">Delete</button>"
+        "</body></html>"
+    )
+    # This must pass validation
+    app._inject_assets(content_valid, request, "testnonce123")
+
+    # 2. Test bypass attempt using items.filter with eval
+    content_invalid_eval = (
+        "<html><head></head><body>"
+        "<button asok-on:click=\"items.filter; eval('unsafe_code_here')\">Delete</button>"
+        "</body></html>"
+    )
+    import pytest
+    with pytest.raises(ValueError, match="SECURITY: Unsafe expression"):
+        app._inject_assets(content_invalid_eval, request, "testnonce123")
+
+    # 3. Test extra dangerous keywords blocking
+    for keyword in ["localStorage", "sessionStorage", "document.cookie", "WebSocket", "alert"]:
+        content_unsafe = (
+            f"<html><head></head><body>"
+            f"<div asok-text=\"items.filter; {keyword}\"></div>"
+            f"</body></html>"
+        )
+        with pytest.raises(ValueError, match="SECURITY: Unsafe expression"):
+            app._inject_assets(content_unsafe, request, "testnonce123")
+
+
+def test_new_operator_validation():
+    """Verify that using the JS 'new' operator is allowed and correctly validated."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    content = (
+        "<html><head></head><body>"
+        "<div asok-state=\"{ time: null }\" asok-init=\"time = new Date().toLocaleTimeString(); setInterval(() => { time = new Date().toLocaleTimeString(); }, 1000);\">"
+        "Time"
+        "</div>"
+        "</body></html>"
+    )
+
+    # This should not raise a ValueError
+    app._inject_assets(content, request, "testnonce123")
+
+
+def test_js_extended_expressions_validation():
+    """Verify that ES6 object shorthand, typeof, instanceof, void, and comments are allowed and validated."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    # 1. ES6 object shorthand and comments
+    content_shorthand = (
+        "<html><head></head><body>"
+        "<div asok-state=\"{ query: 'test', show: true }\" asok-init=\"// initialize state\nlet x = { query, show }; /* multiline comment */\"></div>"
+        "</body></html>"
+    )
+    app._inject_assets(content_shorthand, request, "testnonce123")
+
+    # 2. typeof, instanceof, and void
+    content_operators = (
+        "<html><head></head><body>"
+        "<div asok-init=\"if (typeof query === 'string' && query instanceof String) { void 0; }\"></div>"
+        "</body></html>"
+    )
+    app._inject_assets(content_operators, request, "testnonce123")
+
+
+def test_directive_validation_caching():
+    """Verify that directive expression validation and async detection are correctly cached."""
+    # Clear caches first to have a clean state
+    Asok._validate_expression_cached.cache_clear()
+    Asok._is_async_expression_cached.cache_clear()
+
+    expr = "x = 1; y = 2;"
+
+    # First call: cache miss (compound statement + 2 sub-statements)
+    res1 = Asok._validate_expression_cached(expr)
+    assert res1 is True
+    info_val = Asok._validate_expression_cached.cache_info()
+    assert info_val.misses == 3
+    assert info_val.hits == 0
+
+    # Second call: cache hit
+    res2 = Asok._validate_expression_cached(expr)
+    assert res2 is True
+    info_val2 = Asok._validate_expression_cached.cache_info()
+    assert info_val2.misses == 3
+    assert info_val2.hits == 1
+
+    # 2. Async detection caching test
+    # First call: cache miss
+    res_async1 = Asok._is_async_expression_cached(expr)
+    assert res_async1 is False
+    info_async = Asok._is_async_expression_cached.cache_info()
+    assert info_async.misses == 1
+    assert info_async.hits == 0
+
+    # Second call: cache hit
+    res_async2 = Asok._is_async_expression_cached(expr)
+    assert res_async2 is False
+    info_async2 = Asok._is_async_expression_cached.cache_info()
+    assert info_async2.misses == 1
+    assert info_async2.hits == 1
+
+
+def test_route_resolution_caching():
+    """Verify that route resolution is cached in production and bypassed in debug mode."""
+    app = Asok()
+    app.config["DEBUG"] = False
+
+    import unittest.mock as mock
+    app._walk_route = mock.MagicMock(return_value=("mock_page.py", {"id": 100}))
+
+    # 1. First resolution should walk the route
+    page, params = app._resolve_route(["items", "detail"])
+    assert page == "mock_page.py"
+    assert params == {"id": 100}
+    assert app._walk_route.call_count == 1
+
+    # 2. Second resolution (cache hit) should not call _walk_route again
+    page2, params2 = app._resolve_route(["items", "detail"])
+    assert page2 == "mock_page.py"
+    assert params2 == {"id": 100}
+    assert app._walk_route.call_count == 1
+
+    # 3. Modifying returned parameters should not affect cached parameters
+    params2["id"] = 999
+    page3, params3 = app._resolve_route(["items", "detail"])
+    assert params3 == {"id": 100}  # remains unchanged
+
+    # 4. Under DEBUG=True, it should bypass the cache
+    app.config["DEBUG"] = True
+    page4, params4 = app._resolve_route(["items", "detail"])
+    assert page4 == "mock_page.py"
+    assert app._walk_route.call_count == 2
+
+
+
+
+
+
+

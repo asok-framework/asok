@@ -54,7 +54,7 @@ class PostgresEngine(BaseEngine):
         except ImportError:
             raise ImportError(
                 "PostgreSQL support requires 'psycopg'.\n"
-                'Please install it using: pip install "asok[postgres]"'
+                'Please install it using: pip install "asok[postgres]" or pip install "asok[postgres-binary]"'
             )
 
         conn = psycopg.connect(self.dsn, row_factory=dict_row, autocommit=True)

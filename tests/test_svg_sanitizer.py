@@ -496,3 +496,17 @@ def test_sanitize_complex_real_world_svg():
     assert b"<script" not in result
     assert b"javascript:" not in result
     assert b"onload" not in result
+
+
+def test_sanitize_blocks_obfuscated_javascript_urls():
+    """Verify that javascript: URLs with internal control characters are blocked in SVG."""
+    svg = b"""<svg xmlns="http://www.w3.org/2000/svg">
+        <a href="java\tscript:alert('XSS')">
+            <text>Click me</text>
+        </a>
+    </svg>"""
+
+    result = sanitize_svg(svg)
+    assert b"javascript" not in result.lower()
+    assert b"alert" not in result
+

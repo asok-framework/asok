@@ -237,14 +237,15 @@ def _is_safe_url(url: str, allow_data_images: bool = False) -> bool:
     if not url:
         return False
 
-    url_lower = url.lower().strip()
+    # Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
+    clean_url = "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
 
     # Block dangerous protocols
     if any(
-        url_lower.startswith(proto) for proto in ["javascript:", "data:", "vbscript:"]
+        clean_url.startswith(proto) for proto in ["javascript:", "data:", "vbscript:"]
     ):
         # Allow data:image/* if specified
-        if allow_data_images and url_lower.startswith("data:image/"):
+        if allow_data_images and clean_url.startswith("data:image/"):
             return True
         return False
 

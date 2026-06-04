@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import html as _html
 import json
@@ -415,6 +416,68 @@ def _extract_arrow_functions(s: str) -> tuple[str, list[str]]:
     return parsed_modified, all_bodies
 
 
+def _split_js_statements(s: str) -> list[str]:
+    parts = []
+    current = []
+    stack = []
+    in_quote = None
+    escape = False
+    i = 0
+    while i < len(s):
+        char = s[i]
+        if escape:
+            escape = False
+            current.append(char)
+            i += 1
+            continue
+        if char == "\\":
+            escape = True
+            current.append(char)
+            i += 1
+            continue
+        if in_quote:
+            if char == in_quote:
+                in_quote = None
+            current.append(char)
+            i += 1
+            continue
+        if char in ("'", '"', "`"):
+            in_quote = char
+            current.append(char)
+            i += 1
+            continue
+        if char in ("(", "[", "{"):
+            stack.append(char)
+        elif char in (")", "]", "}"):
+            if stack:
+                stack.pop()
+        elif char == ";" and not stack:
+            parts.append("".join(current).strip())
+            current = []
+            i += 1
+            continue
+        current.append(char)
+        i += 1
+    if current:
+        parts.append("".join(current).strip())
+    return [p for p in parts if p]
+
+
+def _parse_js_if_statement(s: str) -> tuple[str, str] | None:
+    match = re.match(r"^if\s*\(", s)
+    if not match:
+        return None
+    start_paren = match.end() - 1
+    end_paren = _find_matching_forward(s, start_paren, "(", ")")
+    if end_paren == -1 or end_paren > len(s):
+        return None
+    cond = s[start_paren + 1 : end_paren - 1].strip()
+    body = s[end_paren:].strip()
+    if body.startswith("{") and body.endswith("}"):
+        body = body[1:-1].strip()
+    return cond, body
+
+
 class AssetMixin:
     def get_asset(self, filename: str) -> str:
         """Retrieve an asset file's contents, caching in production."""
@@ -453,7 +516,9 @@ class AssetMixin:
 
         return content
 
-    def _validate_directive_expression(self, expr: str) -> bool:
+    @staticmethod
+    @functools.lru_cache(maxsize=2048)
+    def _validate_expression_cached(expr: str) -> bool:
         """Validate that a directive expression is safe (no code injection).
 
         Uses a hybrid approach: checks for dangerous patterns, then validates structure.
@@ -461,16 +526,59 @@ class AssetMixin:
 
         Note: Supports JavaScript syntax since directives execute client-side.
         """
-        expr_stripped = expr.strip()
+        # Normalize: Remove JS single line and multi-line comments
+        expr_stripped = re.sub(r"/\*.*?\*/", "", expr, flags=re.DOTALL)
+        expr_stripped = re.sub(r"//.*$", "", expr_stripped, flags=re.MULTILINE)
+        expr_stripped = expr_stripped.strip()
+
+        # Handle return statement prefix
+        if expr_stripped.startswith("return "):
+            expr_stripped = expr_stripped[7:].strip()
+
+        # SECURITY: Split into individual statements first
+        statements = _split_js_statements(expr_stripped)
+        if len(statements) > 1:
+            for stmt in statements:
+                if not AssetMixin._validate_expression_cached(stmt):
+                    return False
+            return True
+
+        if not statements:
+            return True
+
+        stmt = statements[0]
+
+        # SECURITY: Check for JavaScript "if" statement
+        if_parts = _parse_js_if_statement(stmt)
+        if if_parts:
+            cond, body = if_parts
+            return AssetMixin._validate_expression_cached(cond) and AssetMixin._validate_expression_cached(body)
 
         # Normalize JS logical operators (|| -> or, && -> and) for Python AST parsing compatibility
-        expr_stripped = expr_stripped.replace("||", " or ").replace("&&", " and ")
+        normalized_expr = stmt.replace("||", " or ").replace("&&", " and ")
 
         # Normalize special $ variables for Python AST parsing compatibility
         # Replace $var with _asok_var
-        expr_stripped = re.sub(r"\$(\w+)", r"_asok_\1", expr_stripped)
+        normalized_expr = re.sub(r"\$(\w+)", r"_asok_\1", normalized_expr)
         # Replace standalone $ with _asok_state
-        expr_stripped = re.sub(r"(?<!\w)\$(?!\w)", "_asok_state", expr_stripped)
+        normalized_expr = re.sub(r"(?<!\w)\$(?!\w)", "_asok_state", normalized_expr)
+
+        # Normalize JavaScript 'new' operator (new Date() -> Date()) for Python AST parsing compatibility
+        normalized_expr = re.sub(r"\bnew\s+", "", normalized_expr)
+
+        # Normalize JavaScript variable declarations (let/const/var x = 1 -> x = 1)
+        normalized_expr = re.sub(r"\b(let|const|var)\s+", "", normalized_expr)
+
+        # Normalize JavaScript 'typeof' operator (typeof x -> _asok_typeof(x))
+        normalized_expr = re.sub(r"\btypeof\s+([a-zA-Z0-9_$]+)", r"_asok_typeof(\1)", normalized_expr)
+        normalized_expr = re.sub(r"\btypeof\s*\(", "_asok_typeof(", normalized_expr)
+
+        # Normalize JavaScript 'instanceof' operator (x instanceof Y -> _asok_instanceof(x, Y))
+        normalized_expr = re.sub(r"([a-zA-Z0-9_$]+)\s+instanceof\s+([a-zA-Z0-9_$]+)", r"_asok_instanceof(\1, \2)", normalized_expr)
+
+        # Normalize JavaScript 'void' operator (void 0 -> None)
+        normalized_expr = re.sub(r"\bvoid\s+([a-zA-Z0-9_$]+|\d+)", "None", normalized_expr)
+        normalized_expr = re.sub(r"\bvoid\s*\(.*?\)", "None", normalized_expr)
 
         # SECURITY: Check for dangerous keywords first (server-side injection attempt)
         DANGEROUS_PATTERNS = [
@@ -514,34 +622,28 @@ class AssetMixin:
             r"\.prototype\b",
             # Template literals with interpolation
             r"`.*\$\{.*\}.*`",
+            # Extra client-side security restrictions
+            r"\blocalStorage\b",
+            r"\bsessionStorage\b",
+            r"\bdocument\.cookie\b",
+            r"\bindexedDB\b",
+            r"\bWebSocket\b",
+            r"\bEventSource\b",
+            r"\bpostMessage\b",
+            r"\balert\b",
         ]
 
         for pattern in DANGEROUS_PATTERNS:
-            if re.search(pattern, expr_stripped):
+            if re.search(pattern, normalized_expr):
                 return False
 
-        # Framework-generated Table actions or safe array operations bypass
-        if (
-            "items.filter" in expr_stripped
-            or "items = items.filter" in expr_stripped
-            or "selected = selected.filter" in expr_stripped
-            or "selected.includes" in expr_stripped
-        ):
-            return True
-
         # For arrow functions, extract and validate their bodies recursively
-        parsed_expr, all_bodies = _extract_arrow_functions(expr_stripped)
+        parsed_expr, all_bodies = _extract_arrow_functions(normalized_expr)
         if all_bodies:
             for body in all_bodies:
-                statements = [s.strip() for s in body.split(";") if s.strip()]
-                for stmt in statements:
-                    if stmt.startswith("return "):
-                        stmt = stmt[7:].strip()
-                    if stmt and not self._validate_directive_expression(stmt):
-                        return False
-            expr_stripped = parsed_expr
-
-        normalized_expr = expr_stripped
+                if body and not AssetMixin._validate_expression_cached(body):
+                    return False
+            normalized_expr = parsed_expr
 
         # Handle JavaScript equality operators
         normalized_expr = normalized_expr.replace("===", "==")
@@ -580,6 +682,7 @@ class AssetMixin:
             ast.List,
             ast.Tuple,
             ast.Dict,
+            ast.Set,
             ast.Call,
             ast.Index,
             ast.Slice,
@@ -611,6 +714,7 @@ class AssetMixin:
             ast.Lambda,
             ast.arguments,
             ast.arg,
+            ast.Await,
         }
 
         ALLOWED_OPS = {
@@ -713,6 +817,56 @@ class AssetMixin:
             return True
 
         except (SyntaxError, ValueError):
+            return False
+
+    def _validate_directive_expression(self, expr: str) -> bool:
+        """Validate that a directive expression is safe (no code injection).
+
+        Uses a hybrid approach: checks for dangerous patterns, then validates structure.
+        SECURITY: Prevents code injection via template directives.
+
+        Note: Supports JavaScript syntax since directives execute client-side.
+        """
+        return self._validate_expression_cached(expr)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=2048)
+    def _is_async_expression_cached(expr: str) -> bool:
+        """Determines if a JS/Python-like expression uses an await statement (cached)."""
+        try:
+            normalized_expr = expr.strip()
+            # Clean comments first so we don't trip over comments
+            normalized_expr = re.sub(r"/\*.*?\*/", "", normalized_expr, flags=re.DOTALL)
+            normalized_expr = re.sub(r"//.*$", "", normalized_expr, flags=re.MULTILINE)
+            normalized_expr = normalized_expr.strip()
+
+            # Handle return statement prefix
+            if normalized_expr.startswith("return "):
+                normalized_expr = normalized_expr[7:].strip()
+
+            normalized_expr = normalized_expr.replace("||", " or ").replace("&&", " and ")
+            normalized_expr = re.sub(r"\$(\w+)", r"_asok_\1", normalized_expr)
+            normalized_expr = re.sub(r"(?<!\w)\$(?!\w)", "_asok_state", normalized_expr)
+
+            # Extract arrow functions
+            parsed_expr, _ = _extract_arrow_functions(normalized_expr)
+            normalized_expr = parsed_expr
+
+            normalized_expr = normalized_expr.replace("===", "==").replace("!==", "!=")
+            normalized_expr = _convert_ternary(normalized_expr)
+            normalized_expr = re.sub(r"!\s*(\w+)", r"not \1", normalized_expr)
+            normalized_expr = re.sub(r"!\s*\(", r"not (", normalized_expr)
+            normalized_expr = re.sub(r"(\w+)\+\+", r"\1 += 1", normalized_expr)
+            normalized_expr = re.sub(r"(\w+)--", r"\1 -= 1", normalized_expr)
+            normalized_expr = re.sub(r"\+\+(\w+)", r"\1 += 1", normalized_expr)
+            normalized_expr = re.sub(r"--(\w+)", r"\1 -= 1", normalized_expr)
+
+            try:
+                tree = ast.parse(normalized_expr, mode="eval")
+            except SyntaxError:
+                tree = ast.parse(normalized_expr, mode="exec")
+            return any(isinstance(node, ast.Await) for node in ast.walk(tree))
+        except Exception:
             return False
 
     def _precompile_directives(self, html: str) -> tuple[str, dict[str, str]]:
@@ -1160,8 +1314,12 @@ class AssetMixin:
                     body = f"return ({expr})" if not is_stmt else expr
                     body = re.sub(r"\s+", " ", body).strip()
 
+                    # Check if the expression contains 'await' keyword
+                    is_async = self._is_async_expression_cached(expr)
+
+                    fn_prefix = "async " if is_async else ""
                     registry_entries.append(
-                        f"    {json.dumps(h)}: function($, $store, $el, $event, $refs, $nextTick) {{ with($||{{}}) {{ {body} }} }}"
+                        f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick) {{ with($||{{}}) {{ {body} }} }}"
                     )
                 registry_js = (
                     "window.__asok_registry = Object.assign(window.__asok_registry || {}, {\n"

@@ -374,7 +374,8 @@ def _is_safe_url(url: str) -> bool:
     if not url:
         return False
 
-    url_lower = url.strip().lower()
+    # Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
+    clean_url = "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
 
     # SECURITY: Block dangerous protocols
     dangerous_protocols = [
@@ -386,11 +387,11 @@ def _is_safe_url(url: str) -> bool:
     ]
 
     for protocol in dangerous_protocols:
-        if url_lower.startswith(protocol):
+        if clean_url.startswith(protocol):
             return False
 
     # Allow relative URLs and http(s)
-    if url_lower.startswith(("http://", "https://", "#", "/")):
+    if clean_url.startswith(("http://", "https://", "#", "/")):
         return True
 
     # Allow fragment identifiers and relative paths

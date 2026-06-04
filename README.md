@@ -127,13 +127,14 @@ If you wish to use optional database engines or the Redis backend (for caching a
 
 ```bash
 # Optional database engines & capabilities
-pip install "asok[postgres]"
+pip install "asok[postgres]"         # Standard (requires system libpq)
+pip install "asok[postgres-binary]"  # Binarized (no system dependencies, great for dev)
 pip install "asok[mysql]"
 pip install "asok[redis]"
 pip install "asok[async]"
 
 # Combined extras (e.g. Postgres + Redis)
-pip install "asok[postgres,redis]"
+pip install "asok[postgres-binary,redis]"
 
 ```
 

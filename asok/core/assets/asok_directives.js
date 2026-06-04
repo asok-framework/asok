@@ -731,9 +731,13 @@
       }
     };
 
-    const handler = () => doAsync();
-    el.addEventListener(trigger, handler);
-    contexts.get(owner).cleanup.push(() => el.removeEventListener(trigger, handler));
+    if (trigger === 'load') {
+      doAsync();
+    } else {
+      const handler = () => doAsync();
+      el.addEventListener(trigger, handler);
+      contexts.get(owner).cleanup.push(() => el.removeEventListener(trigger, handler));
+    }
   };
 
   // Clean up references and event listeners

@@ -9,10 +9,24 @@ logger = logging.getLogger("asok.core")
 
 
 class RoutingMixin:
-    def _resolve_route(self, parts: list[str]) -> tuple[Optional[str], dict[str, str]]:
+    def _resolve_route(self, parts: list[str]) -> tuple[Optional[str], dict[str, Any]]:
         """Resolve a list of URL segments to a page file and captured parameters."""
+        debug = self.config.get("DEBUG", False)
+        if not debug:
+            if not hasattr(self, "_route_cache"):
+                self._route_cache = {}
+            key = "/".join(parts)
+            if key in self._route_cache:
+                page_file, route_params = self._route_cache[key]
+                return page_file, dict(route_params)
+
         current_dir = os.path.join(self.root_dir, self.dirs["PAGES"])
         result = self._walk_route(parts, current_dir, {})
+
+        if not debug:
+            page_file, route_params = result
+            self._route_cache[key] = (page_file, dict(route_params))
+
         return result
 
     def _convert_param(self, value: str, type_name: str) -> Optional[Any]:
