@@ -33,9 +33,7 @@ def test_svg_upload_sanitizes_dangerous_content(mock_upload_dir):
 
     # Create UploadedFile
     file = UploadedFile(
-        filename="test.svg",
-        content=dangerous_svg,
-        content_type="image/svg+xml"
+        filename="test.svg", content=dangerous_svg, content_type="image/svg+xml"
     )
 
     # Save to mock directory
@@ -43,7 +41,7 @@ def test_svg_upload_sanitizes_dangerous_content(mock_upload_dir):
         "test1.svg",
         validate=True,
         allowed_types=["image/svg+xml"],
-        secure_filename=False
+        secure_filename=False,
     )
 
     # Read saved content
@@ -66,16 +64,14 @@ def test_svg_upload_preserves_valid_content(mock_upload_dir):
     </svg>"""
 
     file = UploadedFile(
-        filename="clean.svg",
-        content=clean_svg,
-        content_type="image/svg+xml"
+        filename="clean.svg", content=clean_svg, content_type="image/svg+xml"
     )
 
     saved_path = file.save(
         "test2.svg",
         validate=True,
         allowed_types=["image/svg+xml"],
-        secure_filename=False
+        secure_filename=False,
     )
 
     with open(saved_path, "rb") as f:
@@ -95,16 +91,14 @@ def test_svg_upload_removes_event_handlers(mock_upload_dir):
     </svg>"""
 
     file = UploadedFile(
-        filename="handlers.svg",
-        content=svg_with_handlers,
-        content_type="image/svg+xml"
+        filename="handlers.svg", content=svg_with_handlers, content_type="image/svg+xml"
     )
 
     saved_path = file.save(
         "test3.svg",
         validate=True,
         allowed_types=["image/svg+xml"],
-        secure_filename=False
+        secure_filename=False,
     )
 
     with open(saved_path, "rb") as f:
@@ -127,16 +121,14 @@ def test_svg_upload_blocks_javascript_urls(mock_upload_dir):
     </svg>"""
 
     file = UploadedFile(
-        filename="jsurl.svg",
-        content=svg_with_js_url,
-        content_type="image/svg+xml"
+        filename="jsurl.svg", content=svg_with_js_url, content_type="image/svg+xml"
     )
 
     saved_path = file.save(
         "test4.svg",
         validate=True,
         allowed_types=["image/svg+xml"],
-        secure_filename=False
+        secure_filename=False,
     )
 
     with open(saved_path, "rb") as f:
@@ -160,16 +152,14 @@ def test_svg_upload_preserves_gradients(mock_upload_dir):
     </svg>"""
 
     file = UploadedFile(
-        filename="gradient.svg",
-        content=svg_with_gradient,
-        content_type="image/svg+xml"
+        filename="gradient.svg", content=svg_with_gradient, content_type="image/svg+xml"
     )
 
     saved_path = file.save(
         "test5.svg",
         validate=True,
         allowed_types=["image/svg+xml"],
-        secure_filename=False
+        secure_filename=False,
     )
 
     with open(saved_path, "rb") as f:
@@ -188,18 +178,14 @@ def test_svg_upload_without_svg_in_allowed_types_skips_sanitization(mock_upload_
         <circle cx="50" cy="50" r="40"/>
     </svg>"""
 
-    file = UploadedFile(
-        filename="test.svg",
-        content=svg,
-        content_type="image/svg+xml"
-    )
+    file = UploadedFile(filename="test.svg", content=svg, content_type="image/svg+xml")
 
     # If allowed_types doesn't include SVG, validation should fail anyway
     # But if validation is disabled, no sanitization occurs
     saved_path = file.save(
         "test6.svg",
         validate=False,  # Skip validation
-        secure_filename=False
+        secure_filename=False,
     )
 
     with open(saved_path, "rb") as f:
@@ -215,9 +201,7 @@ def test_svg_upload_malformed_raises_error(mock_upload_dir):
     malformed_svg = b"<svg><circle></svg>"  # Unclosed circle tag
 
     file = UploadedFile(
-        filename="malformed.svg",
-        content=malformed_svg,
-        content_type="image/svg+xml"
+        filename="malformed.svg", content=malformed_svg, content_type="image/svg+xml"
     )
 
     with pytest.raises(ValueError) as excinfo:
@@ -225,7 +209,7 @@ def test_svg_upload_malformed_raises_error(mock_upload_dir):
             "test7.svg",
             validate=True,
             allowed_types=["image/svg+xml"],
-            secure_filename=False
+            secure_filename=False,
         )
 
     assert "sanitization failed" in str(excinfo.value).lower()

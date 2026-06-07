@@ -56,7 +56,6 @@ def _find_project_root(start=None) -> str | None:
 def get_last_mtime() -> float:
     """Get the maximum modification time among all watched files in the project."""
     max_mtime = 0.0
-    # Include project root, src, and asok while ignoring junk
     ignore_dirs = {
         ".git",
         "__pycache__",
@@ -68,23 +67,36 @@ def get_last_mtime() -> float:
         "deployment",
     }
     watch_exts = (".py", ".html", ".asok", ".json", ".css", ".js")
+    watch_dirs = ["."]
 
-    for root, dirs, files in os.walk("."):
-        # Prune ignored directories
-        dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith(".")]
+    # Watch local/editable packages if present
+    for pkg in ("asok", "asok_lucide"):
+        try:
+            import importlib
+            mod = importlib.import_module(pkg)
+            p = getattr(mod, "__file__", None)
+            if p and "site-packages" not in p:
+                watch_dirs.append(os.path.dirname(p))
+        except Exception:
+            pass
 
-        for f in files:
-            if f == "base.build.css" or f.startswith("."):
-                if f != ".env":  # Allow .env
-                    continue
+    for base in watch_dirs:
+        for root, dirs, files in os.walk(base):
+            # Prune ignored directories
+            dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith(".")]
 
-            if f.endswith(watch_exts) or f == ".env":
-                try:
-                    mtime = os.stat(os.path.join(root, f)).st_mtime
-                    if mtime > max_mtime:
-                        max_mtime = mtime
-                except OSError:
-                    pass
+            for f in files:
+                if f == "base.build.css" or f.startswith("."):
+                    if f != ".env":  # Allow .env
+                        continue
+
+                if f.endswith(watch_exts) or f == ".env":
+                    try:
+                        mtime = os.stat(os.path.join(root, f)).st_mtime
+                        if mtime > max_mtime:
+                            max_mtime = mtime
+                    except OSError:
+                        pass
     return max_mtime
 
 
@@ -99,18 +111,32 @@ def _has_py_changed(since_mtime: float) -> bool:
         ".asok",
         "deployment",
     }
+    watch_dirs = ["."]
 
-    for root, dirs, files in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith(".")]
+    # Watch local/editable packages if present
+    for pkg in ("asok", "asok_lucide"):
+        try:
+            import importlib
+            mod = importlib.import_module(pkg)
+            p = getattr(mod, "__file__", None)
+            if p and "site-packages" not in p:
+                watch_dirs.append(os.path.dirname(p))
+        except Exception:
+            pass
 
-        for f in files:
-            if f.endswith((".py", ".json")) or f in (".env", "wsgi.py"):
-                try:
-                    if os.stat(os.path.join(root, f)).st_mtime > since_mtime:
-                        return True
-                except OSError:
-                    pass
+    for base in watch_dirs:
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith(".")]
+
+            for f in files:
+                if f.endswith((".py", ".json")) or f in (".env", "wsgi.py"):
+                    try:
+                        if os.stat(os.path.join(root, f)).st_mtime > since_mtime:
+                            return True
+                    except OSError:
+                        pass
     return False
+
 
 
 def _find_free_port(start: int = 8000, end: int = 8100) -> int | None:

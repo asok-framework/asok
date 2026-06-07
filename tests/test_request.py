@@ -199,7 +199,9 @@ class TestCookies:
 class TestRequestGeo:
     def test_geo_fallback_for_localhost(self):
         # 1. Test fallback to US when language is en
-        req_en = Request({"REMOTE_ADDR": "127.0.0.1", "HTTP_ACCEPT_LANGUAGE": "en-US,en;q=0.9"})
+        req_en = Request(
+            {"REMOTE_ADDR": "127.0.0.1", "HTTP_ACCEPT_LANGUAGE": "en-US,en;q=0.9"}
+        )
         geo_en = req_en.geo
         assert geo_en["ip"] == "127.0.0.1"
         assert geo_en["country"] == "US"
@@ -209,7 +211,9 @@ class TestRequestGeo:
         assert geo_en["timezone"] == "America/New_York"
 
         # 2. Test fallback to FR when language is fr
-        req_fr = Request({"REMOTE_ADDR": "127.0.0.1", "HTTP_ACCEPT_LANGUAGE": "fr-FR,fr;q=0.9"})
+        req_fr = Request(
+            {"REMOTE_ADDR": "127.0.0.1", "HTTP_ACCEPT_LANGUAGE": "fr-FR,fr;q=0.9"}
+        )
         geo_fr = req_fr.geo
         assert geo_fr["ip"] == "127.0.0.1"
         assert geo_fr["country"] == "FR"
@@ -217,4 +221,3 @@ class TestRequestGeo:
         assert geo_fr["dial_code"] == "+33"
         assert geo_fr["city"] == "Paris"
         assert geo_fr["timezone"] == "Europe/Paris"
-

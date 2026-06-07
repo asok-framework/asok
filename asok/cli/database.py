@@ -40,6 +40,9 @@ def run_migrate(
     status: bool = False,
     fake: bool = False,
     database: str | None = None,
+    to_migration: str | None = None,
+    steps: int | None = None,
+    reset: bool = False,
 ) -> None:
     """Apply or rollback versioned database migrations."""
     root = _find_project_root()
@@ -133,16 +136,85 @@ def run_migrate(
             print(f"  {mark} {name}")
         return
 
-    if rollback:
-        last_batch_names = Migrations.get_last_batch(engine)
-        if not last_batch_names:
-            Style.info("Nothing to rollback.")
+    # Find matching migration file if to_migration is provided
+    target_mig = None
+    if to_migration:
+        all_names = [f[:-3] for f in mig_files]
+        for name in all_names:
+            if (
+                name == to_migration
+                or name.startswith(to_migration + "_")
+                or name.split("_", 1)[0] == to_migration
+            ):
+                target_mig = name
+                break
+        if not target_mig:
+            Style.error(f"Migration '{to_migration}' not found.")
             return
 
-        Style.heading(f"ROLLBACK (Batch {Migrations.get_last_batch_number(engine)})")
-        conn = MigrationConnectionWrapper(engine)
-        try:
-            for name in last_batch_names:
+    # Determine action to take
+    if reset:
+        if not applied:
+            Style.info("No migrations to rollback.")
+            return
+        Style.heading("ROLLBACK ALL MIGRATIONS")
+        to_rollback = list(reversed(applied))
+        action = "rollback"
+    elif to_migration:
+        if target_mig in applied:
+            idx = applied.index(target_mig)
+            to_rollback = applied[idx + 1 :]
+            if not to_rollback:
+                Style.success(f"Database is already at migration '{target_mig}'.")
+                return
+            Style.heading(f"ROLLBACK TO MIGRATION '{target_mig}'")
+            to_rollback = list(reversed(to_rollback))
+            action = "rollback"
+        else:
+            all_names = [f[:-3] for f in mig_files]
+            idx = all_names.index(target_mig)
+            to_apply = [m for m in all_names[: idx + 1] if m not in applied]
+            if not to_apply:
+                Style.success(
+                    f"Database is already at or past migration '{target_mig}'."
+                )
+                return
+            Style.heading(f"MIGRATING UP TO '{target_mig}'")
+            action = "migrate"
+    elif rollback:
+        if steps is not None:
+            if steps <= 0:
+                Style.error("Steps must be a positive integer.")
+                return
+            to_rollback = applied[-steps:]
+            if not to_rollback:
+                Style.info("Nothing to rollback.")
+                return
+            Style.heading(f"ROLLBACK (Last {len(to_rollback)} migrations)")
+            to_rollback = list(reversed(to_rollback))
+        else:
+            last_batch_names = Migrations.get_last_batch(engine)
+            if not last_batch_names:
+                Style.info("Nothing to rollback.")
+                return
+            Style.heading(
+                f"ROLLBACK (Batch {Migrations.get_last_batch_number(engine)})"
+            )
+            to_rollback = last_batch_names
+        action = "rollback"
+    else:
+        pending = [f[:-3] for f in mig_files if f[:-3] not in applied]
+        if not pending:
+            Style.success("Database is up to date.")
+            return
+        Style.heading("RUNNING MIGRATIONS")
+        action = "migrate"
+
+    # Now execute the action
+    conn = MigrationConnectionWrapper(engine)
+    try:
+        if action == "rollback":
+            for name in to_rollback:
                 filename = f"{name}.py"
                 filepath = os.path.join(mig_dir, filename)
                 if not os.path.exists(filepath):
@@ -162,39 +234,28 @@ def run_migrate(
                     Style.success(f"Rolled back {name}")
                 else:
                     Style.warn(f"Migration {name} has no down() method.")
-        finally:
-            conn.close()
-        return
+        else:
+            # migrate forward
+            batch = Migrations.get_last_batch_number(engine) + 1
+            migs_to_apply = to_apply if to_migration else pending
+            for name in migs_to_apply:
+                filename = f"{name}.py"
+                filepath = os.path.join(mig_dir, filename)
+                print(f"  Applying: {Style.BOLD}{name}{Style.RESET}...")
 
-    # Forward migration
-    pending = [f[:-3] for f in mig_files if f[:-3] not in applied]
-    if not pending:
-        Style.success("Database is up to date.")
-        return
-
-    Style.heading("RUNNING MIGRATIONS")
-    batch = Migrations.get_last_batch_number(engine) + 1
-    conn = MigrationConnectionWrapper(engine)
-
-    try:
-        for name in pending:
-            filename = f"{name}.py"
-            filepath = os.path.join(mig_dir, filename)
-            print(f"  Applying: {Style.BOLD}{name}{Style.RESET}...")
-
-            spec = _ilu.spec_from_file_location(name, filepath)
-            mod = _ilu.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            if hasattr(mod, "up"):
-                if not fake:
-                    mod.up(conn)
-                    conn.commit()
-                Migrations.log(name, batch, engine)
-                Style.success(f"Applied {name}")
-            else:
-                Style.warn(f"Migration {name} has no up() method.")
+                spec = _ilu.spec_from_file_location(name, filepath)
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "up"):
+                    if not fake:
+                        mod.up(conn)
+                        conn.commit()
+                    Migrations.log(name, batch, engine)
+                    Style.success(f"Applied {name}")
+                else:
+                    Style.warn(f"Migration {name} has no up() method.")
     except Exception as e:
-        Style.error(f"Migration failed: {e}")
+        Style.error(f"Migration operation failed: {e}")
         traceback.print_exc()
         sys.exit(1)
     finally:
@@ -659,3 +720,198 @@ def run_loaddata(file_path: str) -> None:
                 events.emit("model:saved", instance)
 
     Style.success("Successfully loaded fixtures.")
+
+
+def run_db_command(args) -> None:
+    """Execute db subcommands: schema, explain."""
+    root = _find_project_root()
+    if not root:
+        Style.error("Not inside an Asok project.")
+        sys.exit(1)
+    os.chdir(root)
+    if "src" not in sys.path:
+        sys.path.insert(0, os.path.join(root, "src"))
+
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    # Load models
+    _load_models(root)
+
+    # Determine target engine
+    db_name = getattr(args, "database", None)
+    if db_name:
+        from ..orm.engines import get_engine
+
+        engine = get_engine(db_name)
+    else:
+        engine = Model.get_engine()
+
+    if args.db_command == "schema":
+        if engine.__class__.__name__ == "SQLiteEngine":
+            tables = engine.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+            table_names = [t["name"] for t in tables]
+
+            Style.heading("DATABASE SCHEMA (SQLite)")
+            if not table_names:
+                print("  No tables found.")
+                return
+            for table in table_names:
+                print(f"\nTable: {Style.BOLD}{table}{Style.RESET}")
+                columns = engine.execute(
+                    f"PRAGMA table_info({engine.quote_identifier(table)})"
+                )
+                for col in columns:
+                    pk_str = " (PK)" if col["pk"] else ""
+                    notnull_str = " NOT NULL" if col["notnull"] else ""
+                    default_str = (
+                        f" DEFAULT {col['dflt_value']}"
+                        if col["dflt_value"] is not None
+                        else ""
+                    )
+                    print(
+                        f"  - {col['name']}: {col['type']}{pk_str}{notnull_str}{default_str}"
+                    )
+
+                fks = engine.execute(
+                    f"PRAGMA foreign_key_list({engine.quote_identifier(table)})"
+                )
+                if fks:
+                    print("  Foreign Keys:")
+                    for fk in fks:
+                        print(f"    - {fk['from']} -> {fk['table']}({fk['to']})")
+
+        elif engine.__class__.__name__ == "PostgresEngine":
+            tables = engine.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            )
+            table_names = [t["table_name"] for t in tables]
+
+            Style.heading("DATABASE SCHEMA (PostgreSQL)")
+            if not table_names:
+                print("  No tables found.")
+                return
+            for table in table_names:
+                print(f"\nTable: {Style.BOLD}{table}{Style.RESET}")
+                columns = engine.execute(
+                    "SELECT column_name, data_type, is_nullable, column_default "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema='public' AND table_name = ?",
+                    (table,),
+                )
+
+                pk_rows = engine.execute(
+                    "SELECT kcu.column_name "
+                    "FROM information_schema.table_constraints tc "
+                    "JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name "
+                    "WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = 'public' AND tc.table_name = ?",
+                    (table,),
+                )
+                pks = [row["column_name"] for row in pk_rows] if pk_rows else []
+
+                for col in columns:
+                    name = col["column_name"]
+                    dtype = col["data_type"]
+                    pk_str = " (PK)" if name in pks else ""
+                    notnull_str = " NOT NULL" if col["is_nullable"] == "NO" else ""
+                    default_str = (
+                        f" DEFAULT {col['column_default']}"
+                        if col["column_default"] is not None
+                        else ""
+                    )
+                    print(f"  - {name}: {dtype}{pk_str}{notnull_str}{default_str}")
+
+                fk_rows = engine.execute(
+                    "SELECT kcu.column_name as local_col, ccu.table_name as ref_table, ccu.column_name as ref_col "
+                    "FROM information_schema.table_constraints tc "
+                    "JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name "
+                    "JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name "
+                    "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' AND tc.table_name = ?",
+                    (table,),
+                )
+                if fk_rows:
+                    print("  Foreign Keys:")
+                    for fk in fk_rows:
+                        print(
+                            f"    - {fk['local_col']} -> {fk['ref_table']}({fk['ref_col']})"
+                        )
+
+        elif engine.__class__.__name__ == "MySQLEngine":
+            tables = engine.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()"
+            )
+            table_names = [t["table_name"] for t in tables]
+
+            Style.heading("DATABASE SCHEMA (MySQL)")
+            if not table_names:
+                print("  No tables found.")
+                return
+            for table in table_names:
+                print(f"\nTable: {Style.BOLD}{table}{Style.RESET}")
+                columns = engine.execute(f"DESCRIBE {engine.quote_identifier(table)}")
+                for col in columns:
+                    pk_str = " (PK)" if col["Key"] == "PRI" else ""
+                    notnull_str = " NOT NULL" if col["Null"] == "NO" else ""
+                    default_str = (
+                        f" DEFAULT {col['Default']}"
+                        if col["Default"] is not None
+                        else ""
+                    )
+                    print(
+                        f"  - {col['Field']}: {col['Type']}{pk_str}{notnull_str}{default_str}"
+                    )
+
+                fk_rows = engine.execute(
+                    "SELECT column_name as local_col, referenced_table_name as ref_table, referenced_column_name as ref_col "
+                    "FROM information_schema.key_column_usage "
+                    "WHERE table_schema = DATABASE() AND table_name = ? AND referenced_table_name IS NOT NULL",
+                    (table,),
+                )
+                if fk_rows:
+                    print("  Foreign Keys:")
+                    for fk in fk_rows:
+                        print(
+                            f"    - {fk['local_col']} -> {fk['ref_table']}({fk['ref_col']})"
+                        )
+        else:
+            Style.error(
+                f"Schema introspection is not supported on engine {engine.__class__.__name__}."
+            )
+
+    elif args.db_command == "explain":
+        query = args.query
+        Style.heading("EXPLAIN QUERY PLAN")
+
+        if engine.__class__.__name__ == "SQLiteEngine":
+            sql = f"EXPLAIN QUERY PLAN {query}"
+            try:
+                res = engine.execute(sql)
+                for row in res:
+                    detail = row.get("detail", "")
+                    print(f"  {detail}")
+            except Exception as e:
+                Style.error(f"Failed to explain query: {e}")
+        elif engine.__class__.__name__ == "PostgresEngine":
+            sql = f"EXPLAIN {query}"
+            try:
+                res = engine.execute(sql)
+                for row in res:
+                    val = list(row.values())[0]
+                    print(f"  {val}")
+            except Exception as e:
+                Style.error(f"Failed to explain query: {e}")
+        elif engine.__class__.__name__ == "MySQLEngine":
+            sql = f"EXPLAIN {query}"
+            try:
+                res = engine.execute(sql)
+                for row in res:
+                    items = [f"{k}: {v}" for k, v in row.items() if v is not None]
+                    print("  " + " | ".join(items))
+            except Exception as e:
+                Style.error(f"Failed to explain query: {e}")
+        else:
+            Style.error(
+                f"Explain query is not supported on engine {engine.__class__.__name__}."
+            )

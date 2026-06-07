@@ -312,5 +312,72 @@ def test_toggle_assets_injection():
     assert "[asok-cloak]" in result or ".asok-toggle-slider" in result
 
 
+def test_form_from_model_lazy_foreign_key():
+    """Test that Form.from_model defers ForeignKey database queries until requested."""
+    from asok import Field
+
+    class Author(Model):
+        _db_path = ":memory:"
+        name = Field.String(nullable=False)
+
+        def __str__(self):
+            return self.name
+
+    class Book(Model):
+        _db_path = ":memory:"
+        title = Field.String(nullable=False)
+        author_id = Field.ForeignKey(Author)
+
+        # Also test with dropdown=True
+        reviewer_id = Field.ForeignKey(Author, dropdown=True, dropdown_title="name")
+
+    # 1. Instantiate the form without context / without creating database tables.
+    form = Form.from_model(Book)
+    assert form is not None
+    assert hasattr(form, "author_id")
+    assert hasattr(form, "reviewer_id")
+
+    # 2. Setup database tables and populate data.
+    Author.create_table()
+    Book.create_table()
+    Author.get_engine().execute("DELETE FROM authors")
+    Book.get_engine().execute("DELETE FROM books")
+    try:
+        author1 = Author.create(name="Victor Hugo")
+        author2 = Author.create(name="Emile Zola")
+
+        # Create a mock Request
+        environ = {
+            "REQUEST_METHOD": "GET",
+            "HTTP_HOST": "localhost:8000",
+            "PATH_INFO": "/books/create",
+        }
+        request = Request(environ)
+
+        # Bind the form to the request
+        bound_form = form.bind(request)
+
+        # 3. Verify choices/items are resolved dynamically.
+        # choices for select field (author_id)
+        choices = bound_form.author_id.choices
+        assert choices is not None
+        assert len(choices) == 3
+        assert ("", "— None —") in choices
+        assert (author1.id, "Victor Hugo") in choices
+        assert (author2.id, "Emile Zola") in choices
+
+        # items for dropdown field (reviewer_id)
+        items = bound_form.reviewer_id.items
+        assert items is not None
+        assert len(items) == 2
+        item_names = [o.name for o in items]
+        assert "Victor Hugo" in item_names
+        assert "Emile Zola" in item_names
+
+    finally:
+        Author.close_connections()
+        Book.close_connections()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

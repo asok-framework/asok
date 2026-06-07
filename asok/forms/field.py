@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from html import escape
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from asok.templates import SafeString, _render_attrs
 
@@ -19,7 +19,7 @@ class FormField:
         field_type: str,
         rules: str = "",
         messages: Optional[Union[str, dict[str, str]]] = None,
-        choices: Optional[list[tuple[Any, str]]] = None,
+        choices: Optional[Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]] = None,
         **attrs: Any,
     ):
         # SECURITY: Validate field name to prevent injection in HTML attributes
@@ -39,10 +39,10 @@ class FormField:
             self.messages: dict[str, str] = {r: messages for r in rule_names}
         else:
             self.messages: dict[str, str] = messages or {}
-        self.choices: Optional[list[tuple[Any, str]]] = choices
+        self._choices: Optional[Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]] = choices
 
         # Dropdown specific data
-        self.items = attrs.pop("items", None)
+        self._items: Any = attrs.pop("items", None)
         self.item_meta = {
             "title": attrs.pop("title", "name"),
             "subtitle": attrs.pop("subtitle", None),
@@ -55,6 +55,36 @@ class FormField:
         self.attrs: dict[str, Any] = attrs
         self.value: Any = ""
         self._error: str = ""
+
+    @property
+    def choices(self) -> Optional[list[tuple[Any, str]]]:
+        """Get the field's choices, resolving them if they are dynamic (callable)."""
+        if callable(self._choices):
+            try:
+                return self._choices()
+            except Exception:
+                return []
+        return self._choices
+
+    @choices.setter
+    def choices(self, value: Optional[Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]]) -> None:
+        """Set the field's choices."""
+        self._choices = value
+
+    @property
+    def items(self) -> Any:
+        """Get the field's items, resolving them if they are dynamic (callable)."""
+        if callable(self._items):
+            try:
+                return self._items()
+            except Exception:
+                return []
+        return self._items
+
+    @items.setter
+    def items(self, value: Any) -> None:
+        """Set the field's items."""
+        self._items = value
 
     @property
     def error(self) -> Renderable:

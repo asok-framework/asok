@@ -222,38 +222,40 @@ def _preprocess(
             return text
 
         parent_path = extends_match.group(1)
-        base = (
-            root_dir
-            if root_dir and os.path.isabs(root_dir)
-            else os.path.join(os.getcwd(), root_dir or "")
-        )
-        try:
-            full_parent_path = _safe_resolve(base, parent_path)
-        except ValueError:
-            return "<!-- Inheritance Error: path traversal blocked -->"
+        # Determine search directories
+        if isinstance(root_dir, (list, tuple)):
+            search_dirs = root_dir
+        else:
+            search_dirs = [root_dir or os.getcwd()]
 
-        if not os.path.exists(full_parent_path):
-            # Try automatic extension resolution
-            resolved = False
-            # 1. Try appending
-            for ext in (".html", ".asok"):
-                if os.path.exists(full_parent_path + ext):
-                    full_parent_path = full_parent_path + ext
-                    resolved = True
+        full_parent_path = None
+        for base_dir in search_dirs:
+            base = base_dir if os.path.isabs(base_dir) else os.path.abspath(base_dir)
+            try:
+                cand_path = _safe_resolve(base, parent_path)
+            except ValueError:
+                continue
+
+            # Check candidates
+            for ext in ("", ".html", ".asok"):
+                test_path = cand_path + ext if ext else cand_path
+                if os.path.isfile(test_path):
+                    full_parent_path = test_path
                     break
 
-            # 2. Try swapping
-            if not resolved:
-                base_path, current_ext = os.path.splitext(full_parent_path)
+            if not full_parent_path:
+                # Try swapping ext
+                base_path, current_ext = os.path.splitext(cand_path)
                 if current_ext == ".html" and os.path.exists(base_path + ".asok"):
                     full_parent_path = base_path + ".asok"
-                    resolved = True
                 elif current_ext == ".asok" and os.path.exists(base_path + ".html"):
                     full_parent_path = base_path + ".html"
-                    resolved = True
 
-            if not resolved:
-                return f"<!-- Inheritance Error: {parent_path} not found in {base} -->"
+            if full_parent_path and os.path.isfile(full_parent_path):
+                break
+
+        if not full_parent_path:
+            return f"<!-- Inheritance Error: {parent_path} not found in search paths -->"
 
         # SECURITY: Limit template file size to prevent DoS (max 1MB)
         try:
@@ -479,27 +481,38 @@ def _preprocess(
 
         def replace_include(match: re.Match[str]) -> str:
             inc_path = match.group(1).strip("'\"")
-            try:
-                search_path = _safe_resolve(root_dir or os.getcwd(), inc_path)
-            except ValueError:
-                return "<!-- Include Error: path traversal blocked -->"
-            if not os.path.exists(search_path):
-                # Try automatic extension resolution
-                # 1. Try appending
-                for ext in (".html", ".asok"):
-                    if os.path.exists(search_path + ext):
-                        search_path = search_path + ext
+            # Determine search directories
+            if isinstance(root_dir, (list, tuple)):
+                search_dirs = root_dir
+            else:
+                search_dirs = [root_dir or os.getcwd()]
+
+            search_path = None
+            for base_dir in search_dirs:
+                base = base_dir if os.path.isabs(base_dir) else os.path.abspath(base_dir)
+                try:
+                    cand_path = _safe_resolve(base, inc_path)
+                except ValueError:
+                    continue
+
+                for ext in ("", ".html", ".asok"):
+                    test_path = cand_path + ext if ext else cand_path
+                    if os.path.isfile(test_path):
+                        search_path = test_path
                         break
 
-                # 2. Try swapping
-                if not os.path.exists(search_path):
-                    base_path, current_ext = os.path.splitext(search_path)
+                if not search_path:
+                    # Try swapping ext
+                    base_path, current_ext = os.path.splitext(cand_path)
                     if current_ext == ".html" and os.path.exists(base_path + ".asok"):
                         search_path = base_path + ".asok"
                     elif current_ext == ".asok" and os.path.exists(base_path + ".html"):
                         search_path = base_path + ".html"
 
-            if os.path.exists(search_path):
+                if search_path and os.path.isfile(search_path):
+                    break
+
+            if search_path and os.path.exists(search_path):
                 try:
                     # SECURITY: Limit include file size to prevent DoS (max 1MB)
                     file_size = os.path.getsize(search_path)

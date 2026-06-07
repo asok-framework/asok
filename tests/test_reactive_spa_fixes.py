@@ -118,7 +118,7 @@ def test_full_runtime_injection_for_normal_requests():
 
     # It MUST contain the core stylesheet
     assert "asok-cloak" in result_normal
-    assert "asok-dropdown" in result_normal
+    assert "asok-dropdown" not in result_normal
 
 
 def test_open_variable_expression_is_allowed():
@@ -479,14 +479,21 @@ def test_directive_validation_security_hardening():
         "</body></html>"
     )
     import pytest
+
     with pytest.raises(ValueError, match="SECURITY: Unsafe expression"):
         app._inject_assets(content_invalid_eval, request, "testnonce123")
 
     # 3. Test extra dangerous keywords blocking
-    for keyword in ["localStorage", "sessionStorage", "document.cookie", "WebSocket", "alert"]:
+    for keyword in [
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "WebSocket",
+        "alert",
+    ]:
         content_unsafe = (
             f"<html><head></head><body>"
-            f"<div asok-text=\"items.filter; {keyword}\"></div>"
+            f'<div asok-text="items.filter; {keyword}"></div>'
             f"</body></html>"
         )
         with pytest.raises(ValueError, match="SECURITY: Unsafe expression"):
@@ -507,7 +514,7 @@ def test_new_operator_validation():
 
     content = (
         "<html><head></head><body>"
-        "<div asok-state=\"{ time: null }\" asok-init=\"time = new Date().toLocaleTimeString(); setInterval(() => { time = new Date().toLocaleTimeString(); }, 1000);\">"
+        '<div asok-state="{ time: null }" asok-init="time = new Date().toLocaleTimeString(); setInterval(() => { time = new Date().toLocaleTimeString(); }, 1000);">'
         "Time"
         "</div>"
         "</body></html>"
@@ -532,7 +539,7 @@ def test_js_extended_expressions_validation():
     # 1. ES6 object shorthand and comments
     content_shorthand = (
         "<html><head></head><body>"
-        "<div asok-state=\"{ query: 'test', show: true }\" asok-init=\"// initialize state\nlet x = { query, show }; /* multiline comment */\"></div>"
+        '<div asok-state="{ query: \'test\', show: true }" asok-init="// initialize state\nlet x = { query, show }; /* multiline comment */"></div>'
         "</body></html>"
     )
     app._inject_assets(content_shorthand, request, "testnonce123")
@@ -590,6 +597,7 @@ def test_route_resolution_caching():
     app.config["DEBUG"] = False
 
     import unittest.mock as mock
+
     app._walk_route = mock.MagicMock(return_value=("mock_page.py", {"id": 100}))
 
     # 1. First resolution should walk the route
@@ -616,8 +624,76 @@ def test_route_resolution_caching():
     assert app._walk_route.call_count == 2
 
 
+def test_spa_js_executes_scripts_for_non_templates():
+    """Verify that asok_spa.js handles root-level script execution in non-template/block swap contexts."""
+    app = Asok()
+    spa_js = app.get_asset("asok_spa.js")
+    spa_min_js = app.get_asset("asok_spa.min.js")
+
+    # The spa_js should contain our script pre-execution logic for both performBlockSwap and SSE
+    assert "tempDiv.querySelectorAll('script').forEach" in spa_js
+    assert "tempContainer.querySelectorAll('script').forEach" in spa_js
+
+    # Verify that the dataset.run logic is in both the full and minified source
+    assert "dataset.run" in spa_js
+    assert "dataset.run" in spa_min_js
 
 
+def test_directives_code_splitting():
+    """Verify that form helper widgets are code-split and injected conditionally."""
+    app = Asok()
+    app.directives_enabled = True
 
+    directives_js = app.get_asset("asok_directives.min.js")
+    widgets_js = app.get_asset("asok_widgets.min.js")
+    directives_css = app.get_asset("asok_directives.min.css")
+    widgets_css = app.get_asset("asok_widgets.min.css")
+
+    # 1. Verify code-splitting of JS assets
+    assert "Asok.previewImage" not in directives_js
+    assert "Asok.startSignatureDrawing" not in directives_js
+    assert "Asok.previewImage" in widgets_js
+    assert "Asok.startSignatureDrawing" in widgets_js
+
+    # 2. Verify code-splitting of CSS assets
+    assert "asok-dropdown" not in directives_css
+    assert "asok-toggle" not in directives_css
+    assert "asok-dropdown" in widgets_css
+    assert "asok-toggle" in widgets_css
+
+    # 3. Test conditional injection
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+
+    # Case A: Basic directives only -> No widgets script/style should be injected
+    request_a = Request(environ)
+    content_a = (
+        "<html><head></head><body>"
+        '<div asok-state="{ open: true }" asok-show="open">Basic</div>'
+        "</body></html>"
+    )
+    result_a = app._inject_assets(content_a, request_a, "testnonce123")
+    assert "Asok.nonce" in result_a
+    assert "[asok-cloak]" in result_a
+    assert "previewImage" not in result_a
+    assert "asok-dropdown" not in result_a
+
+    # Case B: Directives + Form Helpers (widgets) -> Widgets script and style must be injected
+    request_b = Request(environ)
+    content_b = (
+        "<html><head></head><body>"
+        '<div asok-state="{ open: true }" asok-show="open">'
+        '  <input type="file" asok-on:change="Asok.previewImage(event, this)">'
+        "</div>"
+        "</body></html>"
+    )
+    result_b = app._inject_assets(content_b, request_b, "testnonce123")
+    assert "Asok.nonce" in result_b
+    assert "[asok-cloak]" in result_b
+    assert "previewImage" in result_b
+    assert "asok-dropdown" in result_b
 
 

@@ -404,4 +404,3 @@ class TestEnvVarDbPath:
         EnvModel.create(name="Hello Env")
         assert EnvModel.count() == 1
         EnvModel.close_connections()
-

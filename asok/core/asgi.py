@@ -122,6 +122,9 @@ class ASGIMixin:
         try:
             import secrets
 
+            from .signals import request_finished, request_started
+
+            request_started.send(self, request=request)
             self.nonce = secrets.token_urlsafe(16)
             request._nonce = self.nonce
 
@@ -203,7 +206,17 @@ class ASGIMixin:
                 await self._send_captured_response(status_str, headers_list, res, send)
                 return
 
+            res = self._handle_graphql_request(request, start_response)
+            if res is not None:
+                await self._send_captured_response(status_str, headers_list, res, send)
+                return
+
             res = self._handle_static_request(request, environ, start_response)
+            if res is not None:
+                await self._send_captured_response(status_str, headers_list, res, send)
+                return
+
+            res = self._handle_ssg_isr_request(request, environ, start_response)
             if res is not None:
                 await self._send_captured_response(status_str, headers_list, res, send)
                 return
@@ -272,6 +285,10 @@ class ASGIMixin:
 
         finally:
             from ..orm import close_all_db_connections
+            try:
+                request_finished.send(self, request=request)
+            except Exception:
+                pass
 
             close_all_db_connections()
             request_var.reset(token)

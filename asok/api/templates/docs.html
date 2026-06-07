@@ -24,7 +24,10 @@
                 <div class="nav-group">Menu</div>
                 <a href="#introduction" class="nav-item" onclick="openSection('introduction')">Introduction</a>
                 <a href="/openapi.json" target="_blank" class="nav-item">OpenAPI Spec</a>
-                
+                {% if graphql_enabled %}
+                <a href="{{ graphql_path }}" target="_blank" class="nav-item">GraphQL Explorer</a>
+                {% endif %}
+
                 {% set tags = {} %}
                 {% for path, methods in spec.paths.items() %}
                     {% for method, op in methods.items() %}

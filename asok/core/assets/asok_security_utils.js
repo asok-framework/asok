@@ -31,7 +31,7 @@
       scripts.forEach(s => s.remove());
 
       // Remove dangerous tags
-      const dangerousTags = ['iframe', 'object', 'embed', 'link', 'style', 'form'];
+      const dangerousTags = ['iframe', 'object', 'embed', 'link', 'style'];
       dangerousTags.forEach(tag => {
         const elements = temp.querySelectorAll(tag);
         elements.forEach(el => el.remove());

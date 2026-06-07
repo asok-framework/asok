@@ -116,7 +116,8 @@
       scripts.forEach(function (script) {
         if (script.dataset.run || script.id === 'asok-scoped-js') return;
         const newScript = document.createElement('script');
-        if (script.nonce) newScript.nonce = script.nonce;
+        const nonce = script.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+        if (nonce) newScript.nonce = nonce;
         if (script.src) newScript.src = script.src;
         newScript.textContent = script.textContent;
         newScript.dataset.run = '1';
@@ -351,26 +352,30 @@
       // SECURITY: tempDiv is not inserted into DOM, only used to parse templates
       // The actual content is sanitized when passed through doSwap() -> Asok.swap()
       tempDiv.innerHTML = html;
+
+      // Execute root-level scripts (like the directives registry) before swapping templates/content
+      tempDiv.querySelectorAll('script').forEach(function (script) {
+        let parent = script.parentNode;
+        while (parent && parent !== tempDiv) {
+          if (parent.tagName === 'TEMPLATE') return;
+          parent = parent.parentNode;
+        }
+        const newScript = document.createElement('script');
+        const nonce = script.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+        if (nonce) newScript.nonce = nonce;
+        if (script.src) newScript.src = script.src;
+        newScript.textContent = script.textContent;
+        newScript.dataset.run = '1';
+        script.dataset.run = '1';
+        document.body.appendChild(newScript);
+        newScript.remove();
+      });
+
       const templates = tempDiv.querySelectorAll('template[data-block]');
       const shouldPushUrl = (sourceElement && sourceElement.dataset && sourceElement.dataset.pushUrl !== undefined) || (!sourceElement && url);
       const pushData = shouldPushUrl ? { shouldPush: true, src: sourceElement, url: url, b: blockName, sel: selector } : null;
 
       if (templates.length) {
-        // Execute root-level scripts (like the directives registry) before swapping templates
-        tempDiv.querySelectorAll('script').forEach(function (script) {
-          let parent = script.parentNode;
-          while (parent && parent !== tempDiv) {
-            if (parent.tagName === 'TEMPLATE') return;
-            parent = parent.parentNode;
-          }
-          const newScript = document.createElement('script');
-          if (script.nonce) newScript.nonce = script.nonce;
-          if (script.src) newScript.src = script.src;
-          newScript.textContent = script.textContent;
-          document.body.appendChild(newScript);
-          newScript.remove();
-        });
-
         for (let i = 0; i < templates.length; i++) {
           const tpl = templates[i];
           const target = findTargetElement(tpl.dataset.block);
@@ -721,6 +726,24 @@
           // SECURITY: tempContainer is not inserted into DOM, only used to parse templates
           // The actual content is sanitized when passed through doSwap() -> Asok.swap()
           tempContainer.innerHTML = ev.data;
+
+          // Execute root-level scripts (like the directives registry) before swapping templates/content
+          tempContainer.querySelectorAll('script').forEach(function (script) {
+            let parent = script.parentNode;
+            while (parent && parent !== tempContainer) {
+              if (parent.tagName === 'TEMPLATE') return;
+              parent = parent.parentNode;
+            }
+            const newScript = document.createElement('script');
+            if (script.nonce) newScript.nonce = script.nonce;
+            if (script.src) newScript.src = script.src;
+            newScript.textContent = script.textContent;
+            newScript.dataset.run = '1';
+            script.dataset.run = '1';
+            document.body.appendChild(newScript);
+            newScript.remove();
+          });
+
           const templates = tempContainer.querySelectorAll('template[data-block]');
 
           if (templates.length) {

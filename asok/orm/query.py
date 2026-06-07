@@ -23,6 +23,7 @@ class Query(Generic[T]):
 
     def __init__(self, model: type[T], with_trashed: bool = False):
         self.model: type[T] = model
+        self._shard: Optional[str] = None
         self._select: str = "*"
         self._wheres: list[str] = []
         self._args: list[Any] = []
@@ -40,6 +41,7 @@ class Query(Generic[T]):
     def clone(self) -> Query[T]:
         """Return a copy of the query builder state."""
         q = Query(self.model, with_trashed=True)
+        q._shard = self._shard
         q._select = self._select
         q._wheres = list(self._wheres)
         q._args = list(self._args)
@@ -56,6 +58,21 @@ class Query(Generic[T]):
         if hasattr(self, "_cache_key"):
             q._cache_key = self._cache_key
         return q
+
+    def on(self, shard_name: str) -> Query[T]:
+        """Direct the query to a specific database shard."""
+        clone = self.clone()
+        clone._shard = shard_name
+        return clone
+
+    def create(self, **kwargs: Any) -> T:
+        """Create and save a new model instance on this query's shard."""
+        from .router import database_router_context
+
+        with database_router_context(op="write", shard=self._shard):
+            obj = self.model(_trust=True, _shard=self._shard, **kwargs)
+            obj.save()
+            return obj
 
     def _apply_global_scopes(self) -> None:
         """Apply all active global scopes defined on the model."""
@@ -245,7 +262,9 @@ class Query(Generic[T]):
         self._args.extend(values)
         return self
 
-    def like(self, column: str, pattern: str, escape_wildcards: bool = False) -> Query[T]:
+    def like(
+        self, column: str, pattern: str, escape_wildcards: bool = False
+    ) -> Query[T]:
         """Filter using SQL LIKE operator.
 
         Args:
@@ -266,7 +285,9 @@ class Query(Generic[T]):
         """
         if escape_wildcards:
             # SECURITY: Escape backslash first, then wildcards
-            pattern = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = (
+                pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
         return self.where(column, "LIKE", pattern)
 
     def or_where(self, column: str, op_or_val: Any, val: Any = None) -> Query[T]:
@@ -480,8 +501,14 @@ class Query(Generic[T]):
 
             cached_rows = default_cache.get(cache_key)
             if cached_rows is not None:
+
+                def _instantiate(row):
+                    obj = clone.model(_trust=True, **row)
+                    obj._shard = clone._shard
+                    return obj
+
                 results = ModelList(
-                    (clone.model(_trust=True, **row) for row in cached_rows),
+                    (_instantiate(row) for row in cached_rows),
                     sql=sql,
                     args=all_args,
                 )
@@ -489,9 +516,17 @@ class Query(Generic[T]):
                     clone._load_eager(results)
                 return results
 
-        rows = clone.model.get_engine().execute(sql, all_args)
+        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
+
+        def _instantiate(row):
+            obj = clone.model(_trust=True, **row)
+            obj._shard = clone._shard
+            return obj
+
         results = ModelList(
-            (clone.model(_trust=True, **row) for row in rows),
+            (_instantiate(row) for row in rows),
             sql=sql,
             args=all_args,
         )
@@ -544,7 +579,9 @@ class Query(Generic[T]):
                     if not target_model:
                         continue
                     t_ids = list({p[1] for p in pairs})
-                    targets_query = Query(target_model).where_in("id", t_ids)
+                    targets_query = (
+                        Query(target_model).on(self._shard).where_in("id", t_ids)
+                    )
                     if active_subs:
                         targets_query = targets_query.with_(*active_subs)
                     targets = targets_query.get()
@@ -563,7 +600,7 @@ class Query(Generic[T]):
                 ids = [r.id for r in results if r.id]
                 if not ids:
                     continue
-                children_query = Query(target).where_in(fk, ids)
+                children_query = Query(target).on(self._shard).where_in(fk, ids)
                 if active_subs:
                     children_query = children_query.with_(*active_subs)
                 children = children_query.get()
@@ -583,7 +620,7 @@ class Query(Generic[T]):
                 parent_ids = list({getattr(r, fk) for r in results if getattr(r, fk)})
                 if not parent_ids:
                     continue
-                parents_query = Query(target).where_in("id", parent_ids)
+                parents_query = Query(target).on(self._shard).where_in("id", parent_ids)
                 if active_subs:
                     parents_query = parents_query.with_(*active_subs)
                 parents = parents_query.get()
@@ -603,7 +640,7 @@ class Query(Generic[T]):
                 if not ids:
                     continue
 
-                engine = self.model.get_engine()
+                engine = self.model.get_engine(op="read", shard=self._shard)
                 q_pivot = engine.quote_identifier(pivot)
                 q_pfk = engine.quote_identifier(pfk)
                 q_pofk = engine.quote_identifier(pofk)
@@ -618,7 +655,7 @@ class Query(Generic[T]):
                     continue
 
                 target_ids = list({row[pofk] for row in pivot_rows})
-                targets_query = Query(target).where_in("id", target_ids)
+                targets_query = Query(target).on(self._shard).where_in("id", target_ids)
                 if active_subs:
                     targets_query = targets_query.with_(*active_subs)
                 targets = targets_query.get()
@@ -647,6 +684,7 @@ class Query(Generic[T]):
                     continue
                 children_query = (
                     Query(target)
+                    .on(self._shard)
                     .where_in(fk_id, ids)
                     .where(fk_type, self.model.__name__)
                 )
@@ -683,7 +721,9 @@ class Query(Generic[T]):
             for intersect_query in clone._intersect_queries:
                 all_args.extend(intersect_query._args)
 
-        res = clone.model.get_engine().execute(sql, all_args)
+        res = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         return list(res[0].values())[0] if res else 0
 
     def _aggregate(self, func: str, column: str) -> Any:
@@ -706,7 +746,9 @@ class Query(Generic[T]):
             for intersect_query in clone._intersect_queries:
                 all_args.extend(intersect_query._args)
 
-        res = clone.model.get_engine().execute(sql, all_args)
+        res = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         result = list(res[0].values())[0] if res else None
         return result if result is not None else 0
 
@@ -746,7 +788,9 @@ class Query(Generic[T]):
             for intersect_query in clone._intersect_queries:
                 all_args.extend(intersect_query._args)
 
-        rows = clone.model.get_engine().execute(sql, all_args)
+        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         return [list(row.values())[0] for row in rows]
 
     def update(self, **values: Any) -> int:
@@ -766,15 +810,28 @@ class Query(Generic[T]):
         for k, v in values.items():
             field = clone.model._fields.get(k)
             if field:
-                v = clone.model.get_engine().prepare_value(field, v)
+                v = clone.model.get_engine(
+                    op="write", shard=clone._shard
+                ).prepare_value(field, v)
             args.append(v)
         sql += clone._build_where()
         args += clone._args
-        return clone.model.get_engine().execute(sql, args)
+        return clone.model.get_engine(op="write", shard=clone._shard).execute(sql, args)
 
     def exists(self) -> bool:
-        """Return True if any records match the query."""
-        return self.count() > 0
+        """Return True if any records match the query.
+
+        Uses SELECT 1 LIMIT 1 instead of COUNT(*) — the database stops at the
+        first matching row, which is significantly faster on large tables.
+        """
+        clone = self.clone()
+        clone._apply_global_scopes()
+        # Collect args from this query (UNION/INTERSECT args are not relevant for exists)
+        all_args = list(clone._args)
+        where_clause = clone._build_where()
+        sql = f"SELECT 1 FROM {clone.model._table}{where_clause} LIMIT 1"
+        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(sql, all_args)
+        return bool(rows)
 
     def delete(self) -> int:
         """Bulk delete matching records (handles soft delete if enabled)."""
@@ -790,7 +847,9 @@ class Query(Generic[T]):
             )
         sql = f"DELETE FROM {clone.model._table}"
         sql += clone._build_where()
-        return clone.model.get_engine().execute(sql, clone._args)
+        return clone.model.get_engine(op="write", shard=clone._shard).execute(
+            sql, clone._args
+        )
 
     def force_delete(self) -> int:
         """Bulk delete matching records permanently, bypassing soft delete."""
@@ -800,16 +859,27 @@ class Query(Generic[T]):
             raise ValueError("Cannot delete a compound query (UNION/INTERSECT)")
         sql = f"DELETE FROM {clone.model._table}"
         sql += clone._build_where()
-        return clone.model.get_engine().execute(sql, clone._args)
+        return clone.model.get_engine(op="write", shard=clone._shard).execute(
+            sql, clone._args
+        )
 
-    def paginate(self, page: int = 1, per_page: int = 10) -> dict[str, Any]:
+    def paginate(self, page: int = 1, per_page: int = 10, count: bool = True) -> dict[str, Any]:
         """Paginate the current query and return results with metadata.
+
+        Args:
+            page: The page number (1-indexed).
+            per_page: Number of items per page.
+            count: If True (default), also run a SELECT COUNT(*) to get the total
+                   number of matching rows and compute total pages. Set to False
+                   to skip the count query and save a database round-trip when
+                   the total is not needed (e.g. infinite-scroll / "Load more" UIs).
 
         Example:
             User.query().where("active", 1).paginate(page=2)
+            User.query().where("active", 1).paginate(page=2, count=False)
         """
-        total = self.count()
-        pages = math.ceil(total / per_page)
+        total = self.count() if count else None
+        pages = math.ceil(total / per_page) if total is not None else None
         items = self.limit(per_page).offset((page - 1) * per_page).get()
 
         return {

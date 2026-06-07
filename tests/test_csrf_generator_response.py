@@ -66,11 +66,17 @@ def get(request):
     headers_dict = {k.lower(): v for k, v in headers_holder}
 
     # Verify that X-CSRF-Token is in response headers
-    assert "x-csrf-token" in headers_dict, "X-CSRF-Token header was not set in generator response!"
-    assert len(headers_dict["x-csrf-token"]) == 64, "X-CSRF-Token should be a valid 64-character hex string"
+    assert "x-csrf-token" in headers_dict, (
+        "X-CSRF-Token header was not set in generator response!"
+    )
+    assert len(headers_dict["x-csrf-token"]) == 64, (
+        "X-CSRF-Token should be a valid 64-character hex string"
+    )
 
     # Verify Access-Control-Expose-Headers exposes X-CSRF-Token
-    assert "access-control-expose-headers" in headers_dict, "Access-Control-Expose-Headers was not set"
+    assert "access-control-expose-headers" in headers_dict, (
+        "Access-Control-Expose-Headers was not set"
+    )
     assert "x-csrf-token" in headers_dict["access-control-expose-headers"].lower(), (
         "X-CSRF-Token was not exposed in Access-Control-Expose-Headers"
     )

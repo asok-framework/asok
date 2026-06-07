@@ -489,7 +489,7 @@ def test_sanitize_complex_real_world_svg():
     assert b"<path" in result
     assert b"<text" in result
     assert b"Hello SVG" in result
-    assert b'<g' in result
+    assert b"<g" in result
     assert b'transform="rotate(45 100 100)"' in result
 
     # Verify no dangerous content
@@ -509,4 +509,3 @@ def test_sanitize_blocks_obfuscated_javascript_urls():
     result = sanitize_svg(svg)
     assert b"javascript" not in result.lower()
     assert b"alert" not in result
-

@@ -8,6 +8,7 @@ from .. import __version__
 from .build import run_build
 from .database import (
     run_createsuperuser,
+    run_db_command,
     run_dumpdata,
     run_loaddata,
     run_migrate,
@@ -66,7 +67,12 @@ def print_help() -> None:
             ("test", "Run the project's test suite"),
         ],
         "Database": [
-            ("migrate", "Apply pending migrations (--rollback, --status)"),
+            (
+                "migrate",
+                "Apply pending migrations (--rollback, --status, --to, --steps, --reset)",
+            ),
+            ("db schema", "Display database tables and schema details"),
+            ("db explain", "Analyze SQL query performance using explain plan"),
             ("seed", "Run database seeders"),
             ("createsuperuser", "Create or update an administrative user"),
             ("dumpdata", "Dump database records to a JSON fixture file"),
@@ -133,6 +139,34 @@ def _add_virtualenv_to_path(root: str | None) -> None:
             sys.path.insert(0, win_site)
 
 
+def load_extension_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Load CLI commands registered by third-party extensions via entry points."""
+    import sys
+    if sys.version_info >= (3, 10):
+        from importlib import metadata
+    else:
+        try:
+            import importlib_metadata as metadata  # type: ignore
+        except ImportError:
+            from importlib import metadata
+
+    try:
+        eps = metadata.entry_points()
+        if hasattr(eps, "select"):
+            entry_points = eps.select(group="asok.commands")
+        else:
+            entry_points = eps.get("asok.commands", [])
+
+        for ep in entry_points:
+            try:
+                register_func = ep.load()
+                register_func(subparsers)
+            except Exception as e:
+                print(f"Warning: Failed to load CLI command from extension {ep.name}: {e}")
+    except Exception:
+        pass
+
+
 def main() -> None:
     """Terminal entry point for the 'asok' CLI."""
     # Load .env early so that all components (like ORM) see the environment
@@ -176,6 +210,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Asok Framework CLI", add_help=False)
     parser.add_argument("-h", "--help", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
+    load_extension_commands(subparsers)
 
     # Command definitions
     create_parser = subparsers.add_parser("create")
@@ -212,7 +247,7 @@ def main() -> None:
     deploy_parser.add_argument(
         "--prod-dir",
         default=None,
-        help="Target directory on the production server (defaults to /var/www/<app_name>)"
+        help="Target directory on the production server (defaults to /var/www/<app_name>)",
     )
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument(
@@ -242,6 +277,29 @@ def main() -> None:
     migrate_parser.add_argument(
         "--database", default=None, help="Database DSN or name to apply migrations to"
     )
+    migrate_parser.add_argument(
+        "--to", default=None, help="Migrate or rollback to a specific migration name"
+    )
+    migrate_parser.add_argument(
+        "--steps", type=int, default=None, help="Number of migrations to rollback"
+    )
+    migrate_parser.add_argument(
+        "--reset", action="store_true", help="Rollback all applied migrations"
+    )
+
+    db_parser = subparsers.add_parser("db")
+    db_subparsers = db_parser.add_subparsers(dest="db_command")
+
+    db_schema_parser = db_subparsers.add_parser("schema")
+    db_schema_parser.add_argument(
+        "--database", default=None, help="Database DSN or name"
+    )
+
+    db_explain_parser = db_subparsers.add_parser("explain")
+    db_explain_parser.add_argument("query", help="SQL query to explain")
+    db_explain_parser.add_argument(
+        "--database", default=None, help="Database DSN or name"
+    )
 
     dumpdata_parser = subparsers.add_parser("dumpdata")
     dumpdata_parser.add_argument(
@@ -264,7 +322,6 @@ def main() -> None:
         default="run",
         help="Action to perform: 'run' (default) starts the worker, 'status' shows queue status.",
     )
-
 
     make_parser = subparsers.add_parser("make")
     make_parser.add_argument(
@@ -371,7 +428,12 @@ def main() -> None:
             status=args.status,
             fake=args.fake,
             database=args.database,
+            to_migration=args.to,
+            steps=args.steps,
+            reset=args.reset,
         )
+    elif args.command == "db":
+        run_db_command(args)
     elif args.command == "dumpdata":
         run_dumpdata(model_name=args.model, output_file=args.output)
     elif args.command == "loaddata":

@@ -175,8 +175,7 @@ def _sanitize_attributes(tag: str, attrs: str) -> str:
     # SECURITY: Enhanced regex to match both quoted and unquoted attributes
     # Matches: name="value", name='value', name=value
     attr_pattern = re.compile(
-        r'(\w+)\s*=\s*(?:(["\'])((?:(?!\2).)*)\2|([^\s>]+))',
-        re.IGNORECASE
+        r'(\w+)\s*=\s*(?:(["\'])((?:(?!\2).)*)\2|([^\s>]+))', re.IGNORECASE
     )
 
     for match in attr_pattern.finditer(attrs):
@@ -238,7 +237,9 @@ def _is_safe_url(url: str, allow_data_images: bool = False) -> bool:
         return False
 
     # Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
-    clean_url = "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
+    clean_url = (
+        "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
+    )
 
     # Block dangerous protocols
     if any(

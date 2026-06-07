@@ -268,7 +268,24 @@ class PostgresEngine(BaseEngine):
                 )
 
     def transaction(self) -> Any:
-        return self.get_connection().transaction()
+        if not hasattr(self._local, "txn_level"):
+            self._local.txn_level = 0
+        conn_txn = self.get_connection().transaction()
+
+        class PostgresTransactionWrapper:
+            def __init__(self, txn: Any, engine: PostgresEngine):
+                self.txn = txn
+                self.engine = engine
+
+            def __enter__(self) -> Any:
+                self.engine._local.txn_level += 1
+                return self.txn.__enter__()
+
+            def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
+                self.engine._local.txn_level -= 1
+                return self.txn.__exit__(exc_type, exc_val, exc_tb)
+
+        return PostgresTransactionWrapper(conn_txn, self)
 
     @property
     def primary_key_def(self) -> str:

@@ -43,6 +43,7 @@ class Component(metaclass=ComponentMeta):
         # SECURITY: Use 128-bit CID to prevent brute-force attacks (was 32-bit)
         self._cid: str = kwargs.pop("_cid", secrets.token_hex(16))
         self._session: dict[str, Any] = kwargs.pop("_session", {})
+        self._client: Optional[str] = kwargs.pop("_client", None)
         self._slot: Optional[str] = None
         # Initial state
         for k, v in kwargs.items():
@@ -224,10 +225,14 @@ class Component(metaclass=ComponentMeta):
         rendered_html = render_template_string(self.render(), ctx)
         state_str = self._sign_state(secret)
 
+        client_attr = (
+            f" client:{self._client}" if getattr(self, "_client", None) else ""
+        )
+
         return SafeString(
             f'<div id="asok-{self._cid}" '
             f'data-asok-component="{html.escape(self.__class__.__name__)}" '
-            f'data-asok-state="{html.escape(state_str)}">'
+            f'data-asok-state="{html.escape(state_str)}"{client_attr}>'
             f"{rendered_html}"
             f"</div>"
         )

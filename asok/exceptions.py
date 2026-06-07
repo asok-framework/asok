@@ -77,3 +77,11 @@ class MailError(AsokException):
     """Raised when an email fails to send."""
 
     pass
+
+
+class RateLimitExceeded(AbortException):
+    """Raised when a rate limit is exceeded."""
+
+    def __init__(self, message: str = "Too Many Requests", retry_after: int = 60):
+        self.retry_after = retry_after
+        super().__init__(429, message)

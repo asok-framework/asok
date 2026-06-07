@@ -552,7 +552,9 @@ class AssetMixin:
         if_parts = _parse_js_if_statement(stmt)
         if if_parts:
             cond, body = if_parts
-            return AssetMixin._validate_expression_cached(cond) and AssetMixin._validate_expression_cached(body)
+            return AssetMixin._validate_expression_cached(
+                cond
+            ) and AssetMixin._validate_expression_cached(body)
 
         # Normalize JS logical operators (|| -> or, && -> and) for Python AST parsing compatibility
         normalized_expr = stmt.replace("||", " or ").replace("&&", " and ")
@@ -570,14 +572,22 @@ class AssetMixin:
         normalized_expr = re.sub(r"\b(let|const|var)\s+", "", normalized_expr)
 
         # Normalize JavaScript 'typeof' operator (typeof x -> _asok_typeof(x))
-        normalized_expr = re.sub(r"\btypeof\s+([a-zA-Z0-9_$]+)", r"_asok_typeof(\1)", normalized_expr)
+        normalized_expr = re.sub(
+            r"\btypeof\s+([a-zA-Z0-9_$]+)", r"_asok_typeof(\1)", normalized_expr
+        )
         normalized_expr = re.sub(r"\btypeof\s*\(", "_asok_typeof(", normalized_expr)
 
         # Normalize JavaScript 'instanceof' operator (x instanceof Y -> _asok_instanceof(x, Y))
-        normalized_expr = re.sub(r"([a-zA-Z0-9_$]+)\s+instanceof\s+([a-zA-Z0-9_$]+)", r"_asok_instanceof(\1, \2)", normalized_expr)
+        normalized_expr = re.sub(
+            r"([a-zA-Z0-9_$]+)\s+instanceof\s+([a-zA-Z0-9_$]+)",
+            r"_asok_instanceof(\1, \2)",
+            normalized_expr,
+        )
 
         # Normalize JavaScript 'void' operator (void 0 -> None)
-        normalized_expr = re.sub(r"\bvoid\s+([a-zA-Z0-9_$]+|\d+)", "None", normalized_expr)
+        normalized_expr = re.sub(
+            r"\bvoid\s+([a-zA-Z0-9_$]+|\d+)", "None", normalized_expr
+        )
         normalized_expr = re.sub(r"\bvoid\s*\(.*?\)", "None", normalized_expr)
 
         # SECURITY: Check for dangerous keywords first (server-side injection attempt)
@@ -844,7 +854,9 @@ class AssetMixin:
             if normalized_expr.startswith("return "):
                 normalized_expr = normalized_expr[7:].strip()
 
-            normalized_expr = normalized_expr.replace("||", " or ").replace("&&", " and ")
+            normalized_expr = normalized_expr.replace("||", " or ").replace(
+                "&&", " and "
+            )
             normalized_expr = re.sub(r"\$(\w+)", r"_asok_\1", normalized_expr)
             normalized_expr = re.sub(r"(?<!\w)\$(?!\w)", "_asok_state", normalized_expr)
 
@@ -1270,84 +1282,173 @@ class AssetMixin:
         )
 
         # 3. Handle directives asset injection
-        needs_directives = (
-            any(
-                attr in content
-                for attr in [
-                    "asok-state",
-                    "asok-on:",
-                    "asok-text",
-                    "asok-show",
-                    "asok-hide",
-                    "asok-class:",
-                    "asok-bind:",
-                    "asok-model",
-                    "asok-if",
-                    "asok-for",
-                    "asok-init",
-                    "asok-ref",
-                    "asok-teleport",
-                    "asok-cloak",
-                    "asok-fetch",
-                    "asok-fetch-async",
-                    "asok-toggle",
-                ]
-            )
-            or getattr(request, "_asok_needs_directives", False)
-            or getattr(self, "directives_enabled", False)
-        )
+        registry = {}
+        # Check for precompiled directives registry
+        debug = self.config.get("DEBUG", False)
+        registry_file = os.path.join(self._partials_path, "js", "directives_registry.js")
+        has_precompiled_registry = not debug and os.path.exists(registry_file)
+
+        needs_directives = any(
+            attr in content
+            for attr in [
+                "asok-state",
+                "asok-on:",
+                "asok-text",
+                "asok-show",
+                "asok-hide",
+                "asok-class:",
+                "asok-bind:",
+                "asok-model",
+                "asok-if",
+                "asok-for",
+                "asok-init",
+                "asok-ref",
+                "asok-teleport",
+                "asok-cloak",
+                "asok-fetch",
+                "asok-fetch-async",
+                "asok-toggle",
+                # Support precompiled versions
+                "asok-state-ref",
+                "asok-on-ref:",
+                "asok-text-ref",
+                "asok-show-ref",
+                "asok-hide-ref",
+                "asok-class-ref:",
+                "asok-bind-ref:",
+                "asok-model-ref",
+                "asok-if-ref",
+                "asok-for-ref",
+                "asok-init-ref",
+                "asok-fetch-async-ref",
+            ]
+        ) or getattr(request, "_asok_needs_directives", False)
+
         if needs_directives:
-            content, registry = self._precompile_directives(content)
-
-            registry_js = ""
-            if registry:
-                registry_entries = []
-                for h, expr in registry.items():
-                    is_stmt = (
-                        ";" in expr
-                        or "return " in expr
-                        or bool(re.search(r"\b(if|for|while|const|let|var|function)\b", expr))
+            if has_precompiled_registry:
+                # Bypass runtime precompilation
+                if getattr(request, "_asok_directives_done", False) or is_block:
+                    # For block updates, registry.js is already loaded globally,
+                    # and the directives runner will scan the updated block.
+                    # Nothing to do!
+                    pass
+                else:
+                    request._asok_directives_done = True
+                    directives_css = self.get_asset("asok_directives.min.css")
+                    request._asok_pending_styles += (
+                        f'<style nonce="{nonce}">{directives_css}</style>'
                     )
-                    if expr.strip().startswith("{") and not is_stmt:
-                        expr = f"({expr})"
 
-                    body = f"return ({expr})" if not is_stmt else expr
-                    body = re.sub(r"\s+", " ", body).strip()
+                    registry_url = "/js/directives_registry.js"
+                    h = self._static_hash("js/directives_registry.js")
+                    if h:
+                        registry_url += f"?v={h}"
 
-                    # Check if the expression contains 'await' keyword
-                    is_async = self._is_async_expression_cached(expr)
-
-                    fn_prefix = "async " if is_async else ""
-                    registry_entries.append(
-                        f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick) {{ with($||{{}}) {{ {body} }} }}"
-                    )
-                registry_js = (
-                    "window.__asok_registry = Object.assign(window.__asok_registry || {}, {\n"
-                    + ",\n".join(registry_entries)
-                    + "\n});\n"
-                )
-
-            if getattr(request, "_asok_directives_done", False) or is_block:
-                if registry_js:
+                    directives_js = self.get_asset("asok_directives.min.js")
                     request._asok_pending_scripts += (
-                        f'<script nonce="{nonce}">\n{registry_js}</script>\n'
+                        f'<script nonce="{nonce}">\n'
+                        f'window.Asok = window.Asok || {{}}; window.Asok.nonce = "{nonce}";\n'
+                        f"</script>\n"
+                        f'<script src="{registry_url}" nonce="{nonce}"></script>\n'
+                        f'<script nonce="{nonce}">\n'
+                        f"{directives_js}\n"
+                        f"</script>"
                     )
             else:
-                request._asok_directives_done = True
+                content, registry = self._precompile_directives(content)
 
-                directives_css = self.get_asset("asok_directives.min.css")
-                request._asok_pending_styles += (
-                    f'<style nonce="{nonce}">{directives_css}</style>'
-                )
+                registry_js = ""
+                if registry:
+                    registry_entries = []
+                    for h, expr in registry.items():
+                        is_stmt = (
+                            ";" in expr
+                            or "return " in expr
+                            or bool(
+                                re.search(
+                                    r"\b(if|for|while|const|let|var|function)\b", expr
+                                )
+                            )
+                        )
+                        if expr.strip().startswith("{") and not is_stmt:
+                            expr = f"({expr})"
 
-                directives_js = self.get_asset("asok_directives.min.js")
+                        body = f"return ({expr})" if not is_stmt else expr
+                        body = re.sub(r"\s+", " ", body).strip()
+
+                        # Check if the expression contains 'await' keyword
+                        is_async = self._is_async_expression_cached(expr)
+
+                        fn_prefix = "async " if is_async else ""
+                        registry_entries.append(
+                            f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick) {{ with($||{{}}) {{ {body} }} }}"
+                        )
+                    registry_js = (
+                        "window.__asok_registry = Object.assign(window.__asok_registry || {}, {\n"
+                        + ",\n".join(registry_entries)
+                        + "\n});\n"
+                    )
+
+                if getattr(request, "_asok_directives_done", False) or is_block:
+                    if registry_js:
+                        request._asok_pending_scripts += (
+                            f'<script nonce="{nonce}">\n{registry_js}</script>\n'
+                        )
+                else:
+                    request._asok_directives_done = True
+
+                    directives_css = self.get_asset("asok_directives.min.css")
+                    request._asok_pending_styles += (
+                        f'<style nonce="{nonce}">{directives_css}</style>'
+                    )
+
+                    directives_js = self.get_asset("asok_directives.min.js")
+                    request._asok_pending_scripts += (
+                        f'<script nonce="{nonce}">\n'
+                        f'window.Asok = window.Asok || {{}}; window.Asok.nonce = "{nonce}";\n'
+                        f"{registry_js}\n"
+                        f"{directives_js}\n"
+                        f"</script>"
+                    )
+
+        # 3.5 Handle widgets asset injection
+        markers = ["Asok.", "asok-dropdown", "asok-table", "asok-toggle", "asok-badge", "asok-pagination"]
+
+        precompiled_uses_widgets = False
+        if has_precompiled_registry:
+            if not hasattr(self, "_precompiled_uses_widgets"):
+                self._precompiled_uses_widgets = False
+                try:
+                    if os.path.exists(registry_file):
+                        with open(registry_file, "r", encoding="utf-8") as f:
+                            registry_content = f.read()
+                        self._precompiled_uses_widgets = any(marker in registry_content for marker in markers)
+                except Exception:
+                    pass
+            precompiled_uses_widgets = self._precompiled_uses_widgets
+
+        needs_widgets = (
+            (any(marker in content for marker in markers) or
+             (has_precompiled_registry and precompiled_uses_widgets) or
+             (not has_precompiled_registry and any(any(marker in val for marker in markers) for val in registry.values())))
+            and not getattr(request, "_asok_widgets_done", False)
+        )
+        if needs_widgets:
+            request._asok_widgets_done = True
+            try:
+                widgets_js = self.get_asset("asok_widgets.min.js")
                 request._asok_pending_scripts += (
-                    f'<script nonce="{nonce}">\n'
-                    f'window.Asok = window.Asok || {{}}; window.Asok.nonce = "{nonce}";\n'
-                    f"{registry_js}\n"
-                    f"{directives_js}\n"
-                    "</script>"
+                    f'<script nonce="{nonce}">\n{widgets_js}\n</script>\n'
                 )
+            except Exception:
+                pass
+            try:
+                widgets_css = self.get_asset("asok_widgets.min.css")
+                request._asok_pending_styles += (
+                    f'<style nonce="{nonce}">{widgets_css}</style>\n'
+                )
+            except Exception:
+                pass
 
         # 6. Live Reload (DEBUG only)
         if (

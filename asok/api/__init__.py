@@ -125,6 +125,8 @@ def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
                 "api_logo": app.config.get("API_LOGO", app.config.get("SITE_LOGO")),
                 "css_url": css_url,
                 "js_url": js_url,
+                "graphql_enabled": bool(app.config.get("GRAPHQL_ENABLED", False)),
+                "graphql_path": app.config.get("GRAPHQL_PATH", "/graphql"),
             },
         )
 

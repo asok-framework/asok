@@ -88,7 +88,61 @@ def on_live_message(server: Any, conn: Any, text: str) -> None:
                             )
                             return
 
-                conn.join(room)
+                if not conn.join(room):
+                    conn.send_json(
+                        {
+                            "op": "broadcast",
+                            "type": "error",
+                            "room": room,
+                            "message": f"Unauthorized or invalid room join request for {room}",
+                        }
+                    )
+            return
+
+        # ── GET_PRESENCE: return currently online users ──
+        if op == "get_presence":
+            online_users = []
+            if hasattr(server, "get_online_users"):
+                online_users = server.get_online_users()
+            conn.send_json(
+                {"op": "broadcast", "type": "presence_list", "users": online_users}
+            )
+            return
+
+        # ── TYPING: broadcast typing indicator to room subscribers ──
+        if op == "typing":
+            room = data.get("room")
+            typing_status = bool(data.get("typing"))
+            if room and isinstance(room, str):
+                if room in conn._rooms:
+                    user_id = getattr(conn.user, "id", None)
+                    payload = {
+                        "op": "broadcast",
+                        "type": "typing",
+                        "room": room,
+                        "user_id": user_id,
+                        "typing": typing_status,
+                    }
+                    server.broadcast_to_json(room, payload, exclude=conn)
+            return
+
+        # ── RECEIPT: broadcast read receipt to room subscribers ──
+        if op == "receipt":
+            room = data.get("room")
+            message_id = data.get("message_id")
+            status = data.get("status", "read")
+            if room and isinstance(room, str):
+                if room in conn._rooms:
+                    user_id = getattr(conn.user, "id", None)
+                    payload = {
+                        "op": "broadcast",
+                        "type": "receipt",
+                        "room": room,
+                        "message_id": message_id,
+                        "user_id": user_id,
+                        "status": status,
+                    }
+                    server.broadcast_to_json(room, payload, exclude=conn)
             return
 
         # ── LEAVE: browser tells server a component was removed from DOM ──

@@ -15,7 +15,6 @@ import warnings
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from ..events import events
-from .engines import get_engine
 from .exceptions import ModelError
 from .field import Field
 from .fileref import FileRef
@@ -35,6 +34,11 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound="Model")
 logger = logging.getLogger("asok.orm")
+
+# Module-level cache for derived encryption keys.
+# The SHA-256 derivation + base64 encoding is computed at most once per unique
+# SECRET_KEY value, then reused across all model instances and requests.
+_ENCRYPTION_KEY_CACHE: dict[str, bytes] = {}
 
 
 class ModelMeta(type):
@@ -71,6 +75,28 @@ class ModelMeta(type):
         attrs["_vector_fields"] = [
             k for k, v in fields.items() if hasattr(v, "is_vector")
         ]
+        attrs["_encrypted_fields"] = [
+            k for k, v in fields.items() if hasattr(v, "is_encrypted")
+        ]
+        # Pre-compute field type map once at class definition to avoid repeated hasattr()
+        # calls in __init__ (which runs for every row returned from the database).
+        _ftm = {}
+        for k, v in fields.items():
+            if hasattr(v, "is_file"):
+                _ftm[k] = "file"
+            elif hasattr(v, "is_boolean"):
+                _ftm[k] = "boolean"
+            elif hasattr(v, "is_json"):
+                _ftm[k] = "json"
+            elif hasattr(v, "is_decimal"):
+                _ftm[k] = "decimal"
+            elif hasattr(v, "is_enum"):
+                _ftm[k] = "enum"
+            elif hasattr(v, "is_vector"):
+                _ftm[k] = "vector"
+            elif hasattr(v, "is_encrypted"):
+                _ftm[k] = "encrypted"
+        attrs["_field_type_map"] = _ftm
         soft_delete_fields = [
             k for k, v in fields.items() if hasattr(v, "is_soft_delete")
         ]
@@ -106,7 +132,12 @@ class ModelMeta(type):
 
                 def get_related(self, field_name=k, model=v.related_model):
                     val = getattr(self, field_name)
-                    return model.find(id=val) if val else None
+                    if not val:
+                        return None
+                    from .router import database_router_context
+
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        return model.find(id=val)
 
                 attrs[rel_name] = property(get_related)
 
@@ -121,7 +152,10 @@ class ModelMeta(type):
                     if not target_model:
                         return []
                     fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
-                    return target_model.all(**{fk: self.id})
+                    from .router import database_router_context
+
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        return target_model.all(**{fk: self.id})
 
                 attrs[k] = property(get_collection)
 
@@ -135,7 +169,10 @@ class ModelMeta(type):
                     if not target_model:
                         return None
                     fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
-                    return target_model.find(**{fk: self.id})
+                    from .router import database_router_context
+
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        return target_model.find(**{fk: self.id})
 
                 attrs[k] = property(get_one)
 
@@ -150,7 +187,12 @@ class ModelMeta(type):
                         return None
                     fk = rel.foreign_key or f"{rel.target_model_name.lower()}_id"
                     val = getattr(self, fk, None)
-                    return target_model.find(id=val) if val else None
+                    if not val:
+                        return None
+                    from .router import database_router_context
+
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        return target_model.find(id=val)
 
                 attrs[k] = property(get_parent)
 
@@ -166,24 +208,30 @@ class ModelMeta(type):
                     # SECURITY: _pivot_info validates identifiers
                     pivot, pfk, pofk = self._pivot_info(rel)
 
-                    engine = self.get_engine()
-                    q_target = engine.quote_identifier(target_model._table)
-                    q_pivot = engine.quote_identifier(pivot)
-                    q_pfk = engine.quote_identifier(pfk)
-                    q_pofk = engine.quote_identifier(pofk)
+                    from .router import database_router_context
 
-                    # SECURITY: Quote all table and column names to prevent SQL injection
-                    sql = (
-                        f"SELECT t.* FROM {q_target} t "
-                        f"JOIN {q_pivot} p ON p.{q_pofk} = t.id "
-                        f"WHERE p.{q_pfk} = ?"
-                    )
-                    rows = engine.execute(sql, (self.id,))
-                    return ModelList(
-                        (target_model(**row) for row in rows),
-                        sql=sql,
-                        args=[self.id],
-                    )
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        engine = self.get_engine(op="read")
+                        q_target = engine.quote_identifier(target_model._table)
+                        q_pivot = engine.quote_identifier(pivot)
+                        q_pfk = engine.quote_identifier(pfk)
+                        q_pofk = engine.quote_identifier(pofk)
+
+                        # SECURITY: Quote all table and column names to prevent SQL injection
+                        sql = (
+                            f"SELECT t.* FROM {q_target} t "
+                            f"JOIN {q_pivot} p ON p.{q_pofk} = t.id "
+                            f"WHERE p.{q_pfk} = ?"
+                        )
+                        rows = engine.execute(sql, (self.id,))
+                        results = ModelList(
+                            (target_model(**row) for row in rows),
+                            sql=sql,
+                            args=[self.id],
+                        )
+                        for r in results:
+                            r._shard = getattr(self, "_shard", None)
+                        return results
 
                 attrs[k] = property(get_many_to_many)
 
@@ -204,7 +252,10 @@ class ModelMeta(type):
                     target_model = MODELS_REGISTRY.get(target_type)
                     if not target_model:
                         return None
-                    return target_model.find(id=target_id)
+                    from .router import database_router_context
+
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        return target_model.find(id=target_id)
 
                 attrs[k] = property(get_morph_to)
 
@@ -219,11 +270,14 @@ class ModelMeta(type):
                         return []
                     fk_id = f"{rel.foreign_key}_id"
                     fk_type = f"{rel.foreign_key}_type"
-                    return (
-                        target_model.where(fk_id, self.id)
-                        .where(fk_type, self.__class__.__name__)
-                        .get()
-                    )
+                    from .router import database_router_context
+
+                    with database_router_context(shard=getattr(self, "_shard", None)):
+                        return (
+                            target_model.where(fk_id, self.id)
+                            .where(fk_type, self.__class__.__name__)
+                            .get()
+                        )
 
                 attrs[k] = property(get_morph_many)
 
@@ -349,22 +403,101 @@ class Model(metaclass=ModelMeta):
     _global_scopes: dict[str, Any] = {}
 
     @classmethod
-    def get_engine(cls):
-        cached_engine = getattr(cls, "_cached_engine", None)
-        raw_path = cls._db_path
-        resolved_path = os.getenv(raw_path) if raw_path else None
-        if not resolved_path:
-            resolved_path = raw_path
-        if resolved_path:
-            resolved_path = resolved_path.strip()
+    def get_engine(cls, op: str | None = None, shard: str | None = None):
+        from .engines import _ENGINES_CACHE
+        from .engines import get_engine as get_engine_raw
+        from .router import _routing_state, resolve_primary_dsn, route_database
 
-        cached_path = getattr(cls, "_cached_path", None)
-        if cached_engine is None or cached_path != resolved_path:
-            cls._cached_path = resolved_path
-            cls._cached_engine = get_engine(resolved_path)
-        return cls._cached_engine
+        if op is None:
+            op = getattr(_routing_state, "op", "write")
+        if shard is None:
+            shard = getattr(_routing_state, "shard", None)
+
+        primary_dsn = resolve_primary_dsn(cls, shard)
+        primary_engine = _ENGINES_CACHE.get(primary_dsn)
+        if (
+            primary_engine
+            and hasattr(primary_engine, "_local")
+            and getattr(primary_engine._local, "txn_level", 0) > 0
+        ):
+            op = "write"
+
+        resolved_dsn = route_database(cls, op, shard)
+        return get_engine_raw(resolved_dsn)
+
+    @classmethod
+    def _get_encryption_key(cls) -> bytes:
+        secret = os.getenv("SECRET_KEY")
+        if not secret:
+            from ..context import current_request
+
+            app_ref = (
+                current_request.environ.get("asok.app")
+                if current_request and hasattr(current_request, "environ")
+                else None
+            )
+            if app_ref:
+                secret = app_ref.config.get("SECRET_KEY")
+
+        if not secret:
+            secret = "change-me-in-production-default-secret-key-for-test"
+
+        # Return cached derived key if already computed for this secret.
+        cached = _ENCRYPTION_KEY_CACHE.get(secret)
+        if cached is not None:
+            return cached
+
+        import base64
+        import hashlib
+
+        derived = hashlib.sha256(secret.encode()).digest()
+        key = base64.urlsafe_b64encode(derived)
+        _ENCRYPTION_KEY_CACHE[secret] = key
+        return key
+
+    def _encrypt_value(self, val: Any) -> Optional[str]:
+        if val is None:
+            return None
+
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            raise ImportError(
+                "The 'cryptography' library is required to use encrypted fields. "
+                "Install it using 'pip install cryptography'."
+            )
+
+        key = self._get_encryption_key()
+        f = Fernet(key)
+        return f.encrypt(str(val).encode()).decode()
+
+    def _decrypt_value(self, val: Any) -> Optional[str]:
+        if val is None:
+            return None
+
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            raise ImportError(
+                "The 'cryptography' library is required to use encrypted fields. "
+                "Install it using 'pip install cryptography'."
+            )
+
+        key = self._get_encryption_key()
+        f = Fernet(key)
+        try:
+            return f.decrypt(str(val).encode()).decode()
+        except Exception as e:
+            logger.error("Failed to decrypt field value: %s", e)
+            return str(val)
+
+    @classmethod
+    def on(cls: type[T], shard_name: str) -> Query[T]:
+        """Start a new chainable query targeted at a specific database shard."""
+        return cls.query().on(shard_name)
 
     def __init__(self, _trust: bool = False, **kwargs: Any):
+        self._shard: Optional[str] = kwargs.get("_shard")
         self.id: Optional[int] = kwargs.get("id")
         is_new = not self.id  # New instance being created
         for name in self._fields:
@@ -384,9 +517,12 @@ class Model(metaclass=ModelMeta):
                 val = getattr(self, name, field.default)
 
             if val is not None:
-                if hasattr(field, "is_file") and not isinstance(val, FileRef):
+                # Use pre-computed type map (built once in ModelMeta) instead of
+                # repeated hasattr() calls — major performance win for large result sets.
+                _ftype = self._field_type_map.get(name)
+                if _ftype == "file" and not isinstance(val, FileRef):
                     val = FileRef(val, field.upload_to)
-                elif hasattr(field, "is_boolean"):
+                elif _ftype == "boolean":
                     # Convert string/bool to int (0 or 1)
                     if isinstance(val, str):
                         val = 1 if val and val != "0" else 0
@@ -394,15 +530,13 @@ class Model(metaclass=ModelMeta):
                         val = 1 if val else 0
                     elif val:
                         val = int(bool(val))
-                elif hasattr(field, "is_json") and isinstance(val, str):
+                elif _ftype == "json" and isinstance(val, str):
                     try:
                         val = json.loads(val)
                     except Exception as e:
                         # Log JSON parsing errors for debugging
                         logger.debug("Failed to parse JSON field '%s': %s", name, e)
-                elif hasattr(field, "is_decimal") and not isinstance(
-                    val, decimal.Decimal
-                ):
+                elif _ftype == "decimal" and not isinstance(val, decimal.Decimal):
                     try:
                         val = decimal.Decimal(str(val))
                     except Exception as e:
@@ -410,14 +544,17 @@ class Model(metaclass=ModelMeta):
                         logger.debug(
                             "Failed to convert Decimal field '%s': %s", name, e
                         )
-                elif hasattr(field, "is_enum") and not isinstance(val, enum.Enum):
+                elif _ftype == "enum" and not isinstance(val, enum.Enum):
                     try:
                         val = field.enum_class(val)
                     except Exception as e:
                         # Log enum conversion errors for debugging
                         logger.debug("Failed to convert Enum field '%s': %s", name, e)
-                elif hasattr(field, "is_vector"):
+                elif _ftype == "vector":
                     val = self.get_engine().deserialize_value(field, val)
+                elif _ftype == "encrypted":
+                    if _trust:
+                        val = self._decrypt_value(val)
 
                 # Automatic SafeString for WYSIWYG content
                 if getattr(field, "wysiwyg", False) and isinstance(val, str):
@@ -485,7 +622,11 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def _get_conn(cls):
-        return cls.get_engine().get_connection()
+        from .router import _routing_state
+
+        op = getattr(_routing_state, "op", "write")
+        shard = getattr(_routing_state, "shard", None)
+        return cls.get_engine(op=op, shard=shard).get_connection()
 
     @classmethod
     def close_connections(cls):
@@ -498,7 +639,7 @@ class Model(metaclass=ModelMeta):
         # SECURITY: Validate table name to prevent SQL injection
         validate_sql_identifier(cls._table, "table name")
 
-        engine = cls.get_engine()
+        engine = cls.get_engine(op="write")
 
         # Use engine-specific primary key definition
         pk_def = getattr(
@@ -705,7 +846,9 @@ class Model(metaclass=ModelMeta):
         if not self._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
         sql = f"UPDATE {self._table} SET {column} = {column} + ? WHERE id = ?"
-        self.get_engine().execute(sql, (amount, self.id))
+        self.get_engine(op="write", shard=getattr(self, "_shard", None)).execute(
+            sql, (amount, self.id)
+        )
         return self.refresh()
 
     def decrement(self, column, amount=1):
@@ -716,7 +859,10 @@ class Model(metaclass=ModelMeta):
         """Reload all attributes from the latest database state."""
         if not self.id:
             return self
-        fresh = self.__class__.find(id=self.id)
+        from .router import database_router_context
+
+        with database_router_context(shard=getattr(self, "_shard", None)):
+            fresh = self.__class__.find(id=self.id)
         if fresh:
             self.__dict__.update(fresh.__dict__)
         return self
@@ -787,6 +933,7 @@ class Model(metaclass=ModelMeta):
                 elif field.on == "update":
                     setattr(self, name, now)
 
+        engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
         fields = self._fields_list
         values = []
         for f in fields:
@@ -817,9 +964,11 @@ class Model(metaclass=ModelMeta):
                         raise ModelError(
                             f"Vector field '{f}' expects {field.dimensions} dims, got {len(val)}"
                         )
-                    values.append(self.get_engine().prepare_value(field, val))
+                    values.append(engine.prepare_value(field, val))
+            elif hasattr(field, "is_encrypted"):
+                values.append(self._encrypt_value(val))
             else:
-                values.append(self.get_engine().prepare_value(field, val))
+                values.append(engine.prepare_value(field, val))
 
         if self.id:
             set_str = ", ".join([f"{f} = ?" for f in fields])
@@ -831,13 +980,13 @@ class Model(metaclass=ModelMeta):
             args = values
 
         try:
-            self.get_engine().execute(sql, args)
+            engine.execute(sql, args)
         except Exception as e:
-            raise self.get_engine().handle_exception(e)
+            raise engine.handle_exception(e)
 
         if not self.id:
-            if self.get_engine().lastrowid_query:
-                res_id = self.get_engine().execute(self.get_engine().lastrowid_query)
+            if engine.lastrowid_query:
+                res_id = engine.execute(engine.lastrowid_query)
                 self.id = list(res_id[0].values())[0] if res_id else None
 
         if is_new:
@@ -861,7 +1010,10 @@ class Model(metaclass=ModelMeta):
                 user.save()
                 profile.save()
         """
-        return cls.get_engine().transaction()
+        from .router import _routing_state
+
+        shard = getattr(_routing_state, "shard", None)
+        return cls.get_engine(op="write", shard=shard).transaction()
 
     @classmethod
     def _valid_column(cls, col):
@@ -926,9 +1078,18 @@ class Model(metaclass=ModelMeta):
             sql += " LIMIT ?"
             args.append(limit)
 
-        engine = cls.get_engine()
+        engine = cls.get_engine(op="read")
         rows = engine.execute(sql, args)
-        return ModelList((cls(_trust=True, **row) for row in rows), sql=sql, args=args)
+        from .router import _routing_state
+
+        active_shard = getattr(_routing_state, "shard", None)
+
+        def _instantiate(row):
+            obj = cls(_trust=True, **row)
+            obj._shard = active_shard
+            return obj
+
+        return ModelList((_instantiate(row) for row in rows), sql=sql, args=args)
 
     @classmethod
     def count(cls, **kwargs):
@@ -937,7 +1098,7 @@ class Model(metaclass=ModelMeta):
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
         wheres = [f"{k} = ?" for k in kwargs]
-        engine = cls.get_engine()
+        engine = cls.get_engine(op="read")
         args = []
         for k, v in kwargs.items():
             field = cls._fields.get(k)
@@ -961,7 +1122,7 @@ class Model(metaclass=ModelMeta):
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
         wheres = [f"{k} = ?" for k in kwargs]
-        engine = cls.get_engine()
+        engine = cls.get_engine(op="read")
         args = []
         for k, v in kwargs.items():
             field = cls._fields.get(k)
@@ -983,7 +1144,7 @@ class Model(metaclass=ModelMeta):
         if not cls._search_fields:
             return ModelList()
 
-        engine = cls.get_engine()
+        engine = cls.get_engine(op="read")
         from .engines import SQLiteEngine
 
         is_sqlite = isinstance(engine, SQLiteEngine)
@@ -1012,8 +1173,17 @@ class Model(metaclass=ModelMeta):
             logger.error("FTS search failed for %s: %s", cls._table, e)
             return ModelList()
 
+        from .router import _routing_state
+
+        active_shard = getattr(_routing_state, "shard", None)
+
+        def _instantiate(row):
+            obj = cls(_trust=True, **row)
+            obj._shard = active_shard
+            return obj
+
         return ModelList(
-            (cls(_trust=True, **row) for row in rows),
+            (_instantiate(row) for row in rows),
             sql=sql,
             args=all_args,
         )
@@ -1082,11 +1252,19 @@ class Model(metaclass=ModelMeta):
                 )
                 break
 
-        engine = cls.get_engine()
+        from .router import _routing_state
+
+        op = getattr(_routing_state, "op", "write")
+        shard = getattr(_routing_state, "shard", None)
+        engine = cls.get_engine(op=op, shard=shard)
         rows = engine.execute(sql, args or [])
-        return ModelList(
-            (cls(_trust=True, **row) for row in rows), sql=sql, args=args or []
-        )
+
+        def _instantiate(row):
+            obj = cls(_trust=True, **row)
+            obj._shard = shard
+            return obj
+
+        return ModelList((_instantiate(row) for row in rows), sql=sql, args=args or [])
 
     @classmethod
     def find(cls: type[T], **kwargs: Any) -> Optional[T]:
@@ -1095,7 +1273,7 @@ class Model(metaclass=ModelMeta):
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
         wheres = [f"{k} = ?" for k in kwargs]
-        engine = cls.get_engine()
+        engine = cls.get_engine(op="read")
         args = []
         for k, v in kwargs.items():
             field = cls._fields.get(k)
@@ -1107,7 +1285,14 @@ class Model(metaclass=ModelMeta):
             wheres.append(sd)
         sql = f"SELECT * FROM {cls._table} WHERE {' AND '.join(wheres)} LIMIT 1"
         rows = engine.execute(sql, args)
-        return cls(_trust=True, **rows[0]) if rows else None
+        if rows:
+            from .router import _routing_state
+
+            active_shard = getattr(_routing_state, "shard", None)
+            obj = cls(_trust=True, **rows[0])
+            obj._shard = active_shard
+            return obj
+        return None
 
     @classmethod
     def destroy(cls, **kwargs: Any) -> int:
@@ -1139,12 +1324,14 @@ class Model(metaclass=ModelMeta):
         if self._soft_delete_field:
             setattr(self, self._soft_delete_field, datetime.datetime.now().isoformat())
             sql = f'UPDATE "{self._table}" SET "{self._soft_delete_field}" = ? WHERE id = ?'
-            self.get_engine().execute(
+            self.get_engine(op="write", shard=getattr(self, "_shard", None)).execute(
                 sql, (getattr(self, self._soft_delete_field), self.id)
             )
         else:
             sql = f'DELETE FROM "{self._table}" WHERE id = ?'
-            self.get_engine().execute(sql, (self.id,))
+            self.get_engine(op="write", shard=getattr(self, "_shard", None)).execute(
+                sql, (self.id,)
+            )
         self.after_delete()
 
     def force_delete(self):
@@ -1153,7 +1340,9 @@ class Model(metaclass=ModelMeta):
             return
         self.before_delete()
         sql = f'DELETE FROM "{self._table}" WHERE id = ?'
-        self.get_engine().execute(sql, (self.id,))
+        self.get_engine(op="write", shard=getattr(self, "_shard", None)).execute(
+            sql, (self.id,)
+        )
         self.after_delete()
 
     def restore(self):
@@ -1164,7 +1353,9 @@ class Model(metaclass=ModelMeta):
         self._valid_column(self._soft_delete_field)
         setattr(self, self._soft_delete_field, None)
         sql = f'UPDATE "{self._table}" SET "{self._soft_delete_field}" = NULL WHERE id = ?'
-        self.get_engine().execute(sql, (self.id,))
+        self.get_engine(op="write", shard=getattr(self, "_shard", None)).execute(
+            sql, (self.id,)
+        )
 
     def _pivot_info(self, rel):
         """Compute pivot table name and FK column names for BelongsToMany.
@@ -1187,25 +1378,41 @@ class Model(metaclass=ModelMeta):
         return pivot, pfk, pofk
 
     def attach(self, relation_name, ids):
-        """Insert pivot rows linking self to target ids."""
+        """Insert pivot rows linking self to target ids (idempotent — skips existing)."""
         rel = self._relations.get(relation_name)
         if not rel or rel.type != "BelongsToMany":
             raise ValueError(f"No BelongsToMany relation: {relation_name}")
         pivot, pfk, pofk = self._pivot_info(rel)
         if not isinstance(ids, (list, tuple, set)):
             ids = [ids]
-        engine = self.get_engine()
+        if not ids:
+            return
+        ids = list(ids)
+        engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
         q_pivot = engine.quote_identifier(pivot)
         q_pfk = engine.quote_identifier(pfk)
         q_pofk = engine.quote_identifier(pofk)
 
-        select_sql = f"SELECT 1 FROM {q_pivot} WHERE {q_pfk} = ? AND {q_pofk} = ?"
-        insert_sql = f"INSERT INTO {q_pivot} ({q_pfk}, {q_pofk}) VALUES (?, ?)"
+        # Fetch all already-existing pivot rows in a single batch query instead of
+        # issuing one SELECT per id (N+1 → 1 query).
+        placeholders_in = ", ".join(["?"] * len(ids))
+        existing_rows = engine.execute(
+            f"SELECT {q_pofk} FROM {q_pivot} WHERE {q_pfk} = ? AND {q_pofk} IN ({placeholders_in})",
+            [self.id] + ids,
+        )
+        existing_ids = {row[pofk] for row in existing_rows}
 
-        for tid in ids:
-            exists = engine.execute(select_sql, (self.id, tid))
-            if not exists:
-                engine.execute(insert_sql, (self.id, tid))
+        to_insert = [tid for tid in ids if tid not in existing_ids]
+        if not to_insert:
+            return
+
+        # Batch INSERT all missing rows in a single statement.
+        row_placeholders = ", ".join(["(?, ?)"] * len(to_insert))
+        args = [v for tid in to_insert for v in (self.id, tid)]
+        engine.execute(
+            f"INSERT INTO {q_pivot} ({q_pfk}, {q_pofk}) VALUES {row_placeholders}",
+            args,
+        )
 
     def detach(self, relation_name, ids=None):
         """Remove pivot rows. If ids is None, removes all."""
@@ -1213,7 +1420,7 @@ class Model(metaclass=ModelMeta):
         if not rel or rel.type != "BelongsToMany":
             raise ValueError(f"No BelongsToMany relation: {relation_name}")
         pivot, pfk, pofk = self._pivot_info(rel)
-        engine = self.get_engine()
+        engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
         q_pivot = engine.quote_identifier(pivot)
         q_pfk = engine.quote_identifier(pfk)
         q_pofk = engine.quote_identifier(pofk)
@@ -1235,7 +1442,7 @@ class Model(metaclass=ModelMeta):
         if not rel or rel.type != "BelongsToMany":
             raise ValueError(f"No BelongsToMany relation: {relation_name}")
         pivot, pfk, pofk = self._pivot_info(rel)
-        engine = self.get_engine()
+        engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
         q_pivot = engine.quote_identifier(pivot)
         q_pfk = engine.quote_identifier(pfk)
         q_pofk = engine.quote_identifier(pofk)
@@ -1272,19 +1479,28 @@ class Model(metaclass=ModelMeta):
         page: int = 1,
         per_page: int = 10,
         order_by: Optional[str] = None,
+        count: bool = True,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Paginate results matching the given criteria.
 
+        Args:
+            page: The page number (1-indexed).
+            per_page: Number of items per page.
+            order_by: Optional column to order by (prefix with '-' for DESC).
+            count: If True (default), also run a COUNT(*) query to return total
+                   pages. Set to False to skip it for faster infinite-scroll UIs.
+
         Example:
             User.paginate(page=1, per_page=10, active=1)
+            User.paginate(page=1, per_page=10, count=False)
         """
         q = cls.query()
         for k, v in kwargs.items():
             q.where(k, v)
         if order_by:
             q.order_by(order_by)
-        return q.paginate(page, per_page)
+        return q.paginate(page, per_page, count=count)
 
     @classmethod
     async def all_async(
@@ -1330,12 +1546,12 @@ class Model(metaclass=ModelMeta):
 def close_all_db_connections() -> None:
     """Close all database connections held by the current thread."""
     try:
-        Model.close_connections()
-        for model_cls in list(MODELS_REGISTRY.values()):
+        from .engines import _ENGINES_CACHE
+
+        for engine in list(_ENGINES_CACHE.values()):
             try:
-                model_cls.close_connections()
+                engine.close_connections()
             except Exception:
                 pass
     except Exception:
         pass
-

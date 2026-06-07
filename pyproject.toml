@@ -1,6 +1,6 @@
 [project]
 name = "asok"
-version = "0.3.1"
+version = "0.4.0"
 description = "A minimalist Python web framework with minimal external dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,7 @@ postgres-binary = ["psycopg[binary]>=3.0.0"]
 mysql = ["pymysql>=1.1.0"]
 redis = ["redis>=5.0.0"]
 s3 = ["boto3>=1.34.0"]
+security = ["cryptography>=40.0.0"]
 async = [
     "uvicorn>=0.22.0",
 ]
