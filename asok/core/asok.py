@@ -6,7 +6,10 @@ import logging
 import os
 import secrets
 import sys
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:
+    from .extension import AsokExtension
 
 from ..middleware import rate_limit_middleware
 from ..orm import Model
@@ -18,6 +21,7 @@ from .lifecycle import LifecycleMixin
 from .loaders import LoaderMixin
 from .routing import RoutingMixin
 from .security import SecurityMixin
+from .ssg_isr import SSGISRMixin
 from .static import StaticMixin
 from .wsgi import WSGIMixin
 
@@ -32,6 +36,7 @@ class Asok(
     LoaderMixin,
     StaticMixin,
     ErrorRendererMixin,
+    SSGISRMixin,
     WSGIMixin,
     ASGIMixin,
 ):
@@ -280,6 +285,11 @@ class Asok(
         self._partials_path = os.path.join(self.root_dir, self.dirs["PARTIALS"])
         self._tpl_root = os.path.abspath(os.path.join(self.root_dir, "src/partials"))
 
+        self.extensions: dict[str, Any] = {}
+        self._extension_pages_paths: list[str] = []
+        self._extension_template_paths: list[str] = []
+        self._extension_static_paths: list[str] = []
+
         # Scan all templates in src/ for directives to enable the JS engine globally
         self.directives_enabled = False
         src_dir = os.path.join(self.root_dir, "src")
@@ -366,6 +376,81 @@ class Asok(
                             pass
                     except Exception as e:
                         logger.warning(f"Could not create __init__.py in {d}: {e}")
+
+    @property
+    def _pages_search_paths(self) -> list[str]:
+        paths = [os.path.join(self.root_dir, self.dirs.get("PAGES", "src/pages"))]
+        paths.extend(getattr(self, "_extension_pages_paths", []))
+        return paths
+
+    @property
+    def _template_search_paths(self) -> list[str]:
+        paths = [
+            os.path.join(self.root_dir, self.dirs.get("PAGES", "src/pages")),
+            os.path.join(self.root_dir, self.dirs.get("COMPONENTS", "src/components")),
+            os.path.join(self.root_dir, self.dirs.get("PARTIALS", "src/partials")),
+        ]
+        paths.extend(getattr(self, "_extension_template_paths", []))
+        return paths
+
+    @property
+    def _static_search_paths(self) -> list[str]:
+        partials_path = os.path.join(self.root_dir, self.dirs.get("PARTIALS", "src/partials"))
+        paths = [partials_path]
+        paths.extend(getattr(self, "_extension_static_paths", []))
+        return paths
+
+    def register_extension(self, extension: type[AsokExtension] | AsokExtension) -> None:
+        """Register a community extension class or instance with the application."""
+        from .extension import AsokExtension
+
+        if isinstance(extension, type) and issubclass(extension, AsokExtension):
+            extension = extension()
+
+        extension.init_app(self)
+
+        def is_safe_path(path: str) -> bool:
+            abs_p = os.path.abspath(path)
+            if abs_p in ("/", "\\") or os.path.dirname(abs_p) == abs_p:
+                return False
+            forbidden = ("/etc", "/sys", "/proc", "/dev", "/boot", "/root", "/var/run")
+            if abs_p.startswith(forbidden):
+                return False
+            win_forbidden = ("c:\\windows", "c:\\winnt", "\\windows\\system32")
+            abs_p_lower = abs_p.lower()
+            if any(abs_p_lower.startswith(w) for w in win_forbidden):
+                return False
+            return True
+
+        # Register pages paths
+        p_path = extension.get_pages_path()
+        if p_path and os.path.isdir(p_path):
+            abs_path = os.path.abspath(p_path)
+            if not is_safe_path(abs_path):
+                raise ValueError(f"Extension page path cannot be a system directory: {abs_path}")
+            self._extension_pages_paths.append(abs_path)
+
+        # Register template paths
+        t_path = extension.get_templates_path()
+        if t_path and os.path.isdir(t_path):
+            abs_path = os.path.abspath(t_path)
+            if not is_safe_path(abs_path):
+                raise ValueError(f"Extension template path cannot be a system directory: {abs_path}")
+            self._extension_template_paths.append(abs_path)
+
+        # Register static paths
+        s_path = extension.get_static_path()
+        if s_path and os.path.isdir(s_path):
+            abs_path = os.path.abspath(s_path)
+            if not is_safe_path(abs_path):
+                raise ValueError(f"Extension static path cannot be a system directory: {abs_path}")
+            self._extension_static_paths.append(abs_path)
+
+
+    def register_extensions(self, extensions: list[type[AsokExtension] | AsokExtension]) -> None:
+        """Register a list of community extensions with the application."""
+        for extension in extensions:
+            self.register_extension(extension)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Main entry point supporting both WSGI and ASGI servers."""

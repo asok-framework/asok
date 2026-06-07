@@ -755,3 +755,33 @@ class Field:
         f.is_vector = True
         f.dimensions = dimensions
         return f
+
+    @staticmethod
+    def EncryptedString(
+        default: Any = None,
+        unique: bool = False,
+        nullable: bool = True,
+        hidden: bool = False,
+        protected: bool = False,
+        label: Optional[str] = None,
+        rules: Optional[str] = None,
+        messages: Optional[dict[str, str]] = None,
+        **kwargs,
+    ) -> Field:
+        """Symmetrically encrypted text field storing data securely in the database.
+        Uses application's SECRET_KEY for AES encryption.
+        """
+        f = Field(
+            "TEXT",
+            default=default,
+            unique=unique,
+            nullable=nullable,
+            hidden=hidden,
+            protected=protected,
+            label=label,
+            rules=rules,
+            messages=messages,
+            **kwargs,
+        )
+        f.is_encrypted = True
+        return f

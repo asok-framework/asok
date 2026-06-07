@@ -511,9 +511,11 @@ def render_otp(field: Any, val: str, merged: dict[str, Any]) -> str:
         }
         input_attrs["class"] = f"asok-otp-input {input_class_base}".strip()
         # Update hidden value on input, auto-focus next on keyup
-        input_attrs["asok-on:input"] = f"Asok.updateHiddenValue($refs.hidden_{field.name}, digits.join(''))"
+        input_attrs["asok-on:input"] = (
+            f"Asok.updateHiddenValue($refs.hidden_{field.name}, digits.join(''))"
+        )
         input_attrs["asok-on:keyup"] = "Asok.handleOtpKeyup($event)"
-        html_out += f'<input{_render_attrs(input_attrs)}>'
+        html_out += f"<input{_render_attrs(input_attrs)}>"
 
     # Hidden input to store the complete OTP.
     # Value is updated imperatively via Asok.updateHiddenValue() on each input/keyup
@@ -865,7 +867,9 @@ def render_phone(field: Any, val: str, merged: dict[str, Any]) -> str:
 
     # Country code select
     select_attrs["asok-model"] = "code"
-    select_attrs["asok-on:change"] = f"Asok.updateHiddenValue($refs.hidden_{field.name}, code+number)"
+    select_attrs["asok-on:change"] = (
+        f"Asok.updateHiddenValue($refs.hidden_{field.name}, code+number)"
+    )
     html_out += f"<select{_render_attrs(select_attrs)}>"
     for code, dial, name, *rest in countries:
         selected = " selected" if code == default_country else ""

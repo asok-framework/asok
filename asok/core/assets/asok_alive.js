@@ -53,7 +53,7 @@ window.asokWS = function (path) {
           }
         });
       }
-      document.querySelectorAll("[data-asok-component]").forEach(window.Asok._wsInit);
+      document.querySelectorAll("[data-asok-component]").forEach(setupComponentIsland);
       document.querySelectorAll("[data-subscribe]").forEach(window.Asok._wsSub);
     };
 
@@ -173,6 +173,9 @@ window.asokWS = function (path) {
 
   function initWS(el, skipJoin) {
     if (el.__asokIniting) return;
+    if (el.hasAttribute('client:visible') || el.hasAttribute('client:idle') || el.hasAttribute('client:load')) {
+      if (!el.__asokReadyToHydrate) return;
+    }
     el.__asokIniting = true;
     const cid = el.id.replace("asok-", "");
     const base = el.dataset.asokComponent;
@@ -232,6 +235,34 @@ window.asokWS = function (path) {
     delete el.__asokIniting;
   }
 
+  const setupComponentIsland = (el) => {
+    if (el.hasAttribute('client:visible')) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            el.__asokReadyToHydrate = true;
+            window.Asok._wsInit(el);
+            observer.unobserve(el);
+          }
+        });
+      });
+      observer.observe(el);
+    } else if (el.hasAttribute('client:idle')) {
+      const run = () => {
+        el.__asokReadyToHydrate = true;
+        window.Asok._wsInit(el);
+      };
+      if (window.requestIdleCallback) {
+        window.requestIdleCallback(run, { timeout: 2000 });
+      } else {
+        setTimeout(run, 100);
+      }
+    } else {
+      el.__asokReadyToHydrate = true;
+      window.Asok._wsInit(el);
+    }
+  };
+
   window.Asok = window.Asok || {};
   window.Asok._wsInit = initWS;
   window.Asok._wsSub = initSub;
@@ -239,9 +270,9 @@ window.asokWS = function (path) {
   document.addEventListener("asok:success", function (e) {
     if (e.detail && e.detail.target) {
       const el = e.detail.target;
-      if (el.dataset.asokComponent) initWS(el);
+      if (el.dataset.asokComponent) setupComponentIsland(el);
       if (el.dataset.subscribe) initSub(el);
-      el.querySelectorAll("[data-asok-component]").forEach(initWS);
+      el.querySelectorAll("[data-asok-component]").forEach(setupComponentIsland);
       el.querySelectorAll("[data-subscribe]").forEach(initSub);
     }
   });

@@ -218,9 +218,30 @@ class WSGIMixin:
                 return [output]
         return None
 
+    def _handle_graphql_request(
+        self, request: Request, start_response: Callable
+    ) -> Optional[list[bytes]]:
+        if request.path == "/graphql":
+            from ..api.graphql import handle_graphql_request
+
+            res = handle_graphql_request(self, request)
+            if res is not None:
+                if isinstance(res, bytes):
+                    output = res
+                elif isinstance(res, str):
+                    output = res.encode("utf-8")
+                else:
+                    output = str(res).encode("utf-8")
+                headers = [("Content-Type", request.content_type)]
+                headers += self._cookie_headers(request, request.environ)
+                headers.append(("Content-Length", str(len(output))))
+                start_response(request.status, headers)
+                return [output]
+        return None
+
     def _dispatch_controller(self, request: Request, environ: dict[str, Any]) -> Any:
         parts = [p for p in request.path.split("/") if p]
-        page_file, route_params = self._resolve_route(parts)
+        page_file, route_params = self._resolve_route(parts, request=request)
 
         request.params.update(route_params)
         request._current_page_file = page_file
@@ -304,6 +325,30 @@ class WSGIMixin:
                     req.csrf_token_value = secrets.token_hex(32)
 
                 if module:
+                    # Apply API versioning headers if module metadata exists
+                    deprecation = getattr(module, "__api_deprecated__", False)
+                    sunset = getattr(module, "__api_sunset__", None)
+                    method_func = getattr(module, req.method.lower(), None)
+                    if not method_func and hasattr(module, "render"):
+                        method_func = getattr(module, "render")
+                    if method_func:
+                        meta = getattr(method_func, "_asok_api_version", None)
+                        if meta:
+                            deprecation = deprecation or meta.deprecated
+                            sunset = sunset or meta.sunset
+                    if deprecation:
+                        req.response_headers.append(("Deprecation", "true"))
+                    if sunset:
+                        try:
+                            import email.utils
+                            from datetime import datetime
+
+                            dt = datetime.fromisoformat(sunset.replace("Z", "+00:00"))
+                            http_date = email.utils.format_datetime(dt, usegmt=True)
+                            req.response_headers.append(("Sunset", http_date))
+                        except Exception:
+                            req.response_headers.append(("Sunset", sunset))
+
                     supported = []
                     if hasattr(module, "METHODS") and isinstance(
                         module.METHODS, (list, tuple)
@@ -423,7 +468,9 @@ class WSGIMixin:
                 is_async_controller = False
                 if module:
                     method_func = getattr(module, request.method.lower(), None)
-                    if callable(method_func) and inspect.iscoroutinefunction(method_func):
+                    if callable(method_func) and inspect.iscoroutinefunction(
+                        method_func
+                    ):
                         is_async_controller = True
                     elif request.method == "POST":
                         action_name = (
@@ -433,16 +480,25 @@ class WSGIMixin:
                         )
                         if action_name:
                             action_func = getattr(module, f"action_{action_name}", None)
-                            if callable(action_func) and inspect.iscoroutinefunction(action_func):
+                            if callable(action_func) and inspect.iscoroutinefunction(
+                                action_func
+                            ):
                                 is_async_controller = True
-                    if not is_async_controller and hasattr(module, "render") and inspect.iscoroutinefunction(module.render):
+                    if (
+                        not is_async_controller
+                        and hasattr(module, "render")
+                        and inspect.iscoroutinefunction(module.render)
+                    ):
                         is_async_controller = True
 
-                has_async_middleware = any(inspect.iscoroutinefunction(mw) for mw in self.middleware_handlers)
+                has_async_middleware = any(
+                    inspect.iscoroutinefunction(mw) for mw in self.middleware_handlers
+                )
 
                 if has_async_middleware or is_async_controller:
                     chain = self._get_async_middleware_chain(core_layer)
                     from .asgi import async_to_sync
+
                     with request_context(request):
                         coro = chain(request)
                         content_str = async_to_sync(coro)
@@ -637,7 +693,9 @@ class WSGIMixin:
             if block_header:
                 headers.append(("X-Asok-Blocks", block_header))
                 # Update Access-Control-Expose-Headers to expose X-Asok-Blocks
-                exposed = [h[1] for h in headers if h[0] == "Access-Control-Expose-Headers"]
+                exposed = [
+                    h[1] for h in headers if h[0] == "Access-Control-Expose-Headers"
+                ]
                 if exposed:
                     headers = [
                         h for h in headers if h[0] != "Access-Control-Expose-Headers"
@@ -756,6 +814,8 @@ class WSGIMixin:
 
         token = request_var.set(request)
         try:
+            from .signals import request_finished, request_started
+            request_started.send(self, request=request)
             # SECURITY: Generate cryptographically secure nonce for CSP
             # token_urlsafe(16) = 16 bytes = 128 bits of entropy
             # This meets CSP Level 3 recommendations (minimum 128 bits)
@@ -807,8 +867,18 @@ class WSGIMixin:
             if res is not None:
                 return res
 
+            # GraphQL handler
+            res = self._handle_graphql_request(request, start_response)
+            if res is not None:
+                return res
+
             # Static Files handler
             res = self._handle_static_request(request, environ, start_response)
+            if res is not None:
+                return res
+
+            # SSG / ISR handler
+            res = self._handle_ssg_isr_request(request, environ, start_response)
             if res is not None:
                 return res
 
@@ -861,6 +931,10 @@ class WSGIMixin:
             )
         finally:
             from ..orm import close_all_db_connections
+            try:
+                request_finished.send(self, request=request)
+            except Exception:
+                pass
 
             close_all_db_connections()
             request_var.reset(token)

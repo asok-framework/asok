@@ -244,8 +244,9 @@ class UploadedFile:
         validate: bool = True,
         allowed_types: Optional[list[str]] = None,
         secure_filename: bool = True,
+        private: bool = False,
     ) -> str:
-        """Save the uploaded file to disk.
+        """Save the uploaded file to disk or cloud storage.
 
         Args:
             destination: Path relative to project root or absolute path.
@@ -254,9 +255,11 @@ class UploadedFile:
                           SECURITY WARNING: Should always be specified! Allowing all
                           types can lead to security vulnerabilities.
             secure_filename: If True, rename file with UUID for security (default: True)
+            private: If True, restrict file permissions to owner-only (local 0o600) or
+                     use private S3 ACL (default: False)
 
         Returns:
-            The absolute path where the file was saved.
+            The absolute path or URL where the file was saved.
 
         Raises:
             ValueError: If validation fails or path traversal is detected
@@ -305,16 +308,24 @@ class UploadedFile:
             # SECURITY: Sanitize SVG files before uploading to S3
             content_to_upload = self.content
             _, ext = os.path.splitext(safe_name)
-            if ext.lower() == ".svg" and allowed_types and "image/svg+xml" in allowed_types:
+            if (
+                ext.lower() == ".svg"
+                and allowed_types
+                and "image/svg+xml" in allowed_types
+            ):
                 from asok.utils.svg_sanitizer import sanitize_svg
 
                 try:
                     content_to_upload = sanitize_svg(self.content)
-                    logging.getLogger(__name__).debug("SVG file sanitized for S3: %s", safe_name)
+                    logging.getLogger(__name__).debug(
+                        "SVG file sanitized for S3: %s", safe_name
+                    )
                 except ValueError as e:
                     raise ValueError(f"SVG sanitization failed: {e}")
 
-            url = get_storage().save(safe_name, content_to_upload, upload_to)
+            url = get_storage().save(
+                safe_name, content_to_upload, upload_to, private=private
+            )
             self.filename = safe_name
             return url
 
@@ -393,9 +404,11 @@ class UploadedFile:
         with open(dest, "wb") as f:
             f.write(content_to_write)
 
-        # SECURITY: Set restrictive permissions (read-only for owner and group)
-        # 0o644 = rw-r--r-- (owner can read/write, others can only read)
-        os.chmod(dest, 0o644)
+        # SECURITY: Set restrictive permissions
+        # 0o600 = rw------- (owner read/write only, for private uploads)
+        # 0o644 = rw-r--r-- (owner read/write, public read, for public uploads)
+        chmod = 0o600 if private else 0o644
+        os.chmod(dest, chmod)
 
         # Optimization hook
         if os.environ.get("IMAGE_OPTIMIZATION") == "true" and is_image(dest):

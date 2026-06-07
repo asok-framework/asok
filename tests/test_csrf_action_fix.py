@@ -3,6 +3,7 @@ Regression test: form actions should NOT require CSRF when CSRF is not enabled
 in the app config. Previously, req.verify_csrf() was called unconditionally for
 actions, causing 403 errors even when CSRF was disabled.
 """
+
 from asok import Asok, Request
 
 
@@ -50,10 +51,13 @@ def test_action_works_without_csrf_config():
 
     # Register a fake page
     import types
+
     mod = types.ModuleType("test_page")
+
     def action_submit(request: Request):
         called.append(True)
         return request.html("<p>ok</p>")
+
     mod.action_submit = action_submit
 
     # Patch _load_module to return our fake module
@@ -77,8 +81,9 @@ def test_action_works_without_csrf_config():
     list(app(environ, start_response))
 
     # Should NOT get 403 - CSRF is disabled
-    assert not any("403" in s for s in status_holder), \
+    assert not any("403" in s for s in status_holder), (
         f"Got 403 when CSRF is disabled! status={status_holder}"
+    )
 
 
 def test_action_requires_csrf_when_enabled():
@@ -86,9 +91,12 @@ def test_action_requires_csrf_when_enabled():
     app = make_app(csrf_enabled=True)
 
     import types
+
     mod = types.ModuleType("test_page2")
+
     def action_submit(request: Request):
         return request.html("<p>ok</p>")
+
     mod.action_submit = action_submit
 
     original_load = app._load_module
@@ -116,5 +124,6 @@ def test_action_requires_csrf_when_enabled():
     got_403 = any("403" in s for s in status_holder)
     # At minimum the app should not silently succeed
     # (The exact behaviour depends on error handling)
-    assert got_403 or not status_holder or "200" not in status_holder[0], \
+    assert got_403 or not status_holder or "200" not in status_holder[0], (
         f"Expected 403 or error when CSRF enabled and no token, got {status_holder}"
+    )

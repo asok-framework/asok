@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import py_compile
+import re
 import shutil
 import subprocess
 
@@ -59,6 +61,85 @@ def run_build(
     ignore = shutil.ignore_patterns(*ignore_list)
 
     shutil.copytree(root, build_root, ignore=ignore, dirs_exist_ok=True)
+
+    # 0. Directives Precompilation
+    Style.info("Precompiling Asok directives...")
+    try:
+        from ..core.asok import Asok
+
+        # Ensure SECRET_KEY is set to prevent Asok startup errors
+        if "SECRET_KEY" not in os.environ:
+            os.environ["SECRET_KEY"] = "static-build-key-temporary"
+
+        app = Asok(root_dir=build_root)
+        global_registry = {}
+
+        # Scan all .html and .asok templates recursively under build_root/src
+        src_dir = os.path.join(build_root, "src")
+        if os.path.exists(src_dir):
+            for r, d, files in os.walk(src_dir):
+                # Skip building directives inside js/css/images subdirs of partials
+                if "src/partials/js" in r.replace("\\", "/") or "src/partials/css" in r.replace("\\", "/"):
+                    continue
+
+                for f in files:
+                    if f.endswith(".html") or f.endswith(".asok"):
+                        path = os.path.join(r, f)
+                        try:
+                            with open(path, "r", encoding="utf-8") as f_in:
+                                content = f_in.read()
+
+                            transformed_html, file_registry = app._precompile_directives(content)
+                            global_registry.update(file_registry)
+
+                            with open(path, "w", encoding="utf-8") as f_out:
+                                f_out.write(transformed_html)
+                        except Exception as e:
+                            Style.warn(f"Directives precompile failed for {f}: {e}")
+
+            # Generate the static registry JS file
+            if global_registry:
+                registry_entries = []
+                for h, expr in global_registry.items():
+                    is_stmt = (
+                        ";" in expr
+                        or "return " in expr
+                        or bool(
+                            re.search(
+                                r"\b(if|for|while|const|let|var|function)\b", expr
+                            )
+                        )
+                    )
+                    if expr.strip().startswith("{") and not is_stmt:
+                        expr = f"({expr})"
+
+                    body = f"return ({expr})" if not is_stmt else expr
+                    body = re.sub(r"\s+", " ", body).strip()
+
+                    # Check if the expression contains 'await' keyword
+                    is_async = app._is_async_expression_cached(expr)
+
+                    fn_prefix = "async " if is_async else ""
+                    registry_entries.append(
+                        f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick) {{ with($||{{}}) {{ {body} }} }}"
+                    )
+
+                registry_js = (
+                    "window.__asok_registry = Object.assign(window.__asok_registry || {}, {\n"
+                    + ",\n".join(registry_entries)
+                    + "\n});\n"
+                )
+
+                js_dir = os.path.join(build_root, "src/partials/js")
+                os.makedirs(js_dir, exist_ok=True)
+                registry_file = os.path.join(js_dir, "directives_registry.js")
+                with open(registry_file, "w", encoding="utf-8") as f_out:
+                    f_out.write(registry_js)
+                Style.success(f"Generated static directives registry with {len(global_registry)} entries.")
+            else:
+                Style.info("No Asok directives found to precompile.")
+    except Exception as e:
+        Style.warn(f"Directives precompilation failed: {e}")
 
     # 1. Tailwind Build (if used)
     if _project_uses_tailwind(root):
@@ -216,6 +297,40 @@ def run_build(
         f.write("SECRET_KEY=change-me-for-production\n")
         f.write("ALLOWED_HOSTS=*\n")
         f.write("IMAGE_OPTIMIZATION=true\n")
+
+    # 7. Static Site Generation (SSG)
+    Style.info("Pre-rendering static pages (SSG)...")
+    try:
+        import importlib.util as _ilu
+        import sys
+
+        # Ensure we run in build context with local env override
+        os.environ["SECRET_KEY"] = "static-build-key-temporary"
+
+        wsgi_path = os.path.join(build_root, "wsgi.py")
+        if not os.path.isfile(wsgi_path):
+            wsgi_path = os.path.join(build_root, "wsgi.pyc")
+
+        if os.path.isfile(wsgi_path):
+            sys.path.insert(0, build_root)
+            try:
+                spec = _ilu.spec_from_file_location("wsgi_prod", wsgi_path)
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                app = mod.app
+            finally:
+                if sys.path and sys.path[0] == build_root:
+                    sys.path.pop(0)
+
+            app.root_dir = os.path.abspath(build_root)
+            app.pre_generate_ssg_site()
+            Style.success("Static site pre-rendering complete!")
+        else:
+            Style.warn("WSGI entry point not found in distribution; skipping SSG.")
+    except Exception as e:
+        Style.warn(f"Static site pre-rendering failed or skipped: {e}")
+
+
 
     Style.success(
         f"Build complete! Distribution ready in: {Style.BOLD}{app_name}/{Style.RESET}"

@@ -9,9 +9,29 @@ logger = logging.getLogger("asok.core")
 
 
 class RoutingMixin:
-    def _resolve_route(self, parts: list[str]) -> tuple[Optional[str], dict[str, Any]]:
+    def _resolve_route(
+        self, parts: list[str], request: Optional[Any] = None
+    ) -> tuple[Optional[str], dict[str, Any]]:
         """Resolve a list of URL segments to a page file and captured parameters."""
         debug = self.config.get("DEBUG", False)
+
+        # Header-based API Versioning Rewrite:
+        if (
+            request
+            and len(parts) >= 2
+            and parts[0] == "api"
+            and not re.match(r"^v\d+(?:\.\d+)?$", parts[1])
+        ):
+            from ..api.versioning import get_request_version
+
+            version = get_request_version(request)
+            if version:
+                new_parts = [parts[0], version] + parts[1:]
+                current_dir = os.path.join(self.root_dir, self.dirs["PAGES"])
+                res = self._walk_route(new_parts, current_dir, {})
+                if res[0]:
+                    parts = new_parts
+
         if not debug:
             if not hasattr(self, "_route_cache"):
                 self._route_cache = {}
@@ -20,8 +40,12 @@ class RoutingMixin:
                 page_file, route_params = self._route_cache[key]
                 return page_file, dict(route_params)
 
-        current_dir = os.path.join(self.root_dir, self.dirs["PAGES"])
-        result = self._walk_route(parts, current_dir, {})
+        search_dirs = getattr(self, "_pages_search_paths", [os.path.join(self.root_dir, self.dirs["PAGES"])])
+        result = (None, {})
+        for pages_dir in search_dirs:
+            result = self._walk_route(parts, pages_dir, {})
+            if result[0]:
+                break
 
         if not debug:
             page_file, route_params = result

@@ -137,14 +137,14 @@ def test_session_regeneration_preserves_data_types():
 def test_html_sanitizer_handles_unquoted_attributes():
     """Verify sanitizer handles attributes without quotes."""
     # Previously would miss unquoted href=value
-    html = '<a href=https://example.com>Link</a>'
+    html = "<a href=https://example.com>Link</a>"
     result = sanitize_html(html)
     assert 'href="https://example.com"' in result
 
 
 def test_html_sanitizer_blocks_javascript_in_unquoted_href():
     """Verify sanitizer blocks javascript: in unquoted attributes."""
-    html = '<a href=javascript:alert(1)>Bad</a>'
+    html = "<a href=javascript:alert(1)>Bad</a>"
     result = sanitize_html(html)
     # Should not contain javascript:
     assert "javascript:" not in result.lower()
@@ -161,7 +161,9 @@ def test_html_sanitizer_handles_mixed_quoted_unquoted():
 
 def test_html_sanitizer_escapes_values_properly():
     """Verify sanitizer escapes attribute values correctly."""
-    html = '<a href="https://example.com?q=test&foo=bar" title="A &lt;link&gt;">Link</a>'
+    html = (
+        '<a href="https://example.com?q=test&foo=bar" title="A &lt;link&gt;">Link</a>'
+    )
     result = sanitize_html(html)
     assert "https://example.com?q=test&amp;foo=bar" in result
     assert "A &amp;lt;link&amp;gt;" in result
@@ -294,6 +296,7 @@ def test_validation_max_accepts_valid_limits():
 
 def test_security_audit_integration():
     """Verify all 5 security fixes work together."""
+
     # 1. RBAC logging
     class AdminUser:
         id = 1

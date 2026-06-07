@@ -204,6 +204,7 @@ class TemplateMixin:
             sess = self.session
             saved_signed = sess.get(f"_comp_{cid}")
 
+            client = kwargs.pop("client", None)
             slot = kwargs.pop("slot", None)
             if slot is not None:
                 slot = SafeString(slot)
@@ -213,6 +214,7 @@ class TemplateMixin:
                     instance = cls._from_signed_state(saved_signed, secret, cid=cid)
                     if instance is not None:
                         instance._slot = slot
+                        instance._client = client
                         return SafeString(str(instance))
                 except Exception:
                     pass
@@ -228,7 +230,7 @@ class TemplateMixin:
                     if i < len(state_keys):
                         kwargs.setdefault(state_keys[i], val)
 
-            instance = cls(_cid=cid, **kwargs)
+            instance = cls(_cid=cid, _client=client, **kwargs)
             instance._slot = slot
             # Save initial state so it survives a refresh
             signed_state = instance._sign_state(secret)

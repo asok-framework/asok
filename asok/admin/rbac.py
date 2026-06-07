@@ -47,7 +47,9 @@ def _user_can(self: Any, perm: str) -> bool:
     if getattr(self, "is_admin", False):
         # SECURITY: Audit log for superadmin actions to detect privilege misuse
         user_id = getattr(self, "id", "unknown")
-        user_email = getattr(self, "email", None) or getattr(self, "username", f"ID:{user_id}")
+        user_email = getattr(self, "email", None) or getattr(
+            self, "username", f"ID:{user_id}"
+        )
         logger.info(
             f"ADMIN ACCESS: User {user_email} (superadmin) granted permission '{perm}'"
         )

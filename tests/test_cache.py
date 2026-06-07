@@ -176,15 +176,23 @@ class TestCachePageDecorator:
         # Request 1 (first user/session)
         req1 = MockRequest("/test-cached-csrf", "token_first_user")
         res1 = view_fn(req1)
-        assert res1 == "<html><head><meta name='csrf-token' content='token_first_user'></head><body>token_first_user</body></html>"
+        assert (
+            res1
+            == "<html><head><meta name='csrf-token' content='token_first_user'></head><body>token_first_user</body></html>"
+        )
 
         # Verify that the value saved in the cache database has the placeholder instead of the token
         raw_cached = cache.get("page_/test-cached-csrf")
         # Since we modified the response before storing, calling cache.get directly will return the version with placeholder
-        assert raw_cached == "<html><head><meta name='csrf-token' content='__ASOK_CSRF_TOKEN_PLACEHOLDER__'></head><body>__ASOK_CSRF_TOKEN_PLACEHOLDER__</body></html>"
+        assert (
+            raw_cached
+            == "<html><head><meta name='csrf-token' content='__ASOK_CSRF_TOKEN_PLACEHOLDER__'></head><body>__ASOK_CSRF_TOKEN_PLACEHOLDER__</body></html>"
+        )
 
         # Request 2 (second user/session, hits cache)
         req2 = MockRequest("/test-cached-csrf", "token_second_user")
         res2 = view_fn(req2)
-        assert res2 == "<html><head><meta name='csrf-token' content='token_second_user'></head><body>token_second_user</body></html>"
-
+        assert (
+            res2
+            == "<html><head><meta name='csrf-token' content='token_second_user'></head><body>token_second_user</body></html>"
+        )

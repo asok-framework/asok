@@ -11,7 +11,13 @@ class BaseStorage(ABC):
     """Abstract base class representing a storage backend."""
 
     @abstractmethod
-    def save(self, filename: str, content: bytes, upload_to: str = "") -> str:
+    def save(
+        self,
+        filename: str,
+        content: bytes,
+        upload_to: str = "",
+        private: bool = False,
+    ) -> str:
         """Save a file and return its URL/path."""
         pass
 
@@ -34,7 +40,13 @@ class LocalStorage(BaseStorage):
             os.path.join(os.getcwd(), "src/partials/uploads")
         )
 
-    def save(self, filename: str, content: bytes, upload_to: str = "") -> str:
+    def save(
+        self,
+        filename: str,
+        content: bytes,
+        upload_to: str = "",
+        private: bool = False,
+    ) -> str:
         dest_dir = (
             os.path.join(self.base_dir, upload_to) if upload_to else self.base_dir
         )
@@ -49,7 +61,12 @@ class LocalStorage(BaseStorage):
 
         with open(resolved_dest, "wb") as f:
             f.write(content)
-        os.chmod(resolved_dest, 0o644)
+
+        # SECURITY: Set restrictive permissions
+        # 0o600 = rw------- (owner can read/write only)
+        # 0o644 = rw-r--r-- (owner can read/write, public read)
+        chmod = 0o600 if private else 0o644
+        os.chmod(resolved_dest, chmod)
         return resolved_dest
 
     def url(self, filename: str, upload_to: str = "") -> str:
@@ -104,7 +121,13 @@ class S3Storage(BaseStorage):
         )
         self.custom_domain = os.environ.get("ASOK_S3_CUSTOM_DOMAIN")
 
-    def save(self, filename: str, content: bytes, upload_to: str = "") -> str:
+    def save(
+        self,
+        filename: str,
+        content: bytes,
+        upload_to: str = "",
+        private: bool = False,
+    ) -> str:
         key = f"{upload_to}/{filename}" if upload_to else filename
 
         import mimetypes
@@ -114,12 +137,16 @@ class S3Storage(BaseStorage):
             content_type = "application/octet-stream"
 
         try:
-            self.client.put_object(
-                Bucket=self.bucket,
-                Key=key,
-                Body=content,
-                ContentType=content_type,
-            )
+            kwargs = {
+                "Bucket": self.bucket,
+                "Key": key,
+                "Body": content,
+                "ContentType": content_type,
+            }
+            if private:
+                kwargs["ACL"] = "private"
+
+            self.client.put_object(**kwargs)
         except Exception as e:
             raise RuntimeError(f"S3 upload failed: {e}")
 

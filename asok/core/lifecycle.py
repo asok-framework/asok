@@ -34,11 +34,15 @@ class LifecycleMixin:
 
     def startup(self) -> None:
         """Run all registered startup hooks."""
+        from .signals import app_startup
+        app_startup.send(self)
         for fn in self._on_startup:
             fn()
 
     def shutdown(self) -> None:
         """Run all registered shutdown hooks and stop background tasks."""
+        from .signals import app_shutdown
+        app_shutdown.send(self)
         for fn in self._on_shutdown:
             fn()
 

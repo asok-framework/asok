@@ -50,6 +50,7 @@ class Connection:
         user: Optional[Model] = None,
         session: Optional[Session] = None,
         params: Optional[dict[str, str]] = None,
+        server: Optional[Any] = None,
     ):
         """Initialize the connection object."""
         self.sock = sock
@@ -59,6 +60,7 @@ class Connection:
         self.user = user
         self.session = session
         self.params = params or {}
+        self.server = server
         self._closed = False
         self._lock = threading.Lock()
         self._rooms: set[str] = set()
@@ -74,20 +76,27 @@ class Connection:
         """Serialize an object to JSON and send it to the client."""
         return self.send(json.dumps(obj))
 
-    def join(self, room: str) -> None:
+    def join(self, room: str) -> bool:
         """Join a named room for targeted broadcasting.
 
         SECURITY: Room names are validated to prevent injection and DoS attacks.
         """
         # SECURITY: Validate room name format and length
         if not room or not isinstance(room, str):
-            return
+            return False
         if len(room) > 200:
-            return
+            return False
         # SECURITY: Only allow safe characters in room names
         if not all(c.isalnum() or c in "._:-" for c in room):
-            return
+            return False
+
+        # Run room authorization check if server hook is present
+        if self.server and hasattr(self.server, "check_room_authorization"):
+            if not self.server.check_room_authorization(self, room):
+                return False
+
         self._rooms.add(room)
+        return True
 
     def leave(self, room: str) -> None:
         """Leave a named room.

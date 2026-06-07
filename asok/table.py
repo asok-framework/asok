@@ -10,7 +10,9 @@ if TYPE_CHECKING:
     from .request import Request
 
 
-def _merge_attrs(default_attrs: dict[str, Any], *other_attrs_list: dict[str, Any]) -> dict[str, Any]:
+def _merge_attrs(
+    default_attrs: dict[str, Any], *other_attrs_list: dict[str, Any]
+) -> dict[str, Any]:
     """Helper to merge attribute dictionaries, combining classes and styles cleanly."""
     merged = dict(default_attrs)
     for other in other_attrs_list:
@@ -288,7 +290,7 @@ class Table:
         # Header
         header_attrs = _extract_nested_attrs(self.attrs, "header")
         merged_header = _merge_attrs({"class": "asok-table-header"}, header_attrs)
-        html_out += f'<div {_render_attrs(merged_header)}>'
+        html_out += f"<div {_render_attrs(merged_header)}>"
 
         # Bulk Actions Bar (Hidden by default)
         bulk_attrs = _extract_nested_attrs(self.attrs, "bulk")
@@ -305,10 +307,14 @@ class Table:
 
         # Search Container
         search_container_attrs = _extract_nested_attrs(self.attrs, "search_container")
-        merged_search_container = _merge_attrs({"class": "asok-table-search"}, search_container_attrs)
+        merged_search_container = _merge_attrs(
+            {"class": "asok-table-search"}, search_container_attrs
+        )
         html_out += f'<div asok-show="selected.length === 0" {_render_attrs(merged_search_container)}>'
         search_input_attrs = _extract_nested_attrs(self.attrs, "search")
-        merged_search_input = _merge_attrs({"class": "asok-search-input"}, search_input_attrs)
+        merged_search_input = _merge_attrs(
+            {"class": "asok-search-input"}, search_input_attrs
+        )
         html_out += f'<input type="text" asok-model="search" asok-on:input="page = 1" placeholder="Search..." {_render_attrs(merged_search_input)}>'
         html_out += "</div>"
 
@@ -324,7 +330,7 @@ class Table:
         merged_wrapper = _merge_attrs({"class": "asok-table-wrapper"}, wrapper_attrs)
         table_attrs = _extract_nested_attrs(self.attrs, "table")
         merged_table = _merge_attrs({"class": "asok-table"}, table_attrs)
-        html_out += f'<div {_render_attrs(merged_wrapper)}><table {_render_attrs(merged_table)}><thead><tr>'
+        html_out += f"<div {_render_attrs(merged_wrapper)}><table {_render_attrs(merged_table)}><thead><tr>"
 
         # Master Checkbox
         checkbox_attrs = _extract_nested_attrs(self.attrs, "checkbox")
@@ -338,13 +344,13 @@ class Table:
                 default_th = {
                     "class": "asok-sortable",
                     "style": "cursor:pointer",
-                    "asok-on:click": f"sortDir = (sortCol === '{col.name}' ? -sortDir : 1); sortCol = '{col.name}'; page = 1"
+                    "asok-on:click": f"sortDir = (sortCol === '{col.name}' ? -sortDir : 1); sortCol = '{col.name}'; page = 1",
                 }
             else:
                 default_th = {}
             merged_th = _merge_attrs(default_th, global_th_attrs, col_th_attrs)
 
-            html_out += f'<th {_render_attrs(merged_th)}>'
+            html_out += f"<th {_render_attrs(merged_th)}>"
             html_out += f"{html.escape(col.label)} "
             if col.sortable:
                 html_out += f'<span class="asok-sort-icon" asok-class:asok-sort-asc="sortCol==\'{col.name}\' && sortDir==1" asok-class:asok-sort-desc="sortCol==\'{col.name}\' && sortDir==-1"></span>'
@@ -363,9 +369,11 @@ class Table:
         tbody_attrs = _extract_nested_attrs(self.attrs, "tbody")
         html_out += f'<tbody {_render_attrs(tbody_attrs)}><template asok-for="item in {filter_base}{sort_expr}{slice_expr}">'
         tr_attrs = _extract_nested_attrs(self.attrs, "tr")
-        default_tr = {"asok-class:asok-row-selected": "selected.includes(item.id || item.value)"}
+        default_tr = {
+            "asok-class:asok-row-selected": "selected.includes(item.id || item.value)"
+        }
         merged_tr = _merge_attrs(default_tr, tr_attrs)
-        html_out += f'<tr {_render_attrs(merged_tr)}>'
+        html_out += f"<tr {_render_attrs(merged_tr)}>"
 
         # Row Checkbox
         html_out += '<td><input type="checkbox" asok-bind:checked="selected.includes(item.id || item.value)" asok-on:change="const id = item.id || item.value; if($el.checked) { if(!selected.includes(id)) selected.push(id) } else { selected = selected.filter(x => x !== id) }"></td>'
@@ -388,7 +396,7 @@ class Table:
                 # Wrap in quotes for asok-html and escape for HTML attribute safety
                 esc_val = html.escape(f"'{js_t}'")
                 html_out += (
-                    f"<td asok-html=\"{esc_val}\" {_render_attrs(merged_td)}></td>"
+                    f'<td asok-html="{esc_val}" {_render_attrs(merged_td)}></td>'
                 )
             else:
                 merged_td["asok-text"] = f"item.{col.name}"
@@ -428,14 +436,28 @@ class Table:
         html_out += f"<div asok-text=\"'Page ' + page + ' of ' + Math.ceil({filter_base}.length / perPage)\"></div>"
         pagination_attrs = _extract_nested_attrs(self.attrs, "pagination")
         merged_pagination = _merge_attrs({"class": "asok-pagination"}, pagination_attrs)
-        html_out += f'<div {_render_attrs(merged_pagination)}>'
+        html_out += f"<div {_render_attrs(merged_pagination)}>"
         page_link_attrs = _extract_nested_attrs(self.attrs, "page_link")
 
-        prev_attrs = _merge_attrs({"class": "asok-page-link", "asok-on:click": "page = Math.max(1, page - 1)", "asok-bind:disabled": "page === 1"}, page_link_attrs)
-        html_out += f'<button {_render_attrs(prev_attrs)}>&laquo; Prev</button>'
+        prev_attrs = _merge_attrs(
+            {
+                "class": "asok-page-link",
+                "asok-on:click": "page = Math.max(1, page - 1)",
+                "asok-bind:disabled": "page === 1",
+            },
+            page_link_attrs,
+        )
+        html_out += f"<button {_render_attrs(prev_attrs)}>&laquo; Prev</button>"
 
-        next_attrs = _merge_attrs({"class": "asok-page-link", "asok-on:click": f"if(page < Math.ceil({filter_base}.length / perPage)) page++", "asok-bind:disabled": f"page >= Math.ceil({filter_base}.length / perPage)"}, page_link_attrs)
-        html_out += f'<button {_render_attrs(next_attrs)}>Next &raquo;</button>'
+        next_attrs = _merge_attrs(
+            {
+                "class": "asok-page-link",
+                "asok-on:click": f"if(page < Math.ceil({filter_base}.length / perPage)) page++",
+                "asok-bind:disabled": f"page >= Math.ceil({filter_base}.length / perPage)",
+            },
+            page_link_attrs,
+        )
+        html_out += f"<button {_render_attrs(next_attrs)}>Next &raquo;</button>"
         html_out += "</div></div>"
 
         html_out += "</div>"
@@ -452,20 +474,22 @@ class Table:
         # Build UI parts. Filter non-prefixed attrs for the container
         container_attrs = {k: v for k, v in self.attrs.items() if "__" not in k}
         merged_container = _merge_attrs({"class": self.class_}, container_attrs)
-        html_out = f'<div {_render_attrs(merged_container)} asok-state="{{ search: \'\', filters: {{}} }}">'
+        html_out = f"<div {_render_attrs(merged_container)} asok-state=\"{{ search: '', filters: {{}} }}\">"
 
         # Header (Search & Filters)
         if self._search_fields or self._filters:
             header_attrs = _extract_nested_attrs(self.attrs, "header")
             merged_header = _merge_attrs({"class": "asok-table-header"}, header_attrs)
-            html_out += f'<div {_render_attrs(merged_header)}>'
+            html_out += f"<div {_render_attrs(merged_header)}>"
 
             # Filters
             if self._filters:
                 filter_container_attrs = _extract_nested_attrs(
                     self.attrs, "filter_container"
                 )
-                merged_filter_container = _merge_attrs({"class": "asok-table-filters"}, filter_container_attrs)
+                merged_filter_container = _merge_attrs(
+                    {"class": "asok-table-filters"}, filter_container_attrs
+                )
                 html_out += f'<div {_render_attrs(merged_filter_container)}><form method="GET" class="asok-filter-form">'
                 # Keep search query if present
                 search_q = self.request.get("search", "") if self.request else ""
@@ -477,10 +501,14 @@ class Table:
                     label = key.replace("_", " ").title()
                     filter_select_attrs = _extract_nested_attrs(self.attrs, "filter")
                     merged_filter_select = _merge_attrs(
-                        {"class": "asok-filter-select", "name": f"filter_{key}", "onchange": "this.form.submit()"},
-                        filter_select_attrs
+                        {
+                            "class": "asok-filter-select",
+                            "name": f"filter_{key}",
+                            "onchange": "this.form.submit()",
+                        },
+                        filter_select_attrs,
                     )
-                    html_out += f'<select {_render_attrs(merged_filter_select)}>'
+                    html_out += f"<select {_render_attrs(merged_filter_select)}>"
                     html_out += f'<option value="">— {html.escape(label)} —</option>'
                     for val, lab in choices:
                         sel = "selected" if str(val) == str(current) else ""
@@ -493,8 +521,10 @@ class Table:
                 search_container_attrs = _extract_nested_attrs(
                     self.attrs, "search_container"
                 )
-                merged_search_container = _merge_attrs({"class": "asok-table-search"}, search_container_attrs)
-                html_out += f'<div {_render_attrs(merged_search_container)}>'
+                merged_search_container = _merge_attrs(
+                    {"class": "asok-table-search"}, search_container_attrs
+                )
+                html_out += f"<div {_render_attrs(merged_search_container)}>"
                 html_out += '<form method="GET" class="asok-search-form">'
                 # Keep filters if present
                 if self.request:
@@ -506,10 +536,16 @@ class Table:
                 search_input_attrs = _extract_nested_attrs(self.attrs, "search")
                 search_val = self.request.get("search", "") if self.request else ""
                 merged_search_input = _merge_attrs(
-                    {"class": "asok-search-input", "type": "text", "name": "search", "value": search_val, "placeholder": "Search..."},
-                    search_input_attrs
+                    {
+                        "class": "asok-search-input",
+                        "type": "text",
+                        "name": "search",
+                        "value": search_val,
+                        "placeholder": "Search...",
+                    },
+                    search_input_attrs,
                 )
-                html_out += f'<input {_render_attrs(merged_search_input)}>'
+                html_out += f"<input {_render_attrs(merged_search_input)}>"
                 html_out += "</form></div>"
 
             html_out += "</div>"
@@ -517,10 +553,10 @@ class Table:
         # Table Wrapper & Table tag
         wrapper_attrs = _extract_nested_attrs(self.attrs, "wrapper")
         merged_wrapper = _merge_attrs({"class": "asok-table-wrapper"}, wrapper_attrs)
-        html_out += f'<div {_render_attrs(merged_wrapper)}>'
+        html_out += f"<div {_render_attrs(merged_wrapper)}>"
         table_attrs = _extract_nested_attrs(self.attrs, "table")
         merged_table = _merge_attrs({"class": "asok-table"}, table_attrs)
-        html_out += f'<table {_render_attrs(merged_table)}>'
+        html_out += f"<table {_render_attrs(merged_table)}>"
 
         # THEAD
         thead_attrs = _extract_nested_attrs(self.attrs, "thead")
@@ -554,7 +590,7 @@ class Table:
                     if col.class_:
                         default_td["class"] = col.class_
                     merged_td = _merge_attrs(default_td, global_td_attrs, col_td_attrs)
-                    html_out += f'<td {_render_attrs(merged_td)}>{col.render(row)}</td>'
+                    html_out += f"<td {_render_attrs(merged_td)}>{col.render(row)}</td>"
 
                 # Actions
                 if self._actions:
@@ -577,26 +613,37 @@ class Table:
         if data["pages"] > 1:
             footer_attrs = _extract_nested_attrs(self.attrs, "footer")
             merged_footer = _merge_attrs({"class": "asok-table-footer"}, footer_attrs)
-            html_out += f'<div {_render_attrs(merged_footer)}>'
+            html_out += f"<div {_render_attrs(merged_footer)}>"
             html_out += f'<div class="asok-table-info">Showing {len(items)} of {data["total"]} entries</div>'
             pagination_attrs = _extract_nested_attrs(self.attrs, "pagination")
-            merged_pagination = _merge_attrs({"class": "asok-pagination"}, pagination_attrs)
-            html_out += f'<div {_render_attrs(merged_pagination)}>'
+            merged_pagination = _merge_attrs(
+                {"class": "asok-pagination"}, pagination_attrs
+            )
+            html_out += f"<div {_render_attrs(merged_pagination)}>"
 
             curr = data["current_page"]
             page_link_attrs = _extract_nested_attrs(self.attrs, "page_link")
             if curr > 1:
-                prev_attrs = _merge_attrs({"class": "asok-page-link", "href": f"?page={curr - 1}"}, page_link_attrs)
-                html_out += f'<a {_render_attrs(prev_attrs)}>&laquo; Prev</a>'
+                prev_attrs = _merge_attrs(
+                    {"class": "asok-page-link", "href": f"?page={curr - 1}"},
+                    page_link_attrs,
+                )
+                html_out += f"<a {_render_attrs(prev_attrs)}>&laquo; Prev</a>"
 
             for p in range(1, data["pages"] + 1):
                 active = "active" if p == curr else ""
-                link_attrs = _merge_attrs({"class": f"asok-page-link {active}".strip(), "href": f"?page={p}"}, page_link_attrs)
-                html_out += f'<a {_render_attrs(link_attrs)}>{p}</a>'
+                link_attrs = _merge_attrs(
+                    {"class": f"asok-page-link {active}".strip(), "href": f"?page={p}"},
+                    page_link_attrs,
+                )
+                html_out += f"<a {_render_attrs(link_attrs)}>{p}</a>"
 
             if curr < data["pages"]:
-                next_attrs = _merge_attrs({"class": "asok-page-link", "href": f"?page={curr + 1}"}, page_link_attrs)
-                html_out += f'<a {_render_attrs(next_attrs)}>Next &raquo;</a>'
+                next_attrs = _merge_attrs(
+                    {"class": "asok-page-link", "href": f"?page={curr + 1}"},
+                    page_link_attrs,
+                )
+                html_out += f"<a {_render_attrs(next_attrs)}>Next &raquo;</a>"
 
             html_out += "</div></div>"
 

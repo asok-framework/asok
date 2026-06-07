@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from typing import Any, Optional
 
 
@@ -18,20 +19,26 @@ class Cache:
         path: str = ".cache",
         prefix: str = "",
         namespace: str = "",
+        max_entries: int = 10_000,
     ):
         """Initialize the cache store.
 
         Args:
-            backend: The storage backend to use ('memory' or 'file').
+            backend: The storage backend to use ('memory', 'file', or 'redis').
             path: The directory for file-based cache storage.
             prefix: Optional global prefix for all keys.
             namespace: Optional subgrouping for keys.
+            max_entries: Maximum number of entries in the memory backend before the
+                         oldest (LRU) entries are evicted. Defaults to 10,000.
+                         Has no effect on 'file' or 'redis' backends.
         """
         self.backend = backend
         self.prefix = prefix
         self.namespace = namespace
         self._path = path
-        self._store: dict[str, dict[str, Any]] = {}
+        self._max_entries = max_entries
+        # Use OrderedDict for O(1) LRU eviction (move_to_end + popitem(last=False)).
+        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = threading.Lock()
 
         if backend == "file":
@@ -73,6 +80,8 @@ class Cache:
             if entry["expires"] and time.time() > entry["expires"]:
                 del self._store[key]
                 return default
+            # Move to end to mark as recently used (LRU)
+            self._store.move_to_end(key)
             return entry["value"]
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
@@ -85,7 +94,15 @@ class Cache:
             return self._redis_set(key, value, ttl)
 
         with self._lock:
-            self._store[key] = {"value": value, "expires": expires}
+            if key in self._store:
+                # Update in-place and move to end (most recently used)
+                self._store.move_to_end(key)
+                self._store[key] = {"value": value, "expires": expires}
+            else:
+                self._store[key] = {"value": value, "expires": expires}
+                # Evict least-recently-used entries when limit is exceeded
+                while len(self._store) > self._max_entries:
+                    self._store.popitem(last=False)
 
     def forget(self, key: str) -> None:
         """Remove a specific key from the cache."""
@@ -272,7 +289,9 @@ def cache_page(
             if str(status_code).startswith("200"):
                 token = getattr(request, "csrf_token_value", None)
                 if isinstance(response, str) and token:
-                    cached_response = response.replace(token, "__ASOK_CSRF_TOKEN_PLACEHOLDER__")
+                    cached_response = response.replace(
+                        token, "__ASOK_CSRF_TOKEN_PLACEHOLDER__"
+                    )
                 else:
                     cached_response = response
                 cache.set(cache_key, cached_response, ttl=ttl)

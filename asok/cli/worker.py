@@ -15,7 +15,9 @@ def run_worker(action: str = "run") -> None:
     """Run or inspect the background task queue worker."""
     backend = os.environ.get("ASOK_QUEUE_BACKEND", "local").lower()
     if backend != "redis":
-        print("Error: ASOK_QUEUE_BACKEND must be set to 'redis' to use worker commands.")
+        print(
+            "Error: ASOK_QUEUE_BACKEND must be set to 'redis' to use worker commands."
+        )
         sys.exit(1)
 
     try:
@@ -148,4 +150,3 @@ def show_queue_status(client: Any, redis_url: str) -> None:
             )
 
     print()
-

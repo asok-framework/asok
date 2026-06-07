@@ -15,13 +15,15 @@ class StaticMixin:
         """Compute and cache an MD5 hash of a static file for versioning."""
         if filepath in self._static_hashes:
             return self._static_hashes[filepath]
-        full_path = os.path.join(self._partials_path, filepath.lstrip("/"))
-        if not os.path.isfile(full_path):
-            return None
-        with open(full_path, "rb") as f:
-            h = hashlib.md5(f.read()).hexdigest()[:8]
-        self._static_hashes[filepath] = h
-        return h
+        search_paths = getattr(self, "_static_search_paths", [self._partials_path])
+        for base_dir in search_paths:
+            full_path = os.path.join(base_dir, filepath.lstrip("/"))
+            if os.path.isfile(full_path):
+                with open(full_path, "rb") as f:
+                    h = hashlib.md5(f.read()).hexdigest()[:8]
+                self._static_hashes[filepath] = h
+                return h
+        return None
 
     def _serve_static(
         self,
@@ -42,7 +44,13 @@ class StaticMixin:
             if not os.path.isfile(static_path):
                 return None
             mimetype, _ = mimetypes.guess_type(static_path)
-            mimetype = mimetype or "application/octet-stream"
+            if not mimetype:
+                if static_path.endswith(".js"):
+                    mimetype = "application/javascript"
+                elif static_path.endswith(".css"):
+                    mimetype = "text/css"
+                else:
+                    mimetype = "application/octet-stream"
             with open(static_path, "rb") as f:
                 content = f.read()
             etag = hashlib.md5(content).hexdigest()
@@ -101,22 +109,24 @@ class StaticMixin:
         """Check if request targets static directories and serve the static file if it exists."""
         parts = [p for p in request.path.split("/") if p]
         if parts and parts[0] in self._static_dirs:
-            # SECURITY: Use commonpath to prevent path traversal via symlinks or edge cases
-            base_path = os.path.abspath(self._partials_path)
-            static_path = os.path.abspath(os.path.join(base_path, *parts))
-            try:
-                if os.path.commonpath([static_path, base_path]) != base_path:
+            search_paths = getattr(self, "_static_search_paths", [self._partials_path])
+            for base_dir in search_paths:
+                base_path = os.path.abspath(base_dir)
+                static_path = os.path.abspath(os.path.join(base_path, *parts))
+                try:
+                    if os.path.commonpath([static_path, base_path]) != base_path:
+                        body = self._render_error_page(request, 403)
+                        start_response(
+                            "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
+                        )
+                        return [body.encode("utf-8")]
+                except ValueError:
+                    # Paths on different drives (Windows) - deny access
                     body = self._render_error_page(request, 403)
                     start_response(
                         "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
                     )
                     return [body.encode("utf-8")]
-            except ValueError:
-                # Paths on different drives (Windows) - deny access
-                body = self._render_error_page(request, 403)
-                start_response(
-                    "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
-                )
-                return [body.encode("utf-8")]
-            return self._serve_static(static_path, start_response, environ)
+                if os.path.isfile(static_path):
+                    return self._serve_static(static_path, start_response, environ)
         return None

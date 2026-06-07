@@ -114,7 +114,9 @@ WantedBy=multi-user.target
 """
     with open(os.path.join(deploy_dir, f"{app_name}.service"), "w") as f:
         f.write(service_conf)
-    print(f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}.service (App web server)")
+    print(
+        f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}.service (App web server)"
+    )
 
     # 3.5. SystemD Worker Service
     worker_service_conf = f"""[Unit]
@@ -140,7 +142,9 @@ WantedBy=multi-user.target
 """
     with open(os.path.join(deploy_dir, f"{app_name}-worker.service"), "w") as f:
         f.write(worker_service_conf)
-    print(f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}-worker.service (Background tasks)")
+    print(
+        f"  {Style.GREEN}✓{Style.RESET} Generated {app_name}-worker.service (Background tasks)"
+    )
 
     # 4. Setup Script (Automated)
     setup_sh = f"""#!/bin/bash

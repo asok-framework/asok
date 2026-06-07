@@ -114,10 +114,21 @@ class WebSocketServer:
         self._conn_lock = threading.Lock()
         self._sock: Optional[socket.socket] = None
         self._running = False
+        self.presence_counts: dict[int, int] = {}
+        self._room_authorizer = None
 
         # Internal: auto-register live component handler
         if self.app:
             self.on("/asok/live")(self.on_live_message)
+
+        # GraphQL WebSocket Subscriptions registration
+        try:
+            from ..api.graphql import on_graphql_ws_message, setup_graphql_subscriptions
+
+            self.on("/graphql")(on_graphql_ws_message)
+            setup_graphql_subscriptions(self)
+        except ImportError:
+            pass
 
         # Real-time Model Bridge
         def _relay_model_event(event_name: str, model_obj: Any) -> None:
@@ -173,6 +184,31 @@ class WebSocketServer:
             return fn
 
         return wrap
+
+    def room_authorizer(self, fn):
+        """Decorator to register a custom room authorization function."""
+        self._room_authorizer = fn
+        return fn
+
+    def check_room_authorization(self, conn: Connection, room: str) -> bool:
+        """Check if a connection is authorized to join a room."""
+        if self._room_authorizer:
+            try:
+                return bool(self._room_authorizer(conn, room))
+            except Exception as e:
+                logger.error(f"Error in room authorizer: {e}", exc_info=True)
+                return False
+        return True
+
+    def get_online_users(self) -> list[int]:
+        """Return list of online user IDs."""
+        with self._conn_lock:
+            return list(self.presence_counts.keys())
+
+    def is_user_online(self, user_id: int) -> bool:
+        """Return True if the user is online."""
+        with self._conn_lock:
+            return self.presence_counts.get(user_id, 0) > 0
 
     def _match(self, path: str) -> tuple[Optional[_Route], Optional[dict[str, str]]]:
         """Return (route, params) for the first matching route, or (None, None).
@@ -540,6 +576,7 @@ class WebSocketServer:
                 user,
                 session=session,
                 params=params,
+                server=self,
             )
             self._register(conn)
 
@@ -613,6 +650,21 @@ class WebSocketServer:
     def _register(self, conn: Connection) -> None:
         with self._conn_lock:
             self._connections.setdefault(conn.path, set()).add(conn)
+        if conn.user and hasattr(conn.user, "id"):
+            user_id = conn.user.id
+            with self._conn_lock:
+                old_count = self.presence_counts.get(user_id, 0)
+                self.presence_counts[user_id] = old_count + 1
+                is_first = old_count == 0
+            if is_first:
+                payload = {
+                    "op": "broadcast",
+                    "type": "presence",
+                    "user_id": user_id,
+                    "status": "online",
+                }
+                for p in list(self._connections.keys()):
+                    self.broadcast_json(p, payload)
 
     def _remove(self, conn: Connection) -> None:
         with self._conn_lock:
@@ -620,3 +672,22 @@ class WebSocketServer:
             if s:
                 s.discard(conn)
             self._connection_count = max(0, self._connection_count - 1)
+        if conn.user and hasattr(conn.user, "id"):
+            user_id = conn.user.id
+            with self._conn_lock:
+                old_count = self.presence_counts.get(user_id, 0)
+                new_count = max(0, old_count - 1)
+                if new_count == 0:
+                    self.presence_counts.pop(user_id, None)
+                else:
+                    self.presence_counts[user_id] = new_count
+                is_last = old_count > 0 and new_count == 0
+            if is_last:
+                payload = {
+                    "op": "broadcast",
+                    "type": "presence",
+                    "user_id": user_id,
+                    "status": "offline",
+                }
+                for p in list(self._connections.keys()):
+                    self.broadcast_json(p, payload)

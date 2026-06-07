@@ -243,7 +243,7 @@ class Countries:
             "BR": "America/Sao_Paulo",
             "RU": "Europe/Moscow",
             "CA": "America/Toronto",
-            "AU": "Australia/Sydney"
+            "AU": "Australia/Sydney",
         }
         return zones.get(iso_code.upper(), "UTC")
 

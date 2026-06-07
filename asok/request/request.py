@@ -277,6 +277,37 @@ class Request(
             self._new_flashes_consumed = True
         return messages
 
+    def rate_limit(
+        self,
+        limit: Union[str, int],
+        window: Optional[int] = None,
+        prefix: Optional[str] = None,
+    ) -> None:
+        """Programmatically check a rate limit against the current request.
+
+        Raises RateLimitExceeded if the limit is exceeded.
+        """
+        from asok.ratelimit import RateLimit
+
+        # Auto-generate a prefix based on the caller's stack frame if not provided
+        if not prefix:
+            import inspect
+            frame = inspect.currentframe()
+            try:
+                # Walk up to the caller's frame (the view function calling request.rate_limit)
+                caller = frame.f_back
+                if caller:
+                    func_name = caller.f_code.co_name
+                    module_name = caller.f_globals.get("__name__", "view")
+                    prefix = f"rl:{module_name}.{func_name}"
+            finally:
+                del frame
+            if not prefix:
+                prefix = f"rl:{self.path}"
+
+        limiter = RateLimit(limit, window, prefix=prefix)
+        limiter.check(self)
+
     def abort(self, code: int, message: Optional[str] = None) -> None:
         """Raise an AbortException with the given status code and message."""
         raise AbortException(code, message)

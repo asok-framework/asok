@@ -359,13 +359,11 @@ class Form(SchemaMixin):
             elif getattr(field, "is_foreign_key", False):
                 target = field.related_model
                 if getattr(field, "dropdown", False):
-                    try:
-                        items = target.all()
-                    except Exception:
-                        items = []
+                    def items_loader(t=target):
+                        return list(t.all())
                     schema[name] = cls.dropdown(
                         label,
-                        items,
+                        items_loader,
                         title=getattr(field, "dropdown_title", "name"),
                         subtitle=getattr(field, "dropdown_subtitle", None),
                         image=getattr(field, "dropdown_image", None),
@@ -375,12 +373,9 @@ class Form(SchemaMixin):
                         **attrs,
                     )
                 else:
-                    try:
-                        choices = [(o.id, str(o)) for o in target.all()]
-                    except Exception:
-                        choices = []
-                    choices = [("", "— None —")] + choices
-                    schema[name] = cls.select(label, choices, rules, messages, **attrs)
+                    def choices_loader(t=target):
+                        return [("", "— None —")] + [(o.id, str(o)) for o in t.all()]
+                    schema[name] = cls.select(label, choices_loader, rules, messages, **attrs)
             elif getattr(field, "is_dropdown", False):
                 schema[name] = cls.dropdown(
                     label,

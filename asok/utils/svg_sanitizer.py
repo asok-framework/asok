@@ -375,7 +375,9 @@ def _is_safe_url(url: str) -> bool:
         return False
 
     # Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
-    clean_url = "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
+    clean_url = (
+        "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
+    )
 
     # SECURITY: Block dangerous protocols
     dangerous_protocols = [

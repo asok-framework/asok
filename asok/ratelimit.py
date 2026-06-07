@@ -9,12 +9,17 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 if TYPE_CHECKING:
     from .cache import Cache
 
+from .exceptions import RateLimitExceeded as RateLimitExceeded
 from .request import Request
 
 _security_logger = logging.getLogger("asok.security")
 
 # SECURITY: Maximum number of tracked buckets in memory to prevent OOM DoS
 _MAX_STORE_ENTRIES = 10_000
+
+# Shared store and lock for in-memory limiting across dynamic instances
+_local_store: dict[str, dict[str, Any]] = {}
+_local_store_lock = threading.Lock()
 
 
 class RateLimit:
@@ -28,6 +33,7 @@ class RateLimit:
         window: Optional[int] = None,
         key_func: Optional[Callable[[Request], str]] = None,
         storage: Optional["Cache"] = None,
+        prefix: str = "rl",
         **kwargs,
     ):
         """Initialize the rate limiter.
@@ -37,6 +43,7 @@ class RateLimit:
             window: Time window in seconds (only used if limit is an int).
             key_func: Optional function to generate a unique key for the client.
             storage: Optional Cache instance for persistence (allows cross-worker limiting).
+            prefix: Key prefix to segment rate limit buckets (default: "rl").
         """
         # Support old 'max_requests' parameter name for compatibility
         if "max_requests" in kwargs:
@@ -49,9 +56,20 @@ class RateLimit:
             self.window = window or 60
 
         self.key_func = key_func or self._default_key
-        self.storage = storage
-        self._store: dict[str, dict[str, Any]] = {}
-        self._lock = threading.Lock()
+        self.prefix = prefix
+
+        if storage is not None:
+            self.storage = storage
+        else:
+            from .cache import default_cache
+
+            if default_cache.backend in ("redis", "file"):
+                self.storage = default_cache
+            else:
+                self.storage = None
+
+        self._store = _local_store
+        self._lock = _local_store_lock
         self._last_cleanup: float = 0.0
 
     @staticmethod
@@ -70,9 +88,12 @@ class RateLimit:
         """Default key generator using the client's IP address."""
         return request.ip or "unknown"
 
-    def __call__(self, request: Request, next_handler: Callable[[Request], Any]) -> Any:
-        """Middleware entry point."""
-        key = f"rl:{self.key_func(request)}"
+    def check(self, request: Request) -> None:
+        """Check the rate limit for the current request.
+
+        Raises RateLimitExceeded if the limit is exceeded.
+        """
+        key = f"{self.prefix}:{self.key_func(request)}"
         now = time.time()
 
         if self.storage:
@@ -117,10 +138,20 @@ class RateLimit:
                 remaining,
             )
 
+            raise RateLimitExceeded(
+                message=f"Too Many Requests. Retry in {remaining}s.",
+                retry_after=remaining,
+            )
+
+    def __call__(self, request: Request, next_handler: Callable[[Request], Any]) -> Any:
+        """Middleware/decorator entry point."""
+        try:
+            self.check(request)
+        except RateLimitExceeded as e:
             request.status_code(429)
             request.content_type = "text/html; charset=utf-8"
             request.environ.setdefault("asok.extra_headers", []).append(
-                ("Retry-After", str(remaining))
+                ("Retry-After", str(e.retry_after))
             )
 
             app = request.environ.get("asok.app")
@@ -129,7 +160,7 @@ class RateLimit:
                     return app._render_error_page(request, 429)
                 except Exception:
                     pass
-            return f"<h1>429 Too Many Requests</h1><p>Retry in {remaining}s.</p>"
+            return f"<h1>429 Too Many Requests</h1><p>Retry in {e.retry_after}s.</p>"
 
         return next_handler(request)
 
@@ -142,9 +173,16 @@ def rate_limit(limit: str | int, window: Optional[int] = None, **kwargs):
         def get(request):
             return "Hello"
     """
-    limiter = RateLimit(limit, window, **kwargs)
 
     def decorator(fn):
+        # Derive a unique prefix for this route to prevent rate limit collisions across routes
+        prefix = kwargs.get("prefix")
+        if not prefix:
+            prefix = f"rl:{fn.__module__}.{fn.__name__}"
+            kwargs["prefix"] = prefix
+
+        limiter = RateLimit(limit, window, **kwargs)
+
         @functools.wraps(fn)
         def wrapper(request, *args, **kw):
             # Middlewares expect (request, next_handler)
@@ -153,3 +191,4 @@ def rate_limit(limit: str | int, window: Optional[int] = None, **kwargs):
         return wrapper
 
     return decorator
+

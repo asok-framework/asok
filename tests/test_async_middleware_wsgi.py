@@ -10,9 +10,11 @@ class DummyModuleSync:
     def get(self, request):
         return "Sync response"
 
+
 async def async_middleware(request, next_handler):
     res = await next_handler(request)
     return res
+
 
 def test_wsgi_async_middleware_sync_controller() -> None:
     app = Asok()
