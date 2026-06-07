@@ -6,6 +6,31 @@ This roadmap outlines the planned features and improvements for upcoming Asok re
 
 ## Current Stable Release
 
+### v0.4.0 (Released: June 2026)
+
+**Status**: ✅ Stable
+
+GraphQL api engine, community extensions system, hybrid rendering (Islands/SSG/ISR), advanced WebSocket presence/typing, multi-database query load balancing, and API versioning negotiation:
+
+**Extensions System:**
+- **Community Extensions System**: Fully extensible third-party package registration for custom pages, templates, and static assets with secure path traversal sandboxing.
+
+**Performance & Rendering:**
+- **Hybrid SSR & Hydration**: Selective/Partial hydration for islands architecture.
+- **SSG & ISR**: Static Site Generation (SSG) for static routes and Incremental Static Regeneration (ISR) with automated background stale-cache warming.
+
+**API & GraphQL:**
+- **Built-in GraphQL**: Auto-generated GraphQL schema resolved from models, playground explorer in development, and subscription support.
+- **API Versioning**: URL-based and header-based API versioning, negotiation headers, and deprecation sunset notifications.
+
+**Real-Time & Scaling:**
+- **Advanced WebSockets**: Real-time user presence tracking, status, Direct Messages, typing indicators, read receipts, and room authorization hooks.
+- **Multi-Database Scaling**: Advanced ORM query load balancer routing queries to read replicas and write masters.
+
+---
+
+## Previous Releases
+
 ### v0.3.0 (Released: June 2026)
 
 **Status**: ✅ Stable
@@ -13,132 +38,51 @@ This roadmap outlines the planned features and improvements for upcoming Asok re
 Modern async stack, enterprise database support, and developer tooling:
 
 **Core Framework:**
-- **Async/ASGI Support**: Full async/await support with ASGI/WSGI dual engine, async middlewares, and non-blocking database queries
-- **Multi-Database Support**: PostgreSQL and MySQL backends with connection pooling, cross-engine migrations, and config-driven DB binds
-- **Redis Integration**: Native Redis support for caching, session persistence, cache warming, and fragment caching
-- **Cloud Storage**: AWS S3 file storage with automatic mime-type detection
-- **Background Jobs**: `asok worker` command for background task processing with Redis resilience
-- **Database Fixtures**: New `asok dumpdata` and `asok loaddata` CLI commands for data seeding
+- **Async/ASGI Support**: Full async/await support with ASGI/WSGI dual engine, async middlewares, and non-blocking database queries.
+- **Multi-Database Support**: PostgreSQL and MySQL backends with connection pooling, cross-engine migrations, and config-driven DB binds.
+- **Redis Integration**: Native Redis support for caching, session persistence, cache warming, and fragment caching.
+- **Cloud Storage**: AWS S3 file storage with automatic mime-type detection.
+- **Background Jobs**: `asok worker` command for background task processing with Redis resilience.
+- **Database Fixtures**: New `asok dumpdata` and `asok loaddata` CLI commands for data seeding.
 
 **Advanced ORM:**
-- **Polymorphic Relationships**: MorphTo/MorphMany for flexible model associations
-- **Self-Referencing Relationships**: Models can reference themselves (parent/child hierarchies)
-- **Nested Eager Loading**: Prevent N+1 queries with deep relation loading
-- **Custom Relationship Types**: Extensible relationship system
-- **Vector Similarity Search**: Built-in support for embedding-based search (PostgreSQL pgvector)
-- **Query Optimization Tools**: N+1 detection in development, query plan analysis, automatic index suggestions, slow query logging
-
-**Real-Time Features:**
-- **WebSocket Rooms**: Room-based broadcasting with join/leave for multi-user collaboration
-
-**Admin Panel Enhancements:**
-- **Inline Editing**: Quick updates without full page navigation
-- **Advanced Filtering**: Date ranges, multi-field filters, saved filter presets
-- **Column Customization**: Toggle column visibility for personalized views
+- **Polymorphic Relationships**: MorphTo/MorphMany for flexible model associations.
+- **Self-Referencing Relationships**: Models can reference themselves (parent/child hierarchies).
+- **Nested Eager Loading**: Prevent N+1 queries with deep relation loading.
+- **Vector Similarity Search**: Built-in support for pgvector search.
 
 **Developer Experience:**
-- **VSCode Extension**: Official IDE integration with syntax highlighting, IntelliSense, template autocompletion, route navigation, and snippets
-- **Localization Tools**: Translation management UI and automatic string extraction for i18n
-- **Query Debugging**: Built-in tools for identifying and fixing performance issues
-
-[View Full Changelog](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md)
+- **VSCode Extension**: Syntax highlighting, IntelliSense, template autocompletion, route navigation, and snippets.
+- **Localization Tools**: Translation management UI and automatic string extraction.
 
 ---
-
-## Previous Releases
 
 ### v0.1.7 (Released: May 2026)
 
 **Status**: ✅ Stable
 
 Framework refactoring and architecture overhaul for long-term maintainability:
-- **Module Restructuring**: Reorganized monolithic engine and CLI into clean, modular packages (`asok/core/`, `asok/orm/`, `asok/cli/`, etc.) with 100% backward compatibility.
-- **Asset Compilation**: Pre-compiled minified assets for admin, API, and developer toolbar. Added official Python 3.13 support.
-- **Enhanced Test Coverage**: Added dedicated suites for AJAX CSRF rotation, SPA reactivity fixes, developer toolbar, and API static files.
+- **Module Restructuring**: Reorganized monolithic engine and CLI into clean, modular packages (`asok/core/`, `asok/orm/`, `asok/cli/`, etc.).
+- **Asset Compilation**: Pre-compiled minified assets for admin, API, and developer toolbar.
 
 ---
 
 ## Upcoming Releases
 
-### v0.4.0 - GraphQL & Enterprise Scale (Q4 2026)
+### v0.5.0 - Enterprise Scale & Observability (Planned Q1 2027)
 
 **Status**: 📋 Planned
 
-#### API & GraphQL
+#### Monitoring & Observability
+- **Built-in Monitoring** - Request/response logging, performance metrics collection, health check endpoints, and Prometheus/Grafana integrations.
+- **Slow Query Alerting** - Automatic warning logs and mail alerts for database bottlenecks.
 
-- **GraphQL Support** - Modern API development
-  - Built-in GraphQL server
-  - Auto-generated schema from models
-  - Query complexity analysis
-  - GraphQL playground in development
-  - Subscriptions via WebSockets
-
-- **API Versioning** - Professional API management
-  - URL-based versioning (/api/v1/, /api/v2/)
-  - Header-based versioning
-  - API deprecation warnings and sunset headers
-  - Version negotiation and content-type versioning
-
-#### Enterprise & Scalability
-
-- **Advanced WebSocket Features** - Enhanced real-time capabilities
-  - User presence tracking and status updates
-  - Room permissions and authentication
-  - Private messaging and direct messages
-  - Typing indicators and read receipts
-
-- **Multi-Database Scaling** - Horizontal scaling
-  - Read replicas configuration
-  - Sharding strategies for large datasets
-  - Multi-region database support
-  - Automatic read/write load balancing
+#### Enterprise Features
+- **Multi-Tenancy** - Native SaaS multi-tenant schema isolation.
+- **CDN Caching** - Built-in asset pipeline delivery optimization integration.
 
 #### Developer Experience
-
-- **Plugin System** - Extend Asok with third-party packages
-  - Plugin discovery and auto-registration
-  - Hook system for core events
-  - Plugin configuration API
-  - Official plugin registry
-
-- **CLI Enhancements** - Advanced developer tools
-  - Performance profiling tools (flame graphs, memory usage)
-  - Database introspection commands (show schema, explain queries)
-  - Asset pipeline optimization (automatic sprite generation)
-  - Environment management (config validation, secrets vault)
-
-- **VSCode Extension Enhancements** - Advanced IDE features
-  - Debug configuration templates
-  - Live preview for templates
-  - Integrated test runner
-  - Visual database schema browser
-
-#### Performance & Rendering
-
-- **Advanced SSR & Hydration** - Enhanced rendering strategies
-  - Hybrid rendering (SSR + Client-side hydration)
-  - Selective/Partial hydration for islands architecture
-  - Static site generation (SSG) for marketing pages
-  - Incremental static regeneration (ISR)
-
-#### Monitoring & Observability
-
-- **Built-in Monitoring** - Production-ready observability
-  - Request/response logging
-  - Performance metrics (response time, query count)
-  - Error tracking and alerts
-  - Health check endpoints
-  - Integration with Prometheus/Grafana
-
-#### Admin Interface
-
-- **Admin Dashboard Enhancements** - Advanced administration features
-  - Drag-and-drop file uploads with progress
-  - Dashboard widgets and statistics
-  - Batch operations interface
-  - Advanced export/import tools
-
----
+- **Performance Profiling Tools** - CLI flame graphs and memory usage profilers.
 
 ---
 
@@ -188,8 +132,8 @@ Check [GitHub Discussions](https://github.com/asok-framework/asok/discussions) f
 | v0.1.6 | May 15, 2026 | ✅ Released | Security & UI Transitions |
 | v0.1.7 | May 25, 2026 | ✅ Released | Architecture Overhaul |
 | v0.3.0 | June 1, 2026 | ✅ Released | Async & Multi-DB Support |
-| v0.4.0 | Q4 2026 | 📋 Planned | Advanced Features |
-| v0.5.0 | Q2 2027 | 💭 Conceptual | Enterprise Scale |
+| v0.4.0 | June 7, 2026 | ✅ Released | GraphQL & Extensions |
+| v0.5.0 | Q1 2027 | 📋 Planned | Enterprise Scaling & Monitoring |
 
 **Note**: Dates are approximate and subject to change based on community priorities and development capacity.
 
@@ -217,6 +161,6 @@ We maintain backward compatibility within major versions and provide clear upgra
 
 ---
 
-**Last Updated**: June 1, 2026
+**Last Updated**: June 7, 2026
 
 For the most up-to-date information, check the [GitHub Projects board](https://github.com/asok-framework/asok/projects).

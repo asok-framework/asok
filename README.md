@@ -393,6 +393,14 @@ Thanks to all our amazing contributors! 🎉
 
 Asok is actively developed with exciting features planned:
 
+**v0.4.0** - GraphQL & Extensions ✅ **Released June 2026**
+- **Plugin System**: Fully extensible community extension system with secure path sandboxing
+- **Advanced SSR & Hydration**: Islands architecture, Static Site Generation (SSG), and Incremental Static Regeneration (ISR)
+- **GraphQL API**: Built-in GraphQL server with schema auto-generation from models and subscription support
+- **API Versioning**: URL-based and header-based versioning, negotiation, deprecation warnings and sunsetting
+- **Advanced WebSockets**: Real-time presence tracking, room authorization hooks, Direct Messages, and typing indicators
+- **Multi-Database Scaling**: Advanced ORM database router for read replicas and query load balancing
+
 **v0.3.0** - Enterprise Ready ✅ **Released June 2026**
 - **Async/ASGI**: Full async/await support with ASGI/WSGI dual engine
 - **Multi-DB**: PostgreSQL & MySQL with connection pooling, vector search
@@ -406,13 +414,11 @@ Asok is actively developed with exciting features planned:
 - **Localization**: Translation management UI and automatic string extraction
 - **Query Optimization**: N+1 detection, query analysis, index suggestions, slow query logging
 
-**v0.4.0** - GraphQL & Scale (Planned Q4 2026)
-- GraphQL API with auto-generated schemas and subscriptions
-- Advanced WebSocket features (presence, permissions, private messages)
-- Multi-database scaling (read replicas, sharding, load balancing)
-- Plugin ecosystem for third-party extensions
-- Built-in monitoring & observability (Prometheus/Grafana)
-- Advanced SSR & hydration (islands architecture, SSG, ISR)
+**v0.5.0** - Enterprise Scale & Observability (Planned Q1 2027)
+- **Built-in Monitoring**: Prometheus/Grafana integration, performance metrics and health check endpoints
+- **Multi-Tenancy**: SaaS tenant isolation structures and middleware
+- **CDN Integration**: Automatic static media asset pipeline delivery
+- **Microservices Support**: Built-in gRPC support and service mesh integration
 
 **Note:** Timelines are subject to change based on community feedback and development priorities.
 
@@ -420,7 +426,7 @@ Asok is actively developed with exciting features planned:
 
 ## 🏭 Production Status
 
-Asok v0.3.0 is **actively developed software** with growing production adoption. It's suitable for:
+Asok v0.4.0 is **actively developed software** with growing production adoption. It's suitable for:
 
 **✅ Recommended for:**
 - Production web applications and APIs
@@ -433,9 +439,9 @@ Asok v0.3.0 is **actively developed software** with growing production adoption.
 
 **⚠️ Current Limitations:**
 - **Ecosystem**: Growing community, limited third-party plugins
-- **Maturity**: v0.3.x - APIs are stabilizing but may evolve before v1.0
+- **Maturity**: v0.4.x - APIs are stabilizing but may evolve before v1.0
 
-**For mission-critical production applications**, Asok v0.3.0 provides enterprise features (async, multi-DB, Redis, S3) suitable for production workloads. Evaluate if the current feature set meets your specific requirements.
+**For mission-critical production applications**, Asok v0.4.0 provides enterprise features (async, multi-DB, Redis, S3) suitable for production workloads. Evaluate if the current feature set meets your specific requirements.
 
 ---
 
