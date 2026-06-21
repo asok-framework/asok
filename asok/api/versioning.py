@@ -20,27 +20,34 @@ class APIVersionInfo:
         self.sunset = sunset
 
 
+def _get_header_val(headers: dict, name: str) -> Optional[str]:
+    for k, v in headers.items():
+        if k.lower() == name:
+            return v
+    return None
+
+
+def _get_path_version(path: str) -> Optional[str]:
+    cleaned = path.strip("/")
+    if not cleaned:
+        return None
+    for part in cleaned.split("/"):
+        if re.match(r"^v\d+(?:\.\d+)?$", part):
+            return part
+    return None
+
+
 def get_request_version(request: Any) -> Optional[str]:
     """Resolve the requested API version from path, headers, or accept content types."""
-    # 1. URL Path check (e.g. /api/v1/users)
-    path = request.path.strip("/")
-    if path:
-        for part in path.split("/"):
-            if re.match(r"^v\d+(?:\.\d+)?$", part):
-                return part
+    v = _get_path_version(request.path)
+    if v:
+        return v
 
-    # 2. X-API-Version header (case-insensitive)
-    for k, v in request.headers.items():
-        if k.lower() == "x-api-version":
-            return v.strip().lower()
+    v = _get_header_val(request.headers, "x-api-version")
+    if v:
+        return v.strip().lower()
 
-    # 3. Accept header (case-insensitive)
-    accept = ""
-    for k, v in request.headers.items():
-        if k.lower() == "accept":
-            accept = v
-            break
-
+    accept = _get_header_val(request.headers, "accept") or ""
     match = re.search(r"vnd\.asok\.v?(\d+(?:\.\d+)?)\+json", accept, re.I)
     if match:
         return f"v{match.group(1)}"
@@ -64,6 +71,25 @@ def api_version(
     return decorator
 
 
+def _apply_sunset_header(request: Any, sunset: str) -> None:
+    try:
+        dt = datetime.fromisoformat(sunset.replace("Z", "+00:00"))
+        http_date = email.utils.format_datetime(dt, usegmt=True)
+        request.response_headers.append(("Sunset", http_date))
+    except Exception:
+        request.response_headers.append(("Sunset", sunset))
+
+
+def _apply_version_headers(request: Any, handler: Callable[..., Any]) -> None:
+    meta = getattr(handler, "_asok_api_version", None)
+    if not meta:
+        return
+    if meta.deprecated:
+        request.response_headers.append(("Deprecation", "true"))
+    if meta.sunset:
+        _apply_sunset_header(request, meta.sunset)
+
+
 def versioned_response(
     request: Any,
     version_map: dict[str, Callable[..., Any]],
@@ -79,17 +105,5 @@ def versioned_response(
 
     handler = version_map[req_version]
     res = handler(request)
-
-    meta = getattr(handler, "_asok_api_version", None)
-    if meta:
-        if meta.deprecated:
-            request.response_headers.append(("Deprecation", "true"))
-        if meta.sunset:
-            try:
-                dt = datetime.fromisoformat(meta.sunset.replace("Z", "+00:00"))
-                http_date = email.utils.format_datetime(dt, usegmt=True)
-                request.response_headers.append(("Sunset", http_date))
-            except Exception:
-                request.response_headers.append(("Sunset", meta.sunset))
-
+    _apply_version_headers(request, handler)
     return res

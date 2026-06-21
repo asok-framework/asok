@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-import ast
 import os
 import re
 from typing import Any, Optional
 
-from .safestring import SafeString
+from ._preprocess_helpers import (
+    escape_template_literal,
+    extract_child_blocks,
+    extract_child_orphans,
+    find_block_close,
+    is_inside_no_comment_tag,
+    make_macro,
+    parse_macro_params,
+    read_template_file,
+    safe_resolve,
+    search_template_path,
+    top_level_block_ranges,
+)
 
 # Pre-compiled regex patterns
 _RE_EXTENDS = re.compile(r"{%-?\s*extends\s+[\'\"](.*?)[\'\"]\s*-?%}")
@@ -32,18 +43,66 @@ _RE_COMPONENT = re.compile(
     r"{%-?\s*component\s+[\'\"](.*?)[\'\"]\s*(.*?)-?%}(.*?){%-?\s*endcomponent\s*-?%}",
     re.DOTALL,
 )
+_RE_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_RE_HTML_COMMENT_TOKEN = re.compile(r"\x00ASOKHC(\d+)\x00")
 
-_macro_cache: dict[str, str] = {}  # file_path -> file content
-_macro_mtimes: dict[str, float] = {}  # file_path -> modification time
+_macro_cache: dict[str, str] = {}
+_macro_mtimes: dict[str, float] = {}
+
+
+def _mask_html_comments(text: str) -> tuple[str, list[str]]:
+    """Replace each ``<!-- ... -->`` with a sentinel so the preprocessor's
+    regexes for ``{% include %}``, ``{% extends %}``, ``{% from %}`` etc. do
+    not match Jinja-looking syntax that lives inside an HTML comment. Without
+    this, an example like ``<!-- example: {% include "x" %} -->`` would be
+    treated as a real include and recursively expanded.
+    """
+    stash: list[str] = []
+
+    def replace(m: re.Match[str]) -> str:
+        stash.append(m.group(0))
+        return f"\x00ASOKHC{len(stash) - 1}\x00"
+
+    return _RE_HTML_COMMENT.sub(replace, text), stash
+
+
+def _restore_html_comments(text: str, stash: list[str]) -> str:
+    def replace(m: re.Match[str]) -> str:
+        return stash[int(m.group(1))]
+
+    return _RE_HTML_COMMENT_TOKEN.sub(replace, text)
 
 
 def _safe_resolve(base: str, requested: str) -> str:
     """Ensure requested path resolves within base directory."""
-    base = os.path.abspath(base)
-    full = os.path.abspath(os.path.join(base, requested))
-    if not (full.startswith(base + os.sep) or full == base):
-        raise ValueError(f"Path traversal blocked: {requested}")
-    return full
+    return safe_resolve(base, requested)
+
+
+def _get_cached_macro_content(file_path: str) -> Optional[str]:
+    """Read macro file content, populating the cache + mtime map.
+
+    SECURITY: capped at 1 MB to prevent memory DoS.
+    """
+    if not os.path.exists(file_path):
+        return None
+    cached = _macro_cache.get(file_path)
+    if cached is not None and not _macro_file_changed(file_path):
+        return cached
+    content = read_template_file(file_path)
+    if content is None:
+        return None
+    _macro_cache[file_path] = content
+    _macro_mtimes[file_path] = os.path.getmtime(file_path)
+    return content
+
+
+def _macro_file_changed(file_path: str) -> bool:
+    try:
+        current_mtime = os.path.getmtime(file_path)
+    except OSError:
+        return True
+    cached_mtime = _macro_mtimes.get(file_path)
+    return cached_mtime is None or current_mtime > cached_mtime
 
 
 def _get_all_macro_names(file_path: str) -> list[str]:
@@ -51,25 +110,9 @@ def _get_all_macro_names(file_path: str) -> list[str]:
 
     SECURITY: File size limits prevent DoS via extremely large macro files.
     """
-    content = _macro_cache.get(file_path)
+    content = _get_cached_macro_content(file_path)
     if content is None:
-        if os.path.exists(file_path):
-            # SECURITY: Limit macro file size to prevent DoS (max 1MB)
-            try:
-                file_size = os.path.getsize(file_path)
-                if file_size > 1_000_000:
-                    return []
-            except OSError:
-                return []
-
-            current_mtime = os.path.getmtime(file_path)
-            _macro_mtimes[file_path] = current_mtime
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            _macro_cache[file_path] = content
-        else:
-            return []
-
+        return []
     return [m.group(1) for m in _RE_MACRO.finditer(content)]
 
 
@@ -78,121 +121,248 @@ def _extract_macros(
 ) -> dict[str, Any]:
     """Parse a macro file and return callables for the requested macro names.
 
-    All macros in the file are made available to each other (sibling calls),
-    so a macro can reference another macro defined in the same file.
-
-    In development mode (when file exists), checks file modification time
-    and reloads if changed.
-
+    All macros in the file are made available to each other (sibling calls).
     SECURITY: File size limits prevent DoS via extremely large macro files.
     """
-    # Check if file has been modified since last cache
-    reload_needed = False
-    if os.path.exists(file_path):
-        current_mtime = os.path.getmtime(file_path)
-        cached_mtime = _macro_mtimes.get(file_path)
-
-        if cached_mtime is None or current_mtime > cached_mtime:
-            reload_needed = True
-            _macro_mtimes[file_path] = current_mtime
-
-    content = _macro_cache.get(file_path)
-    if content is None or reload_needed:
-        # SECURITY: Limit macro file size to prevent DoS (max 1MB)
-        try:
-            file_size = os.path.getsize(file_path)
-            if file_size > 1_000_000:
-                return {}
-        except OSError:
-            return {}
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        _macro_cache[file_path] = content
-
+    content = _get_cached_macro_content(file_path)
+    if content is None:
+        return {}
     all_macros: dict[str, Any] = {}
-    parsed = []
     for match in _RE_MACRO.finditer(content):
-        macro_name = match.group(1)
-        raw_params = match.group(2).strip()
-        body = match.group(3)
-
-        param_names = []
-        param_defaults = {}
-        varargs = None
-        varkw = None
-
-        if raw_params:
-            for param in raw_params.split(","):
-                param = param.strip()
-                if not param:
-                    continue
-
-                if param.startswith("**"):
-                    varkw = param[2:]
-                elif param.startswith("*"):
-                    varargs = param[1:]
-                elif "=" in param:
-                    pname, pdefault = param.split("=", 1)
-                    pname = pname.strip()
-                    param_names.append(pname)
-                    param_defaults[pname] = pdefault.strip()
-                else:
-                    param_names.append(param)
-        parsed.append((macro_name, body, param_names, param_defaults, varargs, varkw))
-
-    def _make_macro(
-        m_body: str,
-        m_params: list[str],
-        m_defaults: dict[str, str],
-        m_varargs: Optional[str],
-        m_varkw: Optional[str],
-    ) -> Any:
-        def macro_fn(*args: Any, **kwargs: Any) -> SafeString:
-            local_ctx = dict(parent_ctx or {})
-            local_ctx.update(all_macros)
-
-            # 1. Map positional args to named params
-            used_kwargs = set()
-            for i, pname in enumerate(m_params):
-                if i < len(args):
-                    local_ctx[pname] = args[i]
-                elif pname in kwargs:
-                    local_ctx[pname] = kwargs[pname]
-                    used_kwargs.add(pname)
-                elif pname in m_defaults:
-                    try:
-                        local_ctx[pname] = ast.literal_eval(m_defaults[pname])
-                    except (ValueError, SyntaxError):
-                        local_ctx[pname] = m_defaults[pname]
-                else:
-                    local_ctx[pname] = ""
-
-            # 2. Collect *varargs
-            if m_varargs:
-                local_ctx[m_varargs] = args[len(m_params) :]
-
-            # 3. Collect **varkw
-            if m_varkw:
-                remaining = {k: v for k, v in kwargs.items() if k not in m_params}
-                local_ctx[m_varkw] = remaining
-
-            # 4. Always pass caller if provided (for {% call macro() %})
-            if "caller" in kwargs and "caller" not in used_kwargs:
-                local_ctx["caller"] = kwargs["caller"]
-
-            from .engine import render_template_string
-
-            return SafeString(render_template_string(m_body, local_ctx))
-
-        return macro_fn
-
-    for macro_name, body, param_names, param_defaults, varargs, varkw in parsed:
-        all_macros[macro_name] = _make_macro(
-            body, param_names, param_defaults, varargs, varkw
+        macro_name, body, raw_params = match.group(1), match.group(3), match.group(2).strip()
+        param_names, param_defaults, varargs, varkw = parse_macro_params(raw_params)
+        all_macros[macro_name] = make_macro(
+            body, param_names, param_defaults, varargs, varkw,
+            sibling_lookup=all_macros, parent_ctx=parent_ctx,
         )
-
     return {n: all_macros[n] for n in names if n in all_macros}
+
+
+# ── Inheritance pipeline ────────────────────────────────────────────
+
+
+def _resolve_extends_path(text: str, root_dir) -> Optional[str]:
+    extends_match = _RE_EXTENDS.search(text)
+    if not extends_match:
+        return None
+    return search_template_path(root_dir, extends_match.group(1))
+
+
+def _handle_inheritance(text: str, root_dir, depth: int = 0) -> str:
+    if depth > 5:
+        return text
+    parent_path = _resolve_extends_path(text, root_dir)
+    if parent_path is None:
+        if _RE_EXTENDS.search(text):
+            return (
+                f"<!-- Inheritance Error: "
+                f"{_RE_EXTENDS.search(text).group(1)} not found in search paths -->"
+            )
+        return text
+    parent_text = read_template_file(parent_path)
+    if parent_text is None:
+        return "<!-- Inheritance Error: template file too large or unreadable -->"
+    return _merge_parent_with_child(text, parent_text, root_dir, depth)
+
+
+def _merge_parent_with_child(text: str, parent_text: str, root_dir, depth: int) -> str:
+    child_logic = _collect_child_orphan_logic(text)
+    child_blocks = extract_child_blocks(text, _RE_BLOCK_OPEN, _RE_BLOCK_CLOSE)
+    parent_text = _splice_child_blocks_into_parent(parent_text, child_blocks)
+    if child_logic:
+        parent_text = child_logic + "\n" + parent_text
+    return _handle_inheritance(parent_text, root_dir, depth + 1)
+
+
+def _collect_child_orphan_logic(text: str) -> str:
+    outside_text = ""
+    last_pos = 0
+    for start, end in sorted(top_level_block_ranges(text, _RE_BLOCK_OPEN, _RE_BLOCK_CLOSE)):
+        outside_text += text[last_pos:start]
+        last_pos = end
+    outside_text += text[last_pos:]
+    return "\n".join(extract_child_orphans(outside_text, _RE_TOKENS))
+
+
+def _splice_child_blocks_into_parent(parent_text: str, child_blocks: dict[str, str]) -> str:
+    replacements = _collect_parent_block_replacements(parent_text)
+    for full_start, full_end, name, content_start, content_end in sorted(
+        replacements, key=lambda x: x[0], reverse=True
+    ):
+        content = child_blocks.get(name, parent_text[content_start:content_end])
+        replacement = f"{{% block {name} %}}{content}{{% endblock %}}"
+        parent_text = parent_text[:full_start] + replacement + parent_text[full_end:]
+    return parent_text
+
+
+def _collect_parent_block_replacements(parent_text: str):
+    out = []
+    for m in _RE_BLOCK_OPEN.finditer(parent_text):
+        name = m.group(1)
+        start = m.end()
+        close = find_block_close(parent_text, start, _RE_BLOCK_OPEN, _RE_BLOCK_CLOSE)
+        if close:
+            content_end, full_end = close
+            out.append((m.start(), full_end, name, start, content_end))
+    return out
+
+
+# ── Block marker injection ──────────────────────────────────────────
+
+
+_SKIP_MARKER_BLOCKS = {"title", "description", "styles", "scripts"}
+
+
+def _inject_block_markers(template_string: str) -> str:
+    replacements = []
+    for open_match in _RE_BLOCK_OPEN.finditer(template_string):
+        block_name = open_match.group(1)
+        close = find_block_close(
+            template_string, open_match.end(), _RE_BLOCK_OPEN, _RE_BLOCK_CLOSE
+        )
+        if close is None:
+            continue
+        _, close_end = close
+        if not _should_inject_block_marker(template_string, open_match.start(), block_name):
+            continue
+        replacements.append((open_match.start(), f"<!-- block:{block_name}:start -->"))
+        replacements.append((close_end, f"<!-- block:{block_name}:end -->"))
+    return _apply_marker_inserts(template_string, replacements)
+
+
+def _should_inject_block_marker(
+    template_string: str, start_pos: int, block_name: str
+) -> bool:
+    if block_name in _SKIP_MARKER_BLOCKS:
+        return False
+    return not is_inside_no_comment_tag(template_string[:start_pos])
+
+
+def _apply_marker_inserts(template_string: str, replacements) -> str:
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    for start, marker in replacements:
+        template_string = template_string[:start] + marker + template_string[start:]
+    return template_string
+
+
+# ── Include handling ───────────────────────────────────────────────
+
+
+def _handle_includes(text: str, root_dir, depth: int = 0) -> str:
+    if depth > 5:
+        return text
+
+    def replace_include(match: re.Match[str]) -> str:
+        return _resolve_include(match.group(1).strip("'\""), root_dir, depth)
+
+    return _RE_INCLUDE.sub(replace_include, text)
+
+
+def _resolve_include(inc_path: str, root_dir, depth: int) -> str:
+    search_path = search_template_path(root_dir, inc_path)
+    if not search_path:
+        return f"<!-- Include Error: {inc_path} not found -->"
+    content = read_template_file(search_path)
+    if content is None:
+        return "<!-- Include Error: file too large or unreadable -->"
+    # Mask before recursing so an `{% include %}` example sitting inside the
+    # included file's own HTML comment can't re-trigger expansion.
+    content, stash = _mask_html_comments(content)
+    expanded = _handle_includes(content, root_dir, depth + 1)
+    return _restore_html_comments(expanded, stash)
+
+
+# ── Component, filter, autoescape blocks ───────────────────────────
+
+
+def _handle_components(text: str) -> str:
+    while _RE_COMPONENT.search(text):
+        text = _RE_COMPONENT.sub(_replace_component, text)
+    return text
+
+
+def _replace_component(match: re.Match[str]) -> str:
+    name = match.group(1).strip()
+    args = match.group(2).strip().strip(",").strip()
+    content = match.group(3)
+    safe_content = escape_template_literal(content)
+    comma = ", " if args else ""
+    return f'{{{{ component("{name}"{comma}{args}, slot="{safe_content}") }}}}'
+
+
+def _replace_filter_block(m: re.Match[str]) -> str:
+    filter_chain = m.group(1)
+    safe_content = escape_template_literal(m.group(2))
+    return f'{{{{ "{safe_content}"|{filter_chain} }}}}'
+
+
+def _replace_autoescape_block(m: re.Match[str]) -> str:
+    enabled = m.group(1) == "true"
+    content = m.group(2)
+    if enabled:
+        return content
+    return re.sub(r"\{\{[^}]+\}\}", _add_safe_filter, content)
+
+
+def _add_safe_filter(var_match: re.Match[str]) -> str:
+    expr = var_match.group(0)[2:-2].strip()
+    if "|safe" in expr or expr.endswith("|safe"):
+        return var_match.group(0)
+    return f"{{{{ {expr}|safe }}}}"
+
+
+def _neutralize_raw(m: re.Match[str]) -> str:
+    return m.group(1).replace("{{", "&#123;&#123;").replace("{%", "&#123;&#37;")
+
+
+# ── Macro import handling ──────────────────────────────────────────
+
+
+def _process_from_imports(template_string: str, context: dict[str, Any], root_dir) -> None:
+    for m in _RE_FROM_IMPORT.finditer(template_string):
+        _apply_from_import(m, context, root_dir)
+
+
+def _apply_from_import(m, context: dict[str, Any], root_dir) -> None:
+    try:
+        full_path = _safe_resolve(root_dir or os.getcwd(), m.group(1))
+    except ValueError:
+        return
+    if not os.path.exists(full_path):
+        return
+    names = [n.strip() for n in m.group(2).split(",")]
+    context.update(_extract_macros(full_path, names, parent_ctx=context))
+
+
+def _process_namespace_imports(
+    template_string: str, context: dict[str, Any], root_dir
+) -> None:
+    for m in _RE_IMPORT_AS.finditer(template_string):
+        macro_file = m.group(1)
+        namespace_name = m.group(2)
+        try:
+            full_path = _safe_resolve(root_dir or os.getcwd(), macro_file)
+        except ValueError:
+            continue
+        if not os.path.exists(full_path):
+            continue
+        all_macro_names = _get_all_macro_names(full_path)
+        imported = _extract_macros(full_path, all_macro_names, parent_ctx=context)
+        context[namespace_name] = type("Namespace", (), imported)()
+
+
+def _register_inline_macros(template_string: str, context: dict[str, Any]) -> str:
+    for match in _RE_MACRO.finditer(template_string):
+        macro_name, body, raw_params = match.group(1), match.group(3), match.group(2).strip()
+        param_names, param_defaults, varargs, varkw = parse_macro_params(raw_params)
+        context[macro_name] = make_macro(
+            body, param_names, param_defaults, varargs, varkw,
+            sibling_lookup=None, parent_ctx=context,
+        )
+    return _RE_MACRO.sub("", template_string)
+
+
+# ── Main entry point ───────────────────────────────────────────────
 
 
 def _preprocess(
@@ -205,512 +375,39 @@ def _preprocess(
     """Resolve inheritance, includes, macros, and strip comments.
 
     Args:
-        inject_markers: If True, replaces block tags with HTML comment markers
-                       for data-block targeting without IDs
+        inject_markers: replace block tags with HTML comment markers so the
+            client can target ``data-block`` regions without needing IDs.
 
-    Returns the fully pre-processed template string (still contains
-    {% block %} tags so callers can extract individual blocks).
+    Returns the fully pre-processed template (still contains ``{% block %}``
+    tags so callers can extract individual blocks if needed).
     """
+    template_string, _html_comments = _mask_html_comments(template_string)
+    template_string = _handle_inheritance(template_string, root_dir)
+    template_string = _apply_block_strategy(template_string, strip_blocks, inject_markers)
+    template_string = _handle_includes(template_string, root_dir)
+    template_string = _handle_components(template_string)
+    if context is not None:
+        _process_from_imports(template_string, context, root_dir)
+    template_string = _RE_FROM_IMPORT.sub("", template_string)
+    if context is not None:
+        _process_namespace_imports(template_string, context, root_dir)
+    template_string = _RE_IMPORT_AS.sub("", template_string)
+    template_string = _RE_FILTER_BLOCK.sub(_replace_filter_block, template_string)
+    template_string = _RE_AUTOESCAPE_BLOCK.sub(_replace_autoescape_block, template_string)
+    template_string = _RE_COMMENT.sub("", template_string)
+    template_string = _RE_RAW.sub(_neutralize_raw, template_string)
+    if context is not None:
+        template_string = _register_inline_macros(template_string, context)
+    template_string = _restore_html_comments(template_string, _html_comments)
+    return template_string
 
-    # 1. Handle Inheritance (Extends & Block)
-    def handle_inheritance(text: str, depth: int = 0) -> str:
-        if depth > 5:
-            return text
 
-        extends_match = _RE_EXTENDS.search(text)
-        if not extends_match:
-            return text
-
-        parent_path = extends_match.group(1)
-        # Determine search directories
-        if isinstance(root_dir, (list, tuple)):
-            search_dirs = root_dir
-        else:
-            search_dirs = [root_dir or os.getcwd()]
-
-        full_parent_path = None
-        for base_dir in search_dirs:
-            base = base_dir if os.path.isabs(base_dir) else os.path.abspath(base_dir)
-            try:
-                cand_path = _safe_resolve(base, parent_path)
-            except ValueError:
-                continue
-
-            # Check candidates
-            for ext in ("", ".html", ".asok"):
-                test_path = cand_path + ext if ext else cand_path
-                if os.path.isfile(test_path):
-                    full_parent_path = test_path
-                    break
-
-            if not full_parent_path:
-                # Try swapping ext
-                base_path, current_ext = os.path.splitext(cand_path)
-                if current_ext == ".html" and os.path.exists(base_path + ".asok"):
-                    full_parent_path = base_path + ".asok"
-                elif current_ext == ".asok" and os.path.exists(base_path + ".html"):
-                    full_parent_path = base_path + ".html"
-
-            if full_parent_path and os.path.isfile(full_parent_path):
-                break
-
-        if not full_parent_path:
-            return f"<!-- Inheritance Error: {parent_path} not found in search paths -->"
-
-        # SECURITY: Limit template file size to prevent DoS (max 1MB)
-        try:
-            file_size = os.path.getsize(full_parent_path)
-            if file_size > 1_000_000:
-                return "<!-- Inheritance Error: template file too large -->"
-        except OSError:
-            return "<!-- Inheritance Error: cannot read template -->"
-
-        with open(full_parent_path, "r", encoding="utf-8") as f:
-            parent_text = f.read()
-
-        # Nesting-aware extraction of functional tags outside blocks
-        outside_text = ""
-        block_ranges = []
-        for open_match in _RE_BLOCK_OPEN.finditer(text):
-            start = open_match.start()
-            # If this block is already inside a previously found block, skip it
-            if any(r[0] <= start < r[1] for r in block_ranges):
-                continue
-
-            # Find matching endblock
-            depth_inner = 1
-            pos = open_match.end()
-            while depth_inner > 0:
-                nxt_open = _RE_BLOCK_OPEN.search(text, pos)
-                nxt_close = _RE_BLOCK_CLOSE.search(text, pos)
-                if nxt_close is None:
-                    break
-                if nxt_open and nxt_open.start() < nxt_close.start():
-                    depth_inner += 1
-                    pos = nxt_open.end()
-                else:
-                    depth_inner -= 1
-                    if depth_inner == 0:
-                        block_ranges.append((start, nxt_close.end()))
-                        break
-                    pos = nxt_close.end()
-
-        # Build outside_text by joining gaps between top-level blocks
-        last_pos = 0
-        for start, end in sorted(block_ranges):
-            outside_text += text[last_pos:start]
-            last_pos = end
-        outside_text += text[last_pos:]
-
-        child_orphans = []
-        for m in _RE_TOKENS.finditer(outside_text):
-            tag = m.group(0)
-            if not any(
-                tag.strip().startswith(p)
-                for p in [
-                    "{%- extends",
-                    "{% extends",
-                    "{%- block",
-                    "{% block",
-                    "{%- endblock",
-                    "{% endblock",
-                ]
-            ):
-                child_orphans.append(tag)
-
-        child_logic = "\n".join(child_orphans)
-
-        child_blocks = {}
-        # Nesting-aware block extraction
-        for open_match in _RE_BLOCK_OPEN.finditer(text):
-            name = open_match.group(1)
-            if name in child_blocks:
-                continue  # already found
-            start = open_match.end()
-            depth_inner = 1
-            pos = start
-            while depth_inner > 0:
-                nxt_open = _RE_BLOCK_OPEN.search(text, pos)
-                nxt_close = _RE_BLOCK_CLOSE.search(text, pos)
-                if nxt_close is None:
-                    break
-                if nxt_open and nxt_open.start() < nxt_close.start():
-                    depth_inner += 1
-                    pos = nxt_open.end()
-                else:
-                    depth_inner -= 1
-                    if depth_inner == 0:
-                        child_blocks[name] = text[start : nxt_close.start()]
-                        break
-                    pos = nxt_close.end()
-
-        # Nesting-aware block replacement in parent
-        blocks_to_replace = []
-        for m in _RE_BLOCK_OPEN.finditer(parent_text):
-            name = m.group(1)
-            start = m.end()
-            depth_inner = 1
-            pos = start
-            while depth_inner > 0:
-                nxt_open = _RE_BLOCK_OPEN.search(parent_text, pos)
-                nxt_close = _RE_BLOCK_CLOSE.search(parent_text, pos)
-                if nxt_close is None:
-                    break
-                if nxt_open and nxt_open.start() < nxt_close.start():
-                    depth_inner += 1
-                    pos = nxt_open.end()
-                else:
-                    depth_inner -= 1
-                    if depth_inner == 0:
-                        blocks_to_replace.append(
-                            (m.start(), nxt_close.end(), name, start, nxt_close.start())
-                        )
-                        break
-                    pos = nxt_close.end()
-
-        # Sort blocks by start position descending to handle nested blocks correctly
-        # and keep string offsets valid during replacement.
-        for full_start, full_end, name, content_start, content_end in sorted(
-            blocks_to_replace, key=lambda x: x[0], reverse=True
-        ):
-            content = child_blocks.get(name, parent_text[content_start:content_end])
-            replacement = f"{{% block {name} %}}{content}{{% endblock %}}"
-            parent_text = (
-                parent_text[:full_start] + replacement + parent_text[full_end:]
-            )
-        if child_logic:
-            parent_text = child_logic + "\n" + parent_text
-        return handle_inheritance(parent_text, depth + 1)
-
-    template_string = handle_inheritance(template_string)
-
-    # 1.5. Optional block tag stripping or marker injection
+def _apply_block_strategy(
+    template_string: str, strip_blocks: bool, inject_markers: bool
+) -> str:
     if inject_markers:
-        # Replace block tags with HTML comment markers for data-block targeting
-        # Use nesting-aware replacement to match opening and closing tags
-        replacements = []
-        for open_match in _RE_BLOCK_OPEN.finditer(template_string):
-            block_name = open_match.group(1)
-            start_pos = open_match.start()
-            end_pos = open_match.end()
-
-            # Find the matching endblock (nesting-aware)
-            depth = 1
-            pos = end_pos
-            close_start = None
-            close_end = None
-            while depth > 0:
-                next_open = _RE_BLOCK_OPEN.search(template_string, pos)
-                next_close = _RE_BLOCK_CLOSE.search(template_string, pos)
-                if next_close is None:
-                    break
-                if next_open and next_open.start() < next_close.start():
-                    depth += 1
-                    pos = next_open.end()
-                else:
-                    depth -= 1
-                    if depth == 0:
-                        close_start = next_close.start()
-                        close_end = next_close.end()
-                    pos = next_close.end()
-
-            if close_start is not None:
-                # Inject markers BEFORE the opening tag and AFTER the closing tag
-                # to keep the block tags intact for the Jinja-like renderer.
-                # SECURITY: Skip markers for blocks inside tags where HTML comments are invalid
-
-                # Check if block is inside <style>, <script>, <title>, or <meta name="description">
-                def is_inside_no_comment_tag(text_before: str) -> bool:
-                    """Check if we're inside a tag where HTML comments are invalid."""
-                    # Look for unclosed <style>, <script>, <title> tags before this position
-                    for tag in ["style", "script", "title"]:
-                        # Find last opening tag
-                        last_open = text_before.rfind(f"<{tag}")
-                        if last_open == -1:
-                            continue
-                        # Check if it's been closed
-                        last_close = text_before.rfind(f"</{tag}>", last_open)
-                        if last_close == -1:
-                            # Tag is open, we're inside it
-                            return True
-
-                    # Check for <meta name="description">
-                    if "<meta" in text_before and 'name="description"' in text_before:
-                        # Simplified check - if we see description meta recently, skip
-                        last_meta = text_before.rfind("<meta")
-                        if (
-                            last_meta != -1
-                            and 'name="description"' in text_before[last_meta:]
-                        ):
-                            return True
-
-                    return False
-
-                text_before = template_string[:start_pos]
-                skip_markers = block_name in (
-                    "title",
-                    "description",
-                    "styles",
-                    "scripts",
-                ) or is_inside_no_comment_tag(text_before)
-
-                if not skip_markers:
-                    replacements.append(
-                        (start_pos, start_pos, f"<!-- block:{block_name}:start -->")
-                    )
-                    replacements.append(
-                        (close_end, close_end, f"<!-- block:{block_name}:end -->")
-                    )
-
-        # Apply replacements in descending order of position to preserve offsets
-        replacements.sort(key=lambda x: x[0], reverse=True)
-        for start, end, replacement in replacements:
-            # We use end:end for insertion if start==end, but here we want to keep the original content
-            # so we use template_string[start:end] which is the original tag.
-            template_string = (
-                template_string[:start] + replacement + template_string[start:]
-            )
-    elif strip_blocks:
+        return _inject_block_markers(template_string)
+    if strip_blocks:
         template_string = _RE_BLOCK_OPEN.sub("", template_string)
         template_string = _RE_BLOCK_CLOSE.sub("", template_string)
-
-    # 2. Pre-process includes recursively
-    def handle_includes(text: str, depth: int = 0) -> str:
-        if depth > 5:
-            return text
-
-        def replace_include(match: re.Match[str]) -> str:
-            inc_path = match.group(1).strip("'\"")
-            # Determine search directories
-            if isinstance(root_dir, (list, tuple)):
-                search_dirs = root_dir
-            else:
-                search_dirs = [root_dir or os.getcwd()]
-
-            search_path = None
-            for base_dir in search_dirs:
-                base = base_dir if os.path.isabs(base_dir) else os.path.abspath(base_dir)
-                try:
-                    cand_path = _safe_resolve(base, inc_path)
-                except ValueError:
-                    continue
-
-                for ext in ("", ".html", ".asok"):
-                    test_path = cand_path + ext if ext else cand_path
-                    if os.path.isfile(test_path):
-                        search_path = test_path
-                        break
-
-                if not search_path:
-                    # Try swapping ext
-                    base_path, current_ext = os.path.splitext(cand_path)
-                    if current_ext == ".html" and os.path.exists(base_path + ".asok"):
-                        search_path = base_path + ".asok"
-                    elif current_ext == ".asok" and os.path.exists(base_path + ".html"):
-                        search_path = base_path + ".html"
-
-                if search_path and os.path.isfile(search_path):
-                    break
-
-            if search_path and os.path.exists(search_path):
-                try:
-                    # SECURITY: Limit include file size to prevent DoS (max 1MB)
-                    file_size = os.path.getsize(search_path)
-                    if file_size > 1_000_000:
-                        return "<!-- Include Error: file too large -->"
-
-                    with open(search_path, "r", encoding="utf-8") as f:
-                        return handle_includes(f.read(), depth + 1)
-                except OSError:
-                    return f"<!-- Error reading {inc_path} -->"
-            return f"<!-- Include Error: {inc_path} not found -->"
-
-        return _RE_INCLUDE.sub(replace_include, text)
-
-    template_string = handle_includes(template_string)
-
-    # 3. Pre-process component blocks (Slots)
-    def handle_components(text: str) -> str:
-        def replace_comp(match: re.Match[str]) -> str:
-            name = match.group(1).strip()
-            args = match.group(2).strip()
-            # Clean leading/trailing comma if any
-            args = args.strip(",").strip()
-            content = match.group(3)
-            # Escape content for inclusion in a string literal
-            safe_content = (
-                content.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-            )
-            comma = ", " if args else ""
-            return f'{{{{ component("{name}"{comma}{args}, slot="{safe_content}") }}}}'
-
-        while _RE_COMPONENT.search(text):
-            text = _RE_COMPONENT.sub(replace_comp, text)
-        return text
-
-    template_string = handle_components(template_string)
-
-    # 3. Handle macro imports: {% from "file" import name1, name2 %}
-    if context is not None:
-        for m in _RE_FROM_IMPORT.finditer(template_string):
-            macro_file = m.group(1)
-            names = [n.strip() for n in m.group(2).split(",")]
-            try:
-                full_path = _safe_resolve(root_dir or os.getcwd(), macro_file)
-            except ValueError:
-                continue
-            if os.path.exists(full_path):
-                imported = _extract_macros(full_path, names, parent_ctx=context)
-                context.update(imported)
-    template_string = _RE_FROM_IMPORT.sub("", template_string)
-
-    # 3b. Handle full imports: {% import "file" as namespace %}
-    if context is not None:
-        for m in _RE_IMPORT_AS.finditer(template_string):
-            macro_file = m.group(1)
-            namespace_name = m.group(2)
-            try:
-                full_path = _safe_resolve(root_dir or os.getcwd(), macro_file)
-            except ValueError:
-                continue
-            if os.path.exists(full_path):
-                # Get all macros from the file
-                all_macro_names = _get_all_macro_names(full_path)
-                imported = _extract_macros(
-                    full_path, all_macro_names, parent_ctx=context
-                )
-                # Create a namespace object
-                context[namespace_name] = type("Namespace", (), imported)()
-    template_string = _RE_IMPORT_AS.sub("", template_string)
-
-    # 3c. Handle filter blocks: {% filter upper %}content{% endfilter %}
-    def replace_filter_block(m: re.Match[str]) -> str:
-        filter_chain = m.group(1)
-        content = m.group(2)
-        # Escape content for safe inclusion and apply filter
-        safe_content = (
-            content.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        )
-        return f'{{{{ "{safe_content}"|{filter_chain} }}}}'
-
-    template_string = _RE_FILTER_BLOCK.sub(replace_filter_block, template_string)
-
-    # 3d. Handle autoescape blocks: {% autoescape false %}...{% endautoescape %}
-    def replace_autoescape_block(m: re.Match[str]) -> str:
-        enabled = m.group(1) == "true"
-        content = m.group(2)
-
-        if not enabled:
-            # When autoescape is false, mark all {{ }} as safe
-            # Replace {{ expr }} with {{ expr|safe }}
-            def add_safe_filter(var_match: re.Match[str]) -> str:
-                expr = var_match.group(0)[2:-2].strip()
-                # Don't add |safe if already has it
-                if "|safe" in expr or expr.endswith("|safe"):
-                    return var_match.group(0)
-                return f"{{{{ {expr}|safe }}}}"
-
-            content = re.sub(r"\{\{[^}]+\}\}", add_safe_filter, content)
-
-        return content
-
-    template_string = _RE_AUTOESCAPE_BLOCK.sub(
-        replace_autoescape_block, template_string
-    )
-
-    # 4. Strip comments {# ... #}
-    template_string = _RE_COMMENT.sub("", template_string)
-
-    # 5. Protect {% raw %}...{% endraw %} content by escaping template syntax
-    def _neutralize_raw(m: re.Match[str]) -> str:
-        content = m.group(1)
-        return content.replace("{{", "&#123;&#123;").replace("{%", "&#123;&#37;")
-
-    template_string = _RE_RAW.sub(_neutralize_raw, template_string)
-
-    # 6. Extract inline macros and add them to context
-    if context is not None:
-        for match in _RE_MACRO.finditer(template_string):
-            macro_name = match.group(1)
-            raw_params = match.group(2).strip()
-            body = match.group(3)
-
-            param_names = []
-            param_defaults = {}
-            varargs = None
-            varkw = None
-
-            if raw_params:
-                for param in raw_params.split(","):
-                    param = param.strip()
-                    if not param:
-                        continue
-                    if param.startswith("**"):
-                        varkw = param[2:]
-                    elif param.startswith("*"):
-                        varargs = param[1:]
-                    elif "=" in param:
-                        pname, pdefault = param.split("=", 1)
-                        pname = pname.strip()
-                        param_names.append(pname)
-                        param_defaults[pname] = pdefault.strip()
-                    else:
-                        param_names.append(param)
-
-            # Create the macro function
-            def _make_inline_macro(
-                m_body: str,
-                m_params: list[str],
-                m_defaults: dict[str, str],
-                m_varargs: Optional[str],
-                m_varkw: Optional[str],
-                m_context: Optional[dict[str, Any]],
-            ) -> Any:
-                def macro_fn(*args: Any, **kwargs: Any) -> SafeString:
-                    local_ctx = dict(m_context or {})
-
-                    # Map positional args to named params
-                    used_kwargs = set()
-                    for i, pname in enumerate(m_params):
-                        if i < len(args):
-                            local_ctx[pname] = args[i]
-                        elif pname in kwargs:
-                            local_ctx[pname] = kwargs[pname]
-                            used_kwargs.add(pname)
-                        elif pname in m_defaults:
-                            try:
-                                local_ctx[pname] = ast.literal_eval(m_defaults[pname])
-                            except (ValueError, SyntaxError):
-                                local_ctx[pname] = m_defaults[pname]
-                        else:
-                            local_ctx[pname] = ""
-
-                    # Collect *varargs
-                    if m_varargs:
-                        local_ctx[m_varargs] = args[len(m_params) :]
-
-                    # Collect **varkw
-                    if m_varkw:
-                        remaining = {
-                            k: v for k, v in kwargs.items() if k not in m_params
-                        }
-                        local_ctx[m_varkw] = remaining
-
-                    # Always pass caller if provided (for {% call macro() %})
-                    if "caller" in kwargs and "caller" not in used_kwargs:
-                        local_ctx["caller"] = kwargs["caller"]
-
-                    from .engine import render_template_string
-
-                    return SafeString(render_template_string(m_body, local_ctx))
-
-                return macro_fn
-
-            context[macro_name] = _make_inline_macro(
-                body, param_names, param_defaults, varargs, varkw, context
-            )
-
-        # Remove macro definitions from template
-        template_string = _RE_MACRO.sub("", template_string)
-
     return template_string

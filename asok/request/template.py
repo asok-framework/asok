@@ -20,87 +20,93 @@ T = TypeVar("T")
 class TemplateMixin:
     """Mixin for template rendering, context management and static assets on Request."""
 
-    def _resolve_template(self: Any, filepath: str) -> tuple[str, str]:
-        """Convert a template path to its content and identify the partials root."""
-        root = self.environ.get("asok.root", os.getcwd())
+    _ASOK_DIRECTIVES = [
+        "asok-state", "asok-on:", "asok-text", "asok-show", "asok-hide",
+        "asok-class:", "asok-bind:", "asok-model", "asok-if", "asok-for",
+        "asok-init", "asok-ref", "asok-teleport", "asok-cloak",
+        "asok-fetch", "asok-fetch-async",
+    ]
+
+    def _initial_template_path(self: Any, filepath: str, root: str) -> str:
+        """Build the initial absolute path for a template file."""
         if (
             not os.path.isabs(filepath)
             and not filepath.startswith("src/")
             and hasattr(self, "_current_page_file")
             and self._current_page_file
         ):
-            page_dir = os.path.dirname(self._current_page_file)
-            path = os.path.join(page_dir, filepath)
-        else:
-            path = os.path.join(root, filepath)
+            return os.path.join(os.path.dirname(self._current_page_file), filepath)
+        return os.path.join(root, filepath)
 
-        # Automatic extension resolution if file not found
+    def _swap_extension(path: str) -> str:
+        base_path, current_ext = os.path.splitext(path)
+        target = ".asok" if current_ext == ".html" else (".html" if current_ext == ".asok" else None)
+        if target and os.path.isfile(base_path + target):
+            return base_path + target
+        return path
+
+    def _try_resolve_extensions(path: str) -> str:  # noqa: N805
+        """Attempt to resolve a template path by appending or swapping extensions."""
+        for ext in (".html", ".asok"):
+            if os.path.isfile(path + ext):
+                return path + ext
+        return TemplateMixin._swap_extension(path)
+
+    def _validate_template_name(path: str) -> None:  # noqa: N805
+        """Raise ValueError if a page template has an invalid filename."""
+        normalized = path.replace("\\", "/")
+        is_partial = "/partials/" in normalized or "/html/" in normalized or "/components/" in normalized
+        if is_partial:
+            return
+        basename = os.path.basename(path)
+        if basename not in ("page.html", "page.asok"):
+            raise ValueError(
+                f"Invalid template name: '{basename}'. "
+                f"Page templates must be named 'page.html' or 'page.asok'. "
+                f"This convention ensures code readability and consistency.\n"
+                f"  ✓ Valid: src/pages/contact/page.html\n"
+                f"  ✗ Invalid: src/pages/contact/contact_form.html\n"
+                f"Note: Partials (src/partials/), layouts (src/html/), and components can have any name."
+            )
+
+    def _resolve_template(self: Any, filepath: str) -> tuple[str, Any]:
+        """Convert a template path to its content and identify the partials roots.
+
+        Returns the search roots as a list when third-party extensions register
+        their own ``templates/`` directory, so ``{% include "..." %}`` and
+        ``{% extends "..." %}`` can pull templates from those directories.
+        """
+        root = self.environ.get("asok.root", os.getcwd())
+        path = self._initial_template_path(filepath, root)
+
         if not os.path.isfile(path):
-            # 1. Try appending extensions (for request.html('page'))
-            for ext in (".html", ".asok"):
-                if os.path.isfile(path + ext):
-                    path = path + ext
-                    break
+            path = TemplateMixin._try_resolve_extensions(path)
 
-            # 2. Try swapping extensions if still not found (for request.html('page.html') -> page.asok)
-            if not os.path.isfile(path):
-                base_path, current_ext = os.path.splitext(path)
-                if current_ext == ".html" and os.path.isfile(base_path + ".asok"):
-                    path = base_path + ".asok"
-                elif current_ext == ".asok" and os.path.isfile(base_path + ".html"):
-                    path = base_path + ".html"
+        TemplateMixin._validate_template_name(path)
 
-        # CONVENTION: Enforce strict naming convention for page templates
-        # Only allow 'page.html' or 'page.asok' as template names
-        # Exception: partials (src/partials/), layouts (src/html/), and components can have any name
-        normalized_path = path.replace("\\", "/")
-        is_partial = (
-            "/partials/" in normalized_path
-            or "/html/" in normalized_path
-            or "/components/" in normalized_path
-        )
-
-        if not is_partial:
-            basename = os.path.basename(path)
-            if basename not in ("page.html", "page.asok"):
-                raise ValueError(
-                    f"Invalid template name: '{basename}'. "
-                    f"Page templates must be named 'page.html' or 'page.asok'. "
-                    f"This convention ensures code readability and consistency.\n"
-                    f"  ✓ Valid: src/pages/contact/page.html\n"
-                    f"  ✗ Invalid: src/pages/contact/contact_form.html\n"
-                    f"Note: Partials (src/partials/), layouts (src/html/), and components can have any name."
-                )
-
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+        app = self.environ.get("asok.app")
+        if app:
+            content = app._read_template(path)
+        else:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
 
         # Proactively scan template content for directives to enable the JS engine
-        if any(
-            attr in content
-            for attr in [
-                "asok-state",
-                "asok-on:",
-                "asok-text",
-                "asok-show",
-                "asok-hide",
-                "asok-class:",
-                "asok-bind:",
-                "asok-model",
-                "asok-if",
-                "asok-for",
-                "asok-init",
-                "asok-ref",
-                "asok-teleport",
-                "asok-cloak",
-                "asok-fetch",
-                "asok-fetch-async",
-            ]
-        ):
+        if any(attr in content for attr in TemplateMixin._ASOK_DIRECTIVES):
             self._asok_needs_directives = True
 
-        tpl_root = os.path.join(root, "src/partials")
+        tpl_root = self._template_search_roots(root)
         return content, tpl_root
+
+    def _template_search_roots(self: Any, root: str) -> list[str]:
+        """Project's partials dir first, then any extension templates dir."""
+        roots = [os.path.join(root, "src/partials")]
+        app = self.environ.get("asok.app")
+        ext_paths = getattr(app, "_extension_template_paths", None) or []
+        for p in ext_paths:
+            if p not in roots:
+                roots.append(p)
+        return roots
 
     def share(self: Any, name: str, value: Any = None) -> Union[str, Any]:
         """Set or get a shared variable bound to this request.
@@ -113,6 +119,26 @@ class TemplateMixin:
             return ""
         return self.shared(name)
 
+    def _get_shared_raw_value(self, name: str, cache: dict) -> tuple[Any, bool]:
+        val = cache.get(name)
+        was_in_cache = name in cache
+        if val is not None or was_in_cache:
+            return val, was_in_cache
+
+        app_ref = self.environ.get("asok.app")
+        if not app_ref or name not in getattr(app_ref, "_shared", {}):
+            return None, False
+
+        return app_ref._shared[name], False
+
+    def _resolve_shared_value(self, val: Any) -> Any:
+        from asok.forms import Form
+        if isinstance(val, Form) and getattr(val, "_is_template", False):
+            return val._bind(self)
+        if not isinstance(val, Form) and callable(val):
+            return val(self)
+        return val
+
     def shared(
         self: Any, name: str, expected_type: Optional[Type[T]] = None
     ) -> Union[T, Any]:
@@ -123,28 +149,10 @@ class TemplateMixin:
         Providing an 'expected_type' enables IDE autocompletion for the returned object.
         """
         cache = self.__dict__.setdefault("_shared_cache", {})
+        val, was_in_cache = self._get_shared_raw_value(name, cache)
 
-        # 1. Try to find the value (already cached or in app defaults)
-        val = cache.get(name)
-        was_in_cache = name in cache
+        resolved = self._resolve_shared_value(val)
 
-        if val is None and not was_in_cache:
-            app_ref: Optional[Any] = self.environ.get("asok.app")
-            if not app_ref or name not in getattr(app_ref, "_shared", {}):
-                return None
-            val = app_ref._shared[name]
-
-        # 2. Resolution logic
-        from asok.forms import Form
-
-        resolved = val
-        if isinstance(val, Form) and getattr(val, "_is_template", False):
-            resolved = val._bind(self)
-        elif not isinstance(val, Form) and callable(val):
-            # Resolve callables (functions or Form classes)
-            resolved = val(self)
-
-        # 3. Always update cache with the resolved version to ensure stability
         if resolved is not val or not was_in_cache:
             cache[name] = resolved
 
@@ -158,6 +166,18 @@ class TemplateMixin:
         from asok.forms import Form
 
         return self.shared(name, Form)
+
+    def _inject_shared_vars(self: Any, ctx: dict[str, Any]) -> None:
+        app_ref = self.environ.get("asok.app")
+        if app_ref and getattr(app_ref, "_shared", None):
+            for name in app_ref._shared:
+                try:
+                    ctx[name] = self.shared(name)
+                except Exception:
+                    pass
+        # Inject per-request shared variables (manual share)
+        cache = self.__dict__.get("_shared_cache", {})
+        ctx.update(cache)
 
     def _template_context(self: Any, context: dict[str, Any]) -> dict[str, Any]:
         """Assemble the standard context variables for template rendering."""
@@ -238,42 +258,27 @@ class TemplateMixin:
             return SafeString(str(instance))
 
         ctx["component"] = component
-
-        # Inject all app.share()d variables, bound per-request and cached
-        app_ref = self.environ.get("asok.app")
-        if app_ref and getattr(app_ref, "_shared", None):
-            for name in app_ref._shared:
-                try:
-                    ctx[name] = self.shared(name)
-                except Exception:
-                    pass
-
-        # Inject per-request shared variables (manual share)
-        cache = self.__dict__.get("_shared_cache", {})
-        ctx.update(cache)
-
+        self._inject_shared_vars(ctx)
         ctx.update(context)
         return ctx
+
+    def _render_block_header(self: Any, filepath: str, block_header: str, **context: Any) -> str:
+        names = [b.strip() for b in block_header.split(",")]
+        self._validate_block_names(names)
+        if len(names) == 1:
+            return self.block(filepath, names[0], **context)
+        parts = []
+        for name in names:
+            content = self.block(filepath, name, **context)
+            parts.append(f'<template data-block="{name}">{content}</template>')
+        return "".join(parts)
 
     def html(self: Any, filepath: str, **context: Any) -> str:
         """Render an HTML template and return the result as a string."""
         # Auto-detect block request (from data-block JS swap)
         block_header = self.environ.get("HTTP_X_BLOCK")
         if block_header:
-            names = [b.strip() for b in block_header.split(",")]
-            for name in names:
-                if name.startswith("#"):
-                    raise ValueError(
-                        f"Invalid block name '{name}'. Block names should not include the '#' prefix. "
-                        f"Check your 'data-block' attributes in templates."
-                    )
-            if len(names) == 1:
-                return self.block(filepath, names[0], **context)
-            parts = []
-            for name in names:
-                content = self.block(filepath, name, **context)
-                parts.append(f'<template data-block="{name}">{content}</template>')
-            return "".join(parts)
+            return self._render_block_header(filepath, block_header, **context)
 
         content, tpl_root = self._resolve_template(filepath)
         if not hasattr(self, "_asok_templates"):
@@ -301,6 +306,71 @@ class TemplateMixin:
             inject_block_markers=True,  # Inject markers for data-block targeting
         )
 
+    def _validate_block_names(self: Any, names: list[str]) -> None:
+        """Raise ValueError if any block name starts with '#'."""
+        for name in names:
+            if name and name.startswith("#"):
+                raise ValueError(
+                    f"Invalid block name '{name}'. Use the block name directly without the '#' prefix."
+                )
+
+    def _yield_scoped_css(self: Any, page_id: str) -> Iterator[str]:
+        """Yield a <style> tag with scoped and possibly minified CSS."""
+        if not (self.scoped_assets.get("css") and page_id):
+            return
+        try:
+            from asok.utils.css import scope_css
+            from asok.utils.minify import minify_css
+            with open(self.scoped_assets["css"], "r", encoding="utf-8") as f:
+                raw_css = f.read()
+            scoped_css = scope_css(raw_css, page_id)
+            if not self.environ.get("DEBUG"):
+                scoped_css = minify_css(scoped_css)
+            safe_page_id = html.escape(page_id, quote=True)
+            safe_css = scoped_css.replace("</style>", r"<\/style>")
+            yield f'<style id="asok-scoped-css" data-page-id="{safe_page_id}">{safe_css}</style>'
+        except Exception:
+            pass
+
+    def _yield_scoped_js(self: Any, page_id: Optional[str]) -> Iterator[str]:
+        """Yield a <script> tag with scoped and possibly minified JS."""
+        if not self.scoped_assets.get("js"):
+            return
+        try:
+            from asok.utils.js import scope_js
+            from asok.utils.minify import minify_js
+            with open(self.scoped_assets["js"], "r", encoding="utf-8") as f:
+                raw_js = f.read()
+            scoped_js = scope_js(raw_js, page_id) if page_id else raw_js
+            if not self.environ.get("DEBUG"):
+                scoped_js = minify_js(scoped_js)
+            nonce = getattr(self, "nonce", "")
+            safe_js = scoped_js.replace("</script>", r"<\/script>")
+            yield f"<script id=\"asok-scoped-js\" nonce=\"{nonce}\">(function(){{const init=function(){{{safe_js}}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();}})();</script>"
+        except Exception:
+            pass
+
+    def _yield_block_item(self: Any, name: str, tpl_source: str, tpl_root: str, is_spa_request: bool, **context: Any) -> Iterator[str]:
+        """Yield a single rendered block. Uses 'tpl_source' (not 'content') so that
+        a view calling stream(..., content=html) can pass 'content' through **context
+        as a Jinja2 variable without causing a duplicate-argument TypeError."""
+        if not name:
+            return
+        self._current_block = name
+        tpl_ctx = self._template_context(context)
+        block_html = render_block_string(tpl_source, name, tpl_ctx, root_dir=tpl_root)
+        if is_spa_request:
+            yield f'<template data-block="{name}">{block_html}</template>'
+        else:
+            yield block_html
+
+    def _yield_scoped_assets(self: Any, is_spa_request: bool) -> Iterator[str]:
+        """Yield scoped CSS/JS chunks for SPA block responses."""
+        if is_spa_request and hasattr(self, "scoped_assets"):
+            page_id = getattr(self, "page_id", None)
+            yield from self._yield_scoped_css(page_id)
+            yield from self._yield_scoped_js(page_id)
+
     def _stream_blocks(
         self: Any, filepath: str, block_header: str, **context: Any
     ) -> Iterator[str]:
@@ -310,77 +380,15 @@ class TemplateMixin:
         For normal page loads, returns unwrapped content for better SEO and first paint.
         """
         names = [b.strip() for b in block_header.split(",")]
-        for name in names:
-            if not name:
-                continue
-            if name.startswith("#"):
-                raise ValueError(
-                    f"Invalid block name '{name}'. Use the block name directly without the '#' prefix."
-                )
-        content, tpl_root = self._resolve_template(filepath)
-
-        # Check if this is a genuine SPA block request (has X-Block header)
-        # vs a streaming response that happens to have multiple blocks
+        self._validate_block_names(names)
+        tpl_content, tpl_root = self._resolve_template(filepath)
         is_spa_request = bool(self.environ.get("HTTP_X_BLOCK"))
 
         for name in names:
-            self._current_block = name
-            tpl_ctx = self._template_context(context)
-
-            block_html = render_block_string(content, name, tpl_ctx, root_dir=tpl_root)
-
-            # Only wrap in <template> for actual SPA block requests
-            if is_spa_request:
-                yield f'<template data-block="{name}">{block_html}</template>'
-            else:
-                # For normal page loads, return unwrapped content
-                # This ensures better SEO, accessibility, and first paint
-                yield block_html
+            yield from self._yield_block_item(name, tpl_content, tpl_root, is_spa_request, **context)
 
         # CRITICAL: Include scoped CSS/JS in SPA block responses
-        # This ensures that page-specific styles and scripts are preserved during navigation
-        if is_spa_request and hasattr(self, "scoped_assets"):
-            from asok.utils.css import scope_css
-            from asok.utils.minify import minify_css, minify_js
-
-            page_id = getattr(self, "page_id", None)
-
-            # Include scoped CSS if it exists
-            if self.scoped_assets.get("css") and page_id:
-                try:
-                    with open(self.scoped_assets["css"], "r", encoding="utf-8") as f:
-                        raw_css = f.read()
-                    scoped_css = scope_css(raw_css, page_id)
-                    # Minify in production
-                    if not self.environ.get("DEBUG"):
-                        scoped_css = minify_css(scoped_css)
-                    # SECURITY: Escape page_id for safe HTML attribute injection
-                    # Prevent CSS from breaking </style> tag by replacing it
-
-                    safe_page_id = html.escape(page_id, quote=True)
-                    safe_css = scoped_css.replace("</style>", "<\\/style>")
-                    yield f'<style id="asok-scoped-css" data-page-id="{safe_page_id}">{safe_css}</style>'
-                except Exception:
-                    pass  # Silently fail if CSS can't be loaded
-
-            # Include scoped JS if it exists
-            if self.scoped_assets.get("js"):
-                try:
-                    with open(self.scoped_assets["js"], "r", encoding="utf-8") as f:
-                        raw_js = f.read()
-                    from asok.utils.js import scope_js
-
-                    scoped_js = scope_js(raw_js, page_id) if page_id else raw_js
-                    # Minify in production
-                    if not self.environ.get("DEBUG"):
-                        scoped_js = minify_js(scoped_js)
-                    nonce = getattr(self, "nonce", "")
-                    # SECURITY: Prevent JS from breaking </script> tag
-                    # Replace </script> with <\/script> to avoid premature tag closure
-                    safe_js = scoped_js.replace("</script>", "<\\/script>")
-                    yield f"<script id=\"asok-scoped-js\" nonce=\"{nonce}\">(function(){{const init=function(){{{safe_js}}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();}})();</script>"
-                except Exception:
-                    pass  # Silently fail if JS can't be loaded
+        yield from self._yield_scoped_assets(is_spa_request)
 
     def block(
         self: Any, filepath: str, block_name: Optional[str] = None, **context: Any
@@ -449,67 +457,77 @@ class TemplateMixin:
 
         return "\n".join(parts)
 
+    def _resolve_webp_path(self: Any, filepath: str, root: str) -> str:
+        """Return a WebP variant of the path if one exists on disk."""
+        candidates = [filepath.rsplit(".", 1)[0] + ".webp", filepath + ".webp"]
+        for webp_path in candidates:
+            full_parts = os.path.join(root, "src/partials", webp_path.lstrip("/"))
+            full_uploads = os.path.join(root, "src/partials/uploads", webp_path.lstrip("/"))
+            if os.path.isfile(full_parts) or os.path.isfile(full_uploads):
+                return webp_path
+        return filepath
+
+    def _resolve_min_js(filepath: str, root: str) -> str:  # noqa: N805
+        """Return the minified JS path if a .min.js file exists."""
+        if not filepath.endswith(".js") or filepath.endswith(".min.js"):
+            return filepath
+        min_path = filepath.rsplit(".", 1)[0] + ".min.js"
+        if os.path.isfile(os.path.join(root, "src/partials", min_path.lstrip("/"))):
+            return min_path
+        return filepath
+
+    def _resolve_min_css(filepath: str, root: str) -> str:  # noqa: N805
+        """Return the minified CSS path if a .min.css file exists."""
+        if not filepath.endswith(".css") or filepath.endswith((".min.css", ".build.css")):
+            return filepath
+        min_path = filepath.rsplit(".", 1)[0] + ".min.css"
+        if os.path.isfile(os.path.join(root, "src/partials", min_path.lstrip("/"))):
+            return min_path
+        return filepath
+
+    def _resolve_minified_path(self: Any, filepath: str, app_ref: Any, root: str) -> str:
+        if not app_ref or app_ref.config.get("DEBUG"):
+            return filepath
+        new_path = TemplateMixin._resolve_min_js(filepath, root)
+        if new_path != filepath:
+            return new_path
+        return TemplateMixin._resolve_min_css(filepath, root)
+
+    def _resolve_static_target(self: Any, filepath: str, app_ref: Any, root: str) -> str:
+        """Resolve the best available static asset path (WebP swap or minified)."""
+        if is_image(filepath) and not filepath.endswith(".webp"):
+            return self._resolve_webp_path(filepath, root)
+        return self._resolve_minified_path(filepath, app_ref, root)
+
+    def _build_static_url(target_path: str) -> str:  # noqa: N805
+        """Build the public URL for a static asset, serving from S3 if configured."""
+        if os.environ.get("ASOK_SERVE_STATIC_FROM_S3", "false").lower() != "true":
+            return "/" + target_path.lstrip("/")
+        try:
+            from asok.core.storage import S3Storage, get_storage
+            storage = get_storage()
+            if isinstance(storage, S3Storage):
+                return storage.url(target_path.lstrip("/"))
+        except Exception:
+            pass
+        return "/" + target_path.lstrip("/")
+
+    def _append_static_version(url: str, target_path: str, app_ref: Any) -> str:  # noqa: N805
+        """Append a cache-busting version query param to the static URL."""
+        if not app_ref:
+            return url
+        if not app_ref.config.get("DEBUG"):
+            h = app_ref._static_hash(target_path)
+            if h:
+                return url + f"?v={h}"
+        else:
+            return url + f"?v={int(time.time())}"
+        return url
+
     def static(self: Any, filepath: str) -> str:
         """Return the public URL for a static asset, with versioning/optimization."""
         app_ref: Optional[Any] = self.environ.get("asok.app")
         root = self.environ.get("asok.root", os.getcwd())
-
-        target_path = filepath
-        # Smart WebP Swap
-        if is_image(filepath) and not filepath.endswith(".webp"):
-            # Try both: image.webp and image.jpg.webp
-            webp_candidates = [
-                filepath.rsplit(".", 1)[0] + ".webp",
-                filepath + ".webp",
-            ]
-            for webp_path in webp_candidates:
-                full_parts = os.path.join(root, "src/partials", webp_path.lstrip("/"))
-                full_uploads = os.path.join(
-                    root, "src/partials/uploads", webp_path.lstrip("/")
-                )
-                if os.path.isfile(full_parts) or os.path.isfile(full_uploads):
-                    target_path = webp_path
-                    break
-
-        # Smart Min Swap (JS/CSS)
-        elif app_ref and not app_ref.config.get("DEBUG"):
-            if filepath.endswith(".js") and not filepath.endswith(".min.js"):
-                min_path = filepath.rsplit(".", 1)[0] + ".min.js"
-                # Check if min version exists in parts
-                full_min = os.path.join(root, "src/partials", min_path.lstrip("/"))
-                if os.path.isfile(full_min):
-                    target_path = min_path
-            elif (
-                filepath.endswith(".css")
-                and not filepath.endswith(".min.css")
-                and not filepath.endswith(".build.css")
-            ):
-                min_path = filepath.rsplit(".", 1)[0] + ".min.css"
-                full_min = os.path.join(root, "src/partials", min_path.lstrip("/"))
-                if os.path.isfile(full_min):
-                    target_path = min_path
-
-        serve_s3 = (
-            os.environ.get("ASOK_SERVE_STATIC_FROM_S3", "false").lower() == "true"
-        )
-        if serve_s3:
-            try:
-                from asok.core.storage import S3Storage, get_storage
-
-                storage = get_storage()
-                if isinstance(storage, S3Storage):
-                    url = storage.url(target_path.lstrip("/"))
-                else:
-                    url = "/" + target_path.lstrip("/")
-            except Exception:
-                url = "/" + target_path.lstrip("/")
-        else:
-            url = "/" + target_path.lstrip("/")
-
-        if app_ref and not app_ref.config.get("DEBUG"):
-            h = app_ref._static_hash(target_path)
-            if h:
-                url += f"?v={h}"
-        elif app_ref and app_ref.config.get("DEBUG"):
-            url += f"?v={int(time.time())}"
-        return url
+        target_path = self._resolve_static_target(filepath, app_ref, root)
+        url = TemplateMixin._build_static_url(target_path)
+        return TemplateMixin._append_static_version(url, target_path, app_ref)

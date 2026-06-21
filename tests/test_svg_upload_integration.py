@@ -213,3 +213,32 @@ def test_svg_upload_malformed_raises_error(mock_upload_dir):
         )
 
     assert "sanitization failed" in str(excinfo.value).lower()
+
+
+def test_svg_upload_sanitizes_when_allowed_types_is_none(mock_upload_dir):
+    """Verify that SVG uploads are sanitized even if allowed_types is None, as long as validate is True."""
+    dangerous_svg = b"""<svg xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="40" fill="red"/>
+        <script>alert('XSS')</script>
+    </svg>"""
+
+    file = UploadedFile(
+        filename="test.svg", content=dangerous_svg, content_type="image/svg+xml"
+    )
+
+    # Save to mock directory with allowed_types=None (default) and validate=True (default)
+    saved_path = file.save(
+        "test_none.svg",
+        validate=True,
+        allowed_types=None,
+        secure_filename=False,
+    )
+
+    with open(saved_path, "rb") as f:
+        saved_content = f.read()
+
+    # Verify sanitization occurred
+    assert b"<circle" in saved_content
+    assert b"<script" not in saved_content
+    assert b"alert" not in saved_content
+

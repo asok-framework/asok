@@ -3,7 +3,7 @@ from __future__ import annotations
 import html as _html
 import json
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from ..core import Asok
@@ -25,156 +25,122 @@ class DeveloperToolbar:
         self.config = app.config
         self.base_path = os.path.dirname(__file__)
 
+    def _validate_path_parts(self, parts: tuple) -> bool:
+        """Return True if all path parts are safe (no traversal, valid length)."""
+        for part in parts:
+            if not self._is_safe_part(part):
+                return False
+        return True
+
+    def _is_safe_part(self, part: Any) -> bool:
+        if not isinstance(part, str) or not part:
+            return False
+        if len(part) > 100:
+            return False
+        return self._has_no_traversal_chars(part)
+
+    def _has_no_traversal_chars(self, part: str) -> bool:
+        return ".." not in part and "/" not in part and "\\" not in part
+
+    def _is_within_base(self, path: str) -> bool:
+        """Return True if path resolves to be within self.base_path."""
+        try:
+            abs_base = os.path.abspath(self.base_path)
+            abs_path = os.path.abspath(path)
+            return os.path.commonpath([abs_path, abs_base]) == abs_base
+        except (ValueError, OSError):
+            return False
+
+    def _resolve_min_path(self, parts: tuple) -> tuple:
+        """If the last part is a CSS/JS file, resolve the .min version if it exists."""
+        if not parts:
+            return parts
+        filename = parts[-1]
+        base, ext = os.path.splitext(filename)
+        if base.endswith(".min") or ext not in (".js", ".css"):
+            return parts
+        return self._find_min_file(parts, base, ext)
+
+    def _find_min_file(self, parts: tuple, base: str, ext: str) -> tuple:
+        min_filename = f"{base}.min{ext}"
+        min_parts = list(parts[:-1]) + [min_filename]
+        min_path = os.path.join(self.base_path, *min_parts)
+        if self._is_within_base(min_path) and os.path.exists(min_path):
+            return tuple(min_parts)
+        return parts
+
+    def _validate_file_path(self, path: str) -> bool:
+        if not self._is_within_base(path) or not os.path.exists(path):
+            return False
+        try:
+            return os.path.getsize(path) <= 1_000_000
+        except OSError:
+            return False
+
     def _read_file(self, *parts: str) -> str:
         """Read a file. Package only contains minified files, so always use .min versions for CSS/JS.
 
         SECURITY: Path traversal protection via commonpath validation.
         """
-        # SECURITY: Validate each part to prevent path traversal
-        for part in parts:
-            if not part or not isinstance(part, str):
-                return ""
-            # SECURITY: Block directory traversal attempts
-            if ".." in part or "/" in part or "\\" in part:
-                return ""
-            # SECURITY: Limit part length
-            if len(part) > 100:
-                return ""
+        if not self._validate_path_parts(parts):
+            return ""
 
-        # Convert to minified filename for CSS/JS files
-        if len(parts) > 0:
-            filename = parts[-1]
-            base, ext = os.path.splitext(filename)
-            if not base.endswith(".min") and ext in [".js", ".css"]:
-                min_filename = f"{base}.min{ext}"
-                min_parts = list(parts[:-1]) + [min_filename]
-                min_path = os.path.join(self.base_path, *min_parts)
-
-                # SECURITY: Verify path is within base_path
-                try:
-                    abs_base = os.path.abspath(self.base_path)
-                    abs_min = os.path.abspath(min_path)
-                    if os.path.commonpath([abs_min, abs_base]) != abs_base:
-                        return ""
-                except (ValueError, OSError):
-                    return ""
-
-                if os.path.exists(min_path):
-                    parts = tuple(min_parts)
-
+        parts = self._resolve_min_path(parts)
         path = os.path.join(self.base_path, *parts)
 
-        # SECURITY: Final verification that path is within base_path
-        try:
-            abs_base = os.path.abspath(self.base_path)
-            abs_path = os.path.abspath(path)
-            if os.path.commonpath([abs_path, abs_base]) != abs_base:
-                return ""
-        except (ValueError, OSError):
-            return ""
-
-        if not os.path.exists(path):
-            return ""
-
-        # SECURITY: Limit file size to prevent memory exhaustion (max 1MB)
-        try:
-            if os.path.getsize(path) > 1_000_000:
-                return ""
-        except OSError:
+        if not self._validate_file_path(path):
             return ""
 
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def render(self) -> str:
-        """Render the toolbar by combining templates and assets."""
-        nonce = getattr(self.request, "nonce", "")
+    def _render_sql_row(self, i: int, entry: dict, row_class: str, tc_warn: str, tc_normal: str) -> str:
+        query = entry.get("sql", "")
+        params = entry.get("params", "")
+        duration = entry.get("duration", 0)
 
-        # 1. Collect redirect stats from session
-        redir_stats = None
-        try:
-            if hasattr(self.request, "session"):
-                redir_stats = self.request.session.pop("_asok_redir_stats", None)
-        except Exception:
-            pass
+        if len(query) > 10_000:
+            query = query[:10_000] + "... [truncated]"
+        params_str = str(params)
+        if len(params_str) > 1_000:
+            params_str = params_str[:1_000] + "... [truncated]"
 
-        # 2. Build SQL rows
-        current_sql = getattr(self.request, "_asok_sql_log", [])
-        redir_sql = redir_stats.get("sql_log", []) if redir_stats else []
+        tc = tc_warn if duration > 50 else tc_normal
+        return (
+            f'<tr class="{row_class}">'
+            f'<td style="color:var(--fg-3)">{i + 1}</td>'
+            f"<td>"
+            f'<div class="asok-query-sql">{_html.escape(query)}</div>'
+            f'<div class="asok-query-params">Params: {_html.escape(params_str)}</div>'
+            f"</td>"
+            f'<td style="text-align:right; padding-right:24px"><span class="{tc}">{duration:.2f}ms</span></td>'
+            f"</tr>"
+        )
 
-        # SECURITY: Limit number of SQL queries displayed to prevent DoS
-        MAX_SQL_QUERIES = 1000
-        if len(current_sql) > MAX_SQL_QUERIES:
-            current_sql = current_sql[:MAX_SQL_QUERIES]
-        if len(redir_sql) > MAX_SQL_QUERIES:
-            redir_sql = redir_sql[:MAX_SQL_QUERIES]
+    def _build_redir_sql_rows(self, redir_sql: list, redir_stats: dict) -> str:
+        redir_method = redir_stats.get("method", "")
+        redir_path = redir_stats.get("path", "")
+        q_label = "query" if len(redir_sql) == 1 else "queries"
+        html = (
+            f'<tr class="asok-redir-banner">'
+            f'<td colspan="3">'
+            f"&#8593; REDIRECT FROM&nbsp;"
+            f'<span class="asok-method-badge">{redir_method}</span>'
+            f"&nbsp;{_html.escape(redir_path)}"
+            f"&nbsp;&#x2014;&nbsp;{len(redir_sql)} {q_label}"
+            f"</td></tr>"
+        )
+        for i, entry in enumerate(redir_sql):
+            html += self._render_sql_row(i, entry, "asok-redir-row", "asok-time-slow", "asok-time-warn")
+        return html
 
+    def _build_sql_rows(self, redir_sql: list, current_sql: list, redir_stats: Optional[dict]) -> str:
         sql_rows = ""
-        total_count = 0
+        if redir_sql and redir_stats:
+            sql_rows += self._build_redir_sql_rows(redir_sql, redir_stats)
 
-        # Redirect rows first (amber highlight)
-        if redir_sql:
-            redir_method = redir_stats.get("method", "")
-            redir_path = redir_stats.get("path", "")
-            total_count += len(redir_sql)
-            sql_rows += (
-                f'<tr class="asok-redir-banner">'
-                f'<td colspan="3">'
-                f"&#8593; REDIRECT FROM&nbsp;"
-                f'<span class="asok-method-badge">{redir_method}</span>'
-                f"&nbsp;{_html.escape(redir_path)}"
-                f"&nbsp;&#x2014;&nbsp;{len(redir_sql)} quer{'y' if len(redir_sql) == 1 else 'ies'}"
-                f"</td></tr>"
-            )
-            for i, entry in enumerate(redir_sql):
-                query = entry.get("sql", "")
-                params = entry.get("params", "")
-                duration = entry.get("duration", 0)
-
-                # SECURITY: Limit query and params length to prevent DoS
-                if len(query) > 10_000:
-                    query = query[:10_000] + "... [truncated]"
-                params_str = str(params)
-                if len(params_str) > 1_000:
-                    params_str = params_str[:1_000] + "... [truncated]"
-
-                tc = "asok-time-slow" if duration > 50 else "asok-time-warn"
-                sql_rows += (
-                    f'<tr class="asok-redir-row">'
-                    f'<td style="color:var(--fg-3)">{i + 1}</td>'
-                    f"<td>"
-                    f'<div class="asok-query-sql">{_html.escape(query)}</div>'
-                    f'<div class="asok-query-params">Params: {_html.escape(params_str)}</div>'
-                    f"</td>"
-                    f'<td style="text-align:right; padding-right:24px"><span class="{tc}">{duration:.2f}ms</span></td>'
-                    f"</tr>"
-                )
-
-        # Current request rows
-        total_count += len(current_sql)
         for i, entry in enumerate(current_sql):
-            query = entry.get("sql", "")
-            params = entry.get("params", "")
-            duration = entry.get("duration", 0)
-
-            # SECURITY: Limit query and params length to prevent DoS
-            if len(query) > 10_000:
-                query = query[:10_000] + "... [truncated]"
-            params_str = str(params)
-            if len(params_str) > 1_000:
-                params_str = params_str[:1_000] + "... [truncated]"
-
-            tc = "asok-time-slow" if duration > 50 else "asok-time-fast"
-            sql_rows += (
-                f"<tr>"
-                f'<td style="color:var(--fg-3)">{i + 1}</td>'
-                f"<td>"
-                f'<div class="asok-query-sql">{_html.escape(query)}</div>'
-                f'<div class="asok-query-params">Params: {_html.escape(params_str)}</div>'
-                f"</td>"
-                f'<td style="text-align:right; padding-right:24px"><span class="{tc}">{duration:.2f}ms</span></td>'
-                f"</tr>"
-            )
+            sql_rows += self._render_sql_row(i, entry, "", "asok-time-slow", "asok-time-fast")
 
         if not sql_rows:
             sql_rows = (
@@ -185,11 +151,11 @@ class DeveloperToolbar:
                 "</div>"
                 "</td></tr>"
             )
+        return sql_rows
 
-        # 3. Session data
+    def _build_session_data(self) -> tuple[str, int]:
         try:
             session_dict = dict(self.request.session)
-            # SECURITY: Limit session dict size to prevent DoS
             if len(session_dict) > 1000:
                 session_dict = {
                     "error": f"Too many keys ({len(session_dict)}), display limited"
@@ -199,7 +165,6 @@ class DeveloperToolbar:
 
         try:
             session_json = json.dumps(session_dict, indent=2)
-            # SECURITY: Limit JSON size to prevent DoS
             if len(session_json) > 100_000:
                 session_json = json.dumps(
                     {"error": "Session data too large to display"}, indent=2
@@ -210,19 +175,22 @@ class DeveloperToolbar:
                 json.dumps({"error": "Could not serialize session"}, indent=2)
             )
 
-        session_keys = len(session_dict)
+        return session_data, len(session_dict)
 
-        # 4. Request data
+    def _get_request_payload(self, req_info: dict) -> None:
+        try:
+            if self.request.content_type == "application/json":
+                req_info["JSON Payload"] = self.request.json
+        except Exception:
+            pass
+
+    def _build_request_data(self) -> str:
         try:
             req_info = {
                 "URL Parameters": dict(self.request.args),
                 "Body / Payload": dict(self.request.form),
             }
-            try:
-                if self.request.content_type == "application/json":
-                    req_info["JSON Payload"] = self.request.json
-            except Exception:
-                pass
+            self._get_request_payload(req_info)
             req_info.update(
                 {
                     "Cookies": dict(self.request.cookies_dict),
@@ -230,48 +198,47 @@ class DeveloperToolbar:
                 }
             )
 
-            # SECURITY: Limit request data size
             req_json = json.dumps(req_info, indent=2)
             if len(req_json) > 100_000:
                 req_json = json.dumps(
                     {"error": "Request data too large to display"}, indent=2
                 )
-            request_data = _html.escape(req_json)
+            return _html.escape(req_json)
         except (TypeError, ValueError) as e:
-            request_data = _html.escape(
+            return _html.escape(
                 json.dumps(
                     {"error": f"Could not serialize request data: {str(e)}"}, indent=2
                 )
             )
         except Exception:
-            request_data = _html.escape(
+            return _html.escape(
                 json.dumps({"error": "Could not serialize request data"}, indent=2)
             )
 
-        # 5. Redirect info block for Request tab
-        redir_info_html = ""
-        if redir_stats:
-            rm = redir_stats.get("method", "")
-            rp = redir_stats.get("path", "")
-            ra = redir_stats.get("args", {})
-            rf = redir_stats.get("form", {})
-            prev = {}
-            if ra:
-                prev["Query Parameters"] = ra
-            if rf:
-                prev["Body / Payload"] = rf
-            redir_info_html = (
-                f'<div class="asok-redir-block">'
-                f'<div class="asok-redir-block-header">'
-                f"&#8593; Previous Request &mdash; "
-                f'<span class="asok-method-badge" style="background:rgba(217,119,6,0.3);color:var(--warn-fg);">{rm}</span>'
-                f"&nbsp;{_html.escape(rp)}"
-                f"</div>"
-                f"<pre>{_html.escape(json.dumps(prev, indent=2))}</pre>"
-                f"</div>"
-            )
+    def _build_redir_info_html(self, redir_stats: Optional[dict]) -> str:
+        if not redir_stats:
+            return ""
+        rm = redir_stats.get("method", "")
+        rp = redir_stats.get("path", "")
+        ra = redir_stats.get("args", {})
+        rf = redir_stats.get("form", {})
+        prev = {}
+        if ra:
+            prev["Query Parameters"] = ra
+        if rf:
+            prev["Body / Payload"] = rf
+        return (
+            f'<div class="asok-redir-block">'
+            f'<div class="asok-redir-block-header">'
+            f"&#8593; Previous Request &mdash; "
+            f'<span class="asok-method-badge" style="background:rgba(217,119,6,0.3);color:var(--warn-fg);">{rm}</span>'
+            f"&nbsp;{_html.escape(rp)}"
+            f"</div>"
+            f"<pre>{_html.escape(json.dumps(prev, indent=2))}</pre>"
+            f"</div>"
+        )
 
-        # 6. Templates info
+    def _build_template_data(self) -> tuple[str, str]:
         tpl_list = getattr(self.request, "_asok_templates", [])
         blk_list = getattr(self.request, "_asok_blocks", [])
         tpl_info = {
@@ -280,10 +247,43 @@ class DeveloperToolbar:
             "Partial Blocks": blk_list,
             "WS Components": [],
         }
-        tpl_json = json.dumps(tpl_info)
-        tpl_data = _html.escape(json.dumps(tpl_info, indent=2))
+        return json.dumps(tpl_info), json.dumps(tpl_info, indent=2)
 
-        # 7. Load assets and assemble
+    def _get_redir_stats(self) -> Optional[dict]:
+        try:
+            if hasattr(self.request, "session"):
+                return self.request.session.pop("_asok_redir_stats", None)
+        except Exception:
+            pass
+        return None
+
+    def _get_pruned_sql_logs(self, redir_stats: Optional[dict]) -> tuple[list, list]:
+        current_sql = getattr(self.request, "_asok_sql_log", [])
+        redir_sql = redir_stats.get("sql_log", []) if redir_stats else []
+
+        MAX_SQL_QUERIES = 1000
+        if len(current_sql) > MAX_SQL_QUERIES:
+            current_sql = current_sql[:MAX_SQL_QUERIES]
+        if len(redir_sql) > MAX_SQL_QUERIES:
+            redir_sql = redir_sql[:MAX_SQL_QUERIES]
+        return redir_sql, current_sql
+
+    def render(self) -> str:
+        """Render the toolbar by combining templates and assets."""
+        nonce = getattr(self.request, "nonce", "")
+        redir_stats = self._get_redir_stats()
+        redir_sql, current_sql = self._get_pruned_sql_logs(redir_stats)
+
+        sql_rows = self._build_sql_rows(redir_sql, current_sql, redir_stats)
+        total_count = len(redir_sql) + len(current_sql)
+
+        session_data, session_keys = self._build_session_data()
+        request_data = self._build_request_data()
+        redir_info_html = self._build_redir_info_html(redir_stats)
+
+        tpl_json, tpl_raw_data = self._build_template_data()
+        tpl_data = _html.escape(tpl_raw_data)
+
         css = self._read_file("static", "toolbar.css")
         js = self._read_file("static", "toolbar.js")
         template = self._read_file("templates", "toolbar.html")
@@ -309,19 +309,17 @@ class DeveloperToolbar:
 
         return content
 
+    def _is_eligible_for_injection(self, html_content: str) -> bool:
+        if not html_content or len(html_content) > 10_000_000:
+            return False
+        return "</body>" in html_content
+
     def inject(self, html_content: str) -> str:
         """Inject the toolbar into the HTML response.
 
         SECURITY: Size limits prevent DoS via extremely large HTML.
         """
-        if not html_content:
-            return html_content
-
-        # SECURITY: Skip injection if HTML is too large (max 10MB)
-        if len(html_content) > 10_000_000:
-            return html_content
-
-        if "</body>" not in html_content:
+        if not self._is_eligible_for_injection(html_content):
             return html_content
 
         try:

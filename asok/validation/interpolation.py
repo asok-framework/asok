@@ -44,57 +44,88 @@ def _interpolate(
 ) -> str:
     """Interpolate placeholders in error messages with contextual values.
 
-    Supports both generic {arg} and specific placeholders like {min}, {max}, {field}, etc.
-    This allows for more natural, user-friendly error messages.
+    Supports {arg} and specific placeholders like {min}, {max}, {field}, etc.
 
     Examples:
         "Minimum {min} characters" with rule "min:5" → "Minimum 5 characters"
-        "Must be between {min} and {max}" with "between:10,20" → "Must be between 10 and 20"
         "{field} must match {other}" with field="password" → "Password must match password_confirm"
     """
     if not arg and not field:
         return text
+    placeholders = _build_placeholders(field, arg)
+    _RULE_PLACEHOLDERS.get(rule_name, lambda *_: None)(arg, placeholders)
+    for key, value in placeholders.items():
+        text = text.replace(f"{{{key}}}", str(value))
+    return text
 
-    placeholders = {}
 
-    # Always include generic {arg} for backward compatibility
+def _build_placeholders(field, arg) -> dict[str, str]:
+    placeholders: dict[str, str] = {}
     if arg:
         placeholders["arg"] = str(arg)
-
-    # Add field name placeholders
     if field:
         placeholders["field"] = field.replace("_", " ").title()
         placeholders["name"] = field.replace("_", " ")
+    return placeholders
 
-    # Add rule-specific placeholders
-    if rule_name == "min" and arg:
-        placeholders["min"] = str(arg)
-    elif rule_name == "max" and arg:
-        placeholders["max"] = str(arg)
-    elif rule_name == "between" and arg:
-        try:
-            parts = str(arg).split(",")
-            if len(parts) == 2:
-                placeholders["min"] = parts[0].strip()
-                placeholders["max"] = parts[1].strip()
-                placeholders["between"] = str(arg)
-        except Exception:
-            pass
-    elif rule_name == "ext" and arg:
-        placeholders["extensions"] = str(arg)
-        placeholders["ext"] = str(arg)
-    elif rule_name == "size" and arg:
-        placeholders["size"] = str(arg)
-    elif rule_name == "same" and arg:
-        placeholders["other"] = arg.replace("_", " ").title()
-    elif rule_name == "in" and arg:
-        placeholders["values"] = str(arg)
-        placeholders["in"] = str(arg)
-    elif rule_name == "digits" and arg:
-        placeholders["digits"] = str(arg)
 
-    # Replace all placeholders in the text
-    for key, value in placeholders.items():
-        text = text.replace(f"{{{key}}}", str(value))
+def _rule_min(arg, p):
+    if arg:
+        p["min"] = str(arg)
 
-    return text
+
+def _rule_max(arg, p):
+    if arg:
+        p["max"] = str(arg)
+
+
+def _rule_between(arg, p):
+    if not arg:
+        return
+    try:
+        parts = str(arg).split(",")
+    except Exception:
+        return
+    if len(parts) == 2:
+        p["min"] = parts[0].strip()
+        p["max"] = parts[1].strip()
+        p["between"] = str(arg)
+
+
+def _rule_ext(arg, p):
+    if arg:
+        p["extensions"] = str(arg)
+        p["ext"] = str(arg)
+
+
+def _rule_size(arg, p):
+    if arg:
+        p["size"] = str(arg)
+
+
+def _rule_same(arg, p):
+    if arg:
+        p["other"] = arg.replace("_", " ").title()
+
+
+def _rule_in(arg, p):
+    if arg:
+        p["values"] = str(arg)
+        p["in"] = str(arg)
+
+
+def _rule_digits(arg, p):
+    if arg:
+        p["digits"] = str(arg)
+
+
+_RULE_PLACEHOLDERS = {
+    "min": _rule_min,
+    "max": _rule_max,
+    "between": _rule_between,
+    "ext": _rule_ext,
+    "size": _rule_size,
+    "same": _rule_same,
+    "in": _rule_in,
+    "digits": _rule_digits,
+}

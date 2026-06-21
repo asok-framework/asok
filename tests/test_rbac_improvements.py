@@ -32,6 +32,11 @@ def app():
     app = Asok()
     app.config.update({"SECRET_KEY": "test-secret", "AUTH_MODEL": "User"})
 
+    # Ensure correct models are in the registry after Asok() setup has run
+    from asok.orm import MODELS_REGISTRY
+    MODELS_REGISTRY["User"] = User
+    MODELS_REGISTRY["Role"] = Role
+
     # Create tables
     User.create_table()
     Role.create_table()
@@ -143,7 +148,7 @@ class TestRoleSelfProtection:
         _, admin = app
 
         # Create user and roles
-        user = User(email="test@example.com", password="password123")
+        user = User(email="test@example.com", password="password123", is_admin=True)
         user.save()
 
         role1 = Role(name="editor", label="Editor", permissions="posts.view,posts.edit")
@@ -177,7 +182,7 @@ class TestRoleSelfProtection:
         _, admin = app
 
         # Create user and role
-        user = User(email="test@example.com", password="password123")
+        user = User(email="test@example.com", password="password123", is_admin=True)
         user.save()
 
         role = Role(name="editor", label="Editor", permissions="posts.view,posts.edit")
@@ -211,6 +216,37 @@ class TestRoleSelfProtection:
         user_roles = user.roles
         assert len(user_roles) == 1
         assert user_roles[0].id == role.id
+
+    def test_regular_user_cannot_change_own_roles(self, app, client):
+        """Test that a regular user without roles.edit or is_admin cannot change/escalate their own roles."""
+        _, admin = app
+
+        # Create user and roles
+        user = User(email="test@example.com", password="password123", is_admin=False)
+        user.save()
+
+        role1 = Role(name="editor", label="Editor", permissions="posts.view,posts.edit")
+        role1.save()
+
+        role2 = Role(name="viewer", label="Viewer", permissions="posts.view")
+        role2.save()
+
+        # Assign role1
+        user.sync("roles", [role1.id])
+
+        # Mock request where user attempts to change their role to role2 (or role1 + role2)
+        request = MagicMock()
+        request.user = user
+        request.form = {"m2m_roles": f"{role1.id},{role2.id}"}
+        request.flash = MagicMock()
+
+        # Simulate sync (should be blocked by _is_role_sync_authorized returning False)
+        admin._sync_m2m(request, User, user)
+
+        # Verify roles did not change
+        user_roles = user.roles
+        assert len(user_roles) == 1
+        assert user_roles[0].id == role1.id
 
     def test_other_users_can_have_roles_removed(self, app, client):
         """Test that admins can remove all roles from other users."""

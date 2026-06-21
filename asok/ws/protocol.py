@@ -35,42 +35,55 @@ def _parse_http_request(
     Returns (path, headers_dict) or (None, None).
     SECURITY: Limits request header size to 16KB to prevent DoS.
     """
+    raw = _read_http_header_block(sock)
+    if raw is None:
+        return None, None
+    head = raw.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
+    lines = head.split("\r\n")
+    path = _parse_request_line(lines[0])
+    if path is None:
+        return None, None
+    headers = _parse_header_lines(lines[1:])
+    return path, headers
+
+
+def _read_http_header_block(sock: socket.socket) -> Optional[bytes]:
     data = b""
     while b"\r\n\r\n" not in data:
         try:
             chunk = sock.recv(4096)
         except socket.timeout:
-            return None, None
+            return None
         if not chunk:
-            return None, None
+            return None
         data += chunk
-        # SECURITY: Limit total header size to prevent memory exhaustion
         if len(data) > 16384:
-            return None, None
-    head = data.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
-    lines = head.split("\r\n")
+            return None
+    return data
+
+
+def _parse_request_line(line: str) -> Optional[str]:
     try:
-        method, path, _ = lines[0].split(" ", 2)
+        method, path, _ = line.split(" ", 2)
     except ValueError:
-        return None, None
-    if method != "GET":
-        return None, None
+        return None
+    if method != "GET" or len(path) > 2000:
+        return None
+    return path
 
-    # SECURITY: Validate path length and format
-    if len(path) > 2000:
-        return None, None
 
-    headers = {}
-    for line in lines[1:]:
-        if ":" in line:
-            k, v = line.split(":", 1)
-            key = k.strip().lower()
-            value = v.strip()
-            # SECURITY: Limit header value length to prevent DoS
-            if len(key) > 100 or len(value) > 8000:
-                continue
-            headers[key] = value
-    return path, headers
+def _parse_header_lines(lines) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for line in lines:
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        key = k.strip().lower()
+        value = v.strip()
+        if len(key) > 100 or len(value) > 8000:
+            continue
+        headers[key] = value
+    return headers
 
 
 def _handshake_response(client_key: str) -> bytes:
@@ -113,33 +126,45 @@ def _recv_frame(sock: socket.socket) -> tuple[Optional[int], Optional[bytes]]:
     header = _recv_exact(sock, 2)
     if not header:
         return None, None
-    b0, b1 = header[0], header[1]
-    opcode = b0 & 0x0F
-    masked = b1 >> 7
-    length = b1 & 0x7F
-    if length == 126:
-        ext = _recv_exact(sock, 2)
-        if not ext:
-            return None, None
-        length = struct.unpack(">H", ext)[0]
-    elif length == 127:
-        ext = _recv_exact(sock, 8)
-        if not ext:
-            return None, None
-        length = struct.unpack(">Q", ext)[0]
-    if length > _MAX_FRAME_SIZE:
+    opcode = header[0] & 0x0F
+    masked = header[1] >> 7
+    length = _read_frame_length(sock, header[1] & 0x7F)
+    if length is None or length > _MAX_FRAME_SIZE:
         return None, None
-    mask_key = b""
-    if masked:
-        mask_key = _recv_exact(sock, 4)
-        if not mask_key:
-            return None, None
-    payload = _recv_exact(sock, length) if length else b""
+    payload = _read_frame_payload(sock, masked, length)
     if payload is None:
         return None, None
-    if masked:
-        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
     return opcode, payload
+
+
+def _read_frame_payload(sock: socket.socket, masked: int, length: int) -> Optional[bytes]:
+    mask_key = _read_mask_key(sock, masked)
+    if mask_key is None:
+        return None
+    payload = _recv_exact(sock, length) if length else b""
+    if payload is None:
+        return None
+    return _unmask_payload(payload, mask_key) if masked else payload
+
+
+def _read_mask_key(sock: socket.socket, masked: int) -> Optional[bytes]:
+    if not masked:
+        return b""
+    return _recv_exact(sock, 4) or None
+
+
+def _unmask_payload(payload: bytes, mask_key: bytes) -> bytes:
+    return bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+
+def _read_frame_length(sock: socket.socket, length: int) -> Optional[int]:
+    if length == 126:
+        ext = _recv_exact(sock, 2)
+        return struct.unpack(">H", ext)[0] if ext else None
+    if length == 127:
+        ext = _recv_exact(sock, 8)
+        return struct.unpack(">Q", ext)[0] if ext else None
+    return length
 
 
 def _send_frame(sock: socket.socket, opcode: int, payload: Union[str, bytes]) -> bool:
@@ -149,21 +174,19 @@ def _send_frame(sock: socket.socket, opcode: int, payload: Union[str, bytes]) ->
     """
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
-
-    # SECURITY: Enforce max frame size on outgoing frames too
     if len(payload) > _MAX_FRAME_SIZE:
         return False
-
-    header = bytes([0x80 | opcode])
-    n = len(payload)
-    if n < 126:
-        header += bytes([n])
-    elif n <= 65535:
-        header += bytes([126]) + struct.pack(">H", n)
-    else:
-        header += bytes([127]) + struct.pack(">Q", n)
+    header = bytes([0x80 | opcode]) + _encode_frame_length(len(payload))
     try:
         sock.sendall(header + payload)
         return True
     except OSError:
         return False
+
+
+def _encode_frame_length(n: int) -> bytes:
+    if n < 126:
+        return bytes([n])
+    if n <= 65535:
+        return bytes([126]) + struct.pack(">H", n)
+    return bytes([127]) + struct.pack(">Q", n)

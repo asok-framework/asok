@@ -38,6 +38,19 @@ class LogMixin:
                 ]
         return out
 
+    def _create_log_entry(self, AdminLog: Any, user_id: Any, action: str, entity: str, entity_id: Any, changes: Any) -> None:
+        try:
+            log = AdminLog()
+            log.user_id = user_id
+            log.action = action
+            log.entity = entity
+            log.entity_id = entity_id
+            if changes:
+                log.changes = json.dumps(changes)
+            log.save()
+        except Exception:
+            pass
+
     def _log(
         self,
         request: Any,
@@ -50,20 +63,8 @@ class LogMixin:
         AdminLog = MODELS_REGISTRY.get("AdminLog")
         if not AdminLog:
             return
-        try:
-            log = AdminLog()
-            log.user_id = getattr(request.user, "id", None) if request.user else None
-            log.action = action
-            log.entity = entity
-            log.entity_id = entity_id
-            if changes:
-                log.changes = json.dumps(changes)
-            try:
-                log.save()
-            except Exception:
-                pass
-        except Exception:
-            pass
+        user_id = getattr(request.user, "id", None) if request.user else None
+        self._create_log_entry(AdminLog, user_id, action, entity, entity_id, changes)
 
     def _recent_logs(self, limit: int = 10) -> list[Any]:
         AdminLog = MODELS_REGISTRY.get("AdminLog")
@@ -74,64 +75,91 @@ class LogMixin:
         except Exception:
             return []
 
+    def _fetch_log_rows(self, AdminLog: Any, entry: dict[str, Any], item: Any) -> list:
+        """Fetch audit log rows for a specific entity and item."""
+        try:
+            return (
+                AdminLog.query()
+                .where("entity", entry["model"].__name__)
+                .where("entity_id", item.id)
+                .order_by("-id")
+                .limit(200)
+                .get()
+            )
+        except Exception:
+            return []
+
+    def _cache_log_user(self, User: Any, user_id: Any, user_cache: dict) -> None:
+        if not User or user_id in user_cache:
+            return
+        u = User.find(id=user_id)
+        user_cache[user_id] = _display(u) if u else f"#{user_id}"
+
+    def _build_user_cache(self, rows: list) -> dict:
+        """Build a {user_id: display_name} cache from log rows."""
+        auth_name = self.app.config.get("AUTH_MODEL", "User")
+        User = MODELS_REGISTRY.get(auth_name)
+        user_cache = {}
+        for log in rows:
+            if log.user_id:
+                self._cache_log_user(User, log.user_id, user_cache)
+        return user_cache
+
+    def _format_parsed_changes(self, parsed: dict) -> list:
+        changes = []
+        for k, v in parsed.items():
+            if isinstance(v, list) and len(v) == 2:
+                changes.append({"field": k, "old": v[0], "new": v[1]})
+            else:
+                changes.append({"field": k, "old": "", "new": str(v)})
+        return changes
+
+    def _parse_log_changes(self, raw: str) -> list:
+        """Parse a JSON changes blob into a list of {field, old, new} dicts."""
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return self._format_parsed_changes(parsed)
+        except Exception:
+            pass
+        return []
+
+    def _get_history_entries(self, rows: list, user_cache: dict) -> list[dict]:
+        entries = []
+        for log in rows:
+            label = "—"
+            if log.user_id:
+                label = user_cache.get(log.user_id, f"#{log.user_id}")
+            changes = self._parse_log_changes(log.changes or "")
+            entries.append({
+                "id": log.id,
+                "when": log.created_at,
+                "who": label,
+                "action": log.action,
+                "changes": changes,
+            })
+        return entries
+
+    def _can_view_history(self, request: Any, slug: str) -> bool:
+        return self._can(request, "logs", "view") or self._can(request, slug, "edit")
+
     def _history(self, request: Any, entry: dict[str, Any], item: Any) -> Any:
         """Show the audit-log timeline for a single object."""
-        if not self._can(request, "logs", "view") and not self._can(
-            request, entry["slug"], "edit"
-        ):
+        if not self._can_view_history(request, entry["slug"]):
             return self._forbid(request)
         AdminLog = MODELS_REGISTRY.get("AdminLog")
         entries = []
         if AdminLog:
-            try:
-                rows = (
-                    AdminLog.query()
-                    .where("entity", entry["model"].__name__)
-                    .where("entity_id", item.id)
-                    .order_by("-id")
-                    .limit(200)
-                    .get()
-                )
-            except Exception:
-                rows = []
-            auth_name = self.app.config.get("AUTH_MODEL", "User")
-            User = MODELS_REGISTRY.get(auth_name)
-            user_cache = {}
-            for log in rows:
-                label = "—"
-                if log.user_id:
-                    if log.user_id not in user_cache and User:
-                        u = User.find(id=log.user_id)
-                        user_cache[log.user_id] = (
-                            _display(u) if u else f"#{log.user_id}"
-                        )
-                    label = user_cache.get(log.user_id, f"#{log.user_id}")
-                changes = []
-                raw = log.changes or ""
-                if raw:
-                    try:
-                        parsed = json.loads(raw)
-                        if isinstance(parsed, dict):
-                            for k, v in parsed.items():
-                                if isinstance(v, list) and len(v) == 2:
-                                    changes.append(
-                                        {"field": k, "old": v[0], "new": v[1]}
-                                    )
-                                else:
-                                    changes.append(
-                                        {"field": k, "old": "", "new": str(v)}
-                                    )
-                    except Exception:
-                        pass
-                entries.append(
-                    {
-                        "id": log.id,
-                        "when": log.created_at,
-                        "who": label,
-                        "action": log.action,
-                        "changes": changes,
-                    }
-                )
+            rows = self._fetch_log_rows(AdminLog, entry, item)
+            user_cache = self._build_user_cache(rows)
+            entries = self._get_history_entries(rows, user_cache)
+
+        label = _display(item)
+        if not label:
+            label = f"#{item.id}"
+
         return self._render(
             request,
             "history.html",
@@ -144,7 +172,7 @@ class LogMixin:
                 {"label": "Dashboard", "url": self.prefix},
                 {"label": entry["label"], "url": self.prefix + "/" + entry["slug"]},
                 {
-                    "label": _display(item) or f"#{item.id}",
+                    "label": label,
                     "url": self.prefix + "/" + entry["slug"] + "/" + str(item.id),
                 },
                 {"label": "History", "url": None},

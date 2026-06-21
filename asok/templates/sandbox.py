@@ -45,110 +45,113 @@ _DANGEROUS_ATTRS = frozenset(
 )
 
 
+_BLOCKED_TEMPLATE_KEYS = frozenset({"eval", "exec", "compile", "open", "__import__"})
+_DANGEROUS_CALL_KEYS = frozenset({"eval", "exec", "compile", "execfile"})
+
+
 def _get(obj: Any, key: Union[str, int]) -> Any:
     """Access an attribute or dictionary/list key, favoring attributes for strings.
 
-    Returns an empty string if the key/attribute is not found or the object is not subscriptsable.
+    Returns an empty string if the key/attribute is not found or the object is
+    not subscriptable.
     """
     if isinstance(key, str):
-        # SECURITY: Block access to dangerous attributes that enable sandbox escape
-        if key in _DANGEROUS_ATTRS:
+        if _is_blocked_string_key(key):
             return ""
-
-        # SECURITY: Block access to dunder attributes entirely
-        if key.startswith("__") and key.endswith("__"):
-            return ""
-
-        # SECURITY: Block access to potentially dangerous methods
-        if key in ("eval", "exec", "compile", "open", "__import__"):
-            return ""
-
-        # SECURITY: Block single-underscore attributes unless whitelisted.
-        # Return empty string for compatibility with existing templates.
-        if key.startswith("_") and key not in _TEMPLATE_SAFE_ATTRS:
-            return ""
-        try:
-            result = getattr(obj, key)
-            # SECURITY: Block access to methods that could lead to code execution
-            if callable(result) and key in ("eval", "exec", "compile", "execfile"):
-                return ""
+        result = _safe_getattr(obj, key)
+        if result is not _ATTR_MISS:
             return result
-        except (AttributeError, TypeError):
-            pass
+    return _safe_subscript(obj, key)
 
+
+_ATTR_MISS = object()
+
+
+def _is_blocked_string_key(key: str) -> bool:
+    # SECURITY: filter introspection attrs, dunders, and dangerous symbol names.
+    if key in _DANGEROUS_ATTRS or key in _BLOCKED_TEMPLATE_KEYS:
+        return True
+    if _is_dunder(key):
+        return True
+    return _is_private_unsafe(key)
+
+
+def _is_dunder(key: str) -> bool:
+    return key.startswith("__") and key.endswith("__")
+
+
+def _is_private_unsafe(key: str) -> bool:
+    return key.startswith("_") and key not in _TEMPLATE_SAFE_ATTRS
+
+
+def _safe_getattr(obj: Any, key: str) -> Any:
+    try:
+        result = getattr(obj, key)
+    except (AttributeError, TypeError):
+        return _ATTR_MISS
+    # SECURITY: never expose callables matching well-known code-exec helpers.
+    if callable(result) and key in _DANGEROUS_CALL_KEYS:
+        return ""
+    return result
+
+
+def _safe_subscript(obj: Any, key: Union[str, int]) -> Any:
     try:
         return obj[key]
     except (KeyError, TypeError, IndexError):
         return ""
 
 
+_BLOCKED_BUILTINS = frozenset({
+    "eval", "exec", "compile", "execfile", "__import__", "open",
+    "type", "vars", "dir", "globals", "locals",
+    "getattr", "setattr", "delattr", "hasattr", "__builtins__",
+})
+
+_ALLOWED_BUILTINS = frozenset({
+    "range", "len", "dict", "str", "int", "float", "list", "enumerate",
+    "bool", "abs", "min", "max", "sum", "sorted", "reversed",
+})
+
+_LITERAL_ALIASES = {"true": True, "false": False, "none": None}
+
+
 def _resolve_name(context: dict[str, Any], name: str, is_debug: bool = False) -> Any:
     """Safely resolve a non-dotted name from context or builtins.
 
-    SECURITY: Only explicitly whitelisted builtins are allowed.
-    Dangerous functions (eval, exec, compile, __import__, open, type, etc.) are blocked
-    when attempting to access them as builtins, but user-defined variables with these
-    names in the context are allowed.
+    SECURITY: only an explicit allow-list of builtins is exposed. User-defined
+    variables in ``context`` still take precedence even if their name shadows a
+    blocked builtin.
     """
-    # Check context first - user-defined variables take precedence
     if name in context:
         return context[name]
+    builtin_val = _resolve_builtin(name, is_debug)
+    if builtin_val is not _NAME_MISS:
+        return builtin_val
+    # Match the production behaviour in dev too: an unknown name renders as
+    # an empty string instead of raising. Without this, helpers like
+    # ``providers|default([...])`` and ``providers is defined`` can't run
+    # because the strict NameError fires before the filter/test executes —
+    # making optional template parameters impossible in DEBUG=True.
+    return ""
 
-    # SECURITY: Block dangerous builtin names explicitly
-    # Only checked for builtins - not for user variables in context
-    if name in (
-        "eval",
-        "exec",
-        "compile",
-        "execfile",
-        "__import__",
-        "open",
-        "type",
-        "vars",
-        "dir",
-        "globals",
-        "locals",
-        "getattr",
-        "setattr",
-        "delattr",
-        "hasattr",
-        "__builtins__",
-    ):
-        if is_debug:
-            raise NameError(
-                f"Access to builtin '{name}' is forbidden in templates for security reasons."
-            )
-        return ""
 
-    # SECURITY: Explicitly allowed builtins only - minimal safe set for templates
-    if name in (
-        "range",
-        "len",
-        "dict",
-        "str",
-        "int",
-        "float",
-        "list",
-        "enumerate",
-        "bool",
-        "abs",
-        "min",
-        "max",
-        "sum",
-        "sorted",
-        "reversed",
-    ):
+_NAME_MISS = object()
+
+
+def _resolve_builtin(name: str, is_debug: bool) -> Any:
+    if name in _BLOCKED_BUILTINS:
+        return _blocked_builtin(name, is_debug)
+    if name in _ALLOWED_BUILTINS:
         return getattr(builtins, name)
+    if name in _LITERAL_ALIASES:
+        return _LITERAL_ALIASES[name]
+    return _NAME_MISS
 
-    # ALIASES for common lowercase constants (Jinja2-like)
-    if name == "true":
-        return True
-    if name == "false":
-        return False
-    if name == "none":
-        return None
 
+def _blocked_builtin(name: str, is_debug: bool) -> str:
     if is_debug:
-        raise NameError(f"Variable '{name}' is not defined in template context.")
-
+        raise NameError(
+            f"Access to builtin '{name}' is forbidden in templates for security reasons."
+        )
     return ""

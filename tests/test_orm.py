@@ -33,6 +33,17 @@ class Post(Model):
     published = Field.Boolean(default=False)
 
 
+class Article(Model):
+    title = Field.SearchableText(max_length=255)
+    body = Field.SearchableText()
+
+
+class SearchableArticle(Model):
+    title = Field.SearchableText(max_length=255)
+    body = Field.SearchableText()
+    deleted_at = Field.SoftDelete()
+
+
 # ---------------------------------------------------------------------------
 # Fixture: fresh temp DB per test
 # ---------------------------------------------------------------------------
@@ -44,13 +55,21 @@ def fresh_db(tmp_path, monkeypatch):
     # Close any existing connections from previous tests
     User.close_connections()
     Post.close_connections()
+    Article.close_connections()
+    SearchableArticle.close_connections()
     monkeypatch.setattr(User, "_db_path", db_path)
     monkeypatch.setattr(Post, "_db_path", db_path)
+    monkeypatch.setattr(Article, "_db_path", db_path)
+    monkeypatch.setattr(SearchableArticle, "_db_path", db_path)
     User.create_table()
     Post.create_table()
+    Article.create_table()
+    SearchableArticle.create_table()
     yield db_path
     User.close_connections()
     Post.close_connections()
+    Article.close_connections()
+    SearchableArticle.close_connections()
 
 
 # ---------------------------------------------------------------------------
@@ -404,3 +423,63 @@ class TestEnvVarDbPath:
         EnvModel.create(name="Hello Env")
         assert EnvModel.count() == 1
         EnvModel.close_connections()
+
+
+class TestFTS:
+    def test_search_finds_matching_records(self):
+        Article.create(title="Introduction to Python", body="Python is a great programming language.")
+        Article.create(title="Advanced Java", body="Java is widely used in enterprise software.")
+        Article.create(title="Web Development", body="Learn HTML, CSS, JavaScript and Python.")
+
+        # Search for Python (should match Python in title or body)
+        results = Article.query().search("Python").get()
+        assert len(results) == 2
+        titles = {r.title for r in results}
+        assert "Introduction to Python" in titles
+        assert "Web Development" in titles
+        assert "Advanced Java" not in titles
+
+        # Search for Java
+        results_java = Article.query().search("Java").get()
+        assert len(results_java) == 2
+        titles_java = {r.title for r in results_java}
+        assert "Advanced Java" in titles_java
+        assert "Web Development" in titles_java
+
+        # Search for a term that does not exist
+        results_none = Article.query().search("Cobol").get()
+        assert len(results_none) == 0
+
+    def test_search_with_soft_delete(self):
+        SearchableArticle.create(title="Introduction to Python", body="Python is a great programming language.")
+        a2 = SearchableArticle.create(title="Advanced Python", body="Python is widely used in enterprise software.")
+
+        # Soft delete the second article
+        a2.delete()
+
+        # Search for Python should only return the active one
+        results = SearchableArticle.search("Python")
+        assert len(results) == 1
+        assert results[0].title == "Introduction to Python"
+
+    def test_query_search_prefix_consistency(self):
+        Article.create(title="Introduction to Python", body="Python is a great programming language.")
+
+        # Checking if Pyth matches Python via both methods
+        results_model = Article.search("Pyth")
+        assert len(results_model) == 1
+
+        results_query = Article.query().search("Pyth").get()
+        assert len(results_query) == 1
+
+    def test_search_syntax_errors(self):
+        Article.create(title="Introduction to Python", body="Python is a great programming language.")
+
+        # Passing invalid FTS syntax terms
+        # This shouldn't crash the application
+        res1 = Article.search("Python OR")
+        assert len(res1) == 0
+
+        res2 = Article.query().search("Python OR").get()
+        assert len(res2) == 0
+

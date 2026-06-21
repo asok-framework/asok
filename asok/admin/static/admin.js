@@ -68,9 +68,18 @@
         const zone = document.getElementById('flash-zone');
         if (!zone) return;
 
+        // Prevent showing duplicate toast messages (e.g. during AJAX redirects)
+        const existing = Array.from(zone.querySelectorAll('.flash-msg')).some(msg => {
+            const text = msg.querySelector('span')?.textContent || '';
+            const msgType = ['success','error','warning','info'].find(t => msg.classList.contains(t)) || 'info';
+            return text.trim() === message.trim() && msgType === type;
+        });
+        if (existing) return;
+
         const msg = document.createElement('div');
         msg.className = `flash-msg ${type}`;
         msg.setAttribute('data-ttl', ttl);
+        msg.dataset.asokInit = 'true';
 
         let iconSvg = '';
         if (type === 'success') iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -91,7 +100,7 @@
         const method = config.method || el.getAttribute('data-method') || (el.tagName === 'FORM' ? el.getAttribute('method') : 'GET');
         const target = config.target || el.getAttribute('data-target') || el.getAttribute('data-block');
         const swapMode = el.getAttribute('data-swap') || 'innerHTML';
-        const confirmMsg = el.getAttribute('data-confirm');
+        const confirmMsg = config.confirmMsg || el.getAttribute('data-confirm');
 
         if (confirmMsg) {
             const confirmed = await showAlertModal(null, confirmMsg);
@@ -168,6 +177,36 @@
                 // Afficher la page d'erreur au lieu de faire le swap
                 const finalTarget = '#page-body';
                 processResponse(html, finalTarget, 'innerHTML');
+                return;
+            }
+
+            // Handle server-side AJAX redirect: the server returns 200 with
+            // X-Redirect header + flash messages instead of a 302 (which would
+            // lose the flash cookie during fetch redirect).
+            const xRedirect = response.headers.get('X-Redirect');
+            if (xRedirect) {
+                // Extract flash messages from the OOB response body.
+                // Flashes are wrapped in <template data-block="#flash-zone">…</template>
+                // for OOB swap; querySelectorAll does NOT descend into <template>
+                // content (per HTML spec — it lives in a separate DocumentFragment),
+                // so we must explicitly walk template.content.
+                const flashDoc = new DOMParser().parseFromString(html, 'text/html');
+                const pendingFlashes = [];
+                const flashNodes = [];
+                flashDoc.querySelectorAll('template[data-block="#flash-zone"]').forEach(tpl => {
+                    flashNodes.push(...tpl.content.querySelectorAll('.flash-msg'));
+                });
+                flashNodes.push(...flashDoc.querySelectorAll('.flash-msg'));
+                flashNodes.forEach(msg => {
+                    const type = ['success','error','warning','info'].find(t => msg.classList.contains(t)) || 'info';
+                    const text = msg.querySelector('span')?.textContent || '';
+                    if (text) pendingFlashes.push({ type, text });
+                });
+                // Update URL bar and load redirect target via SPA
+                history.pushState({ target: '#page-body', swapMode: 'innerHTML' }, '', xRedirect);
+                await performAction(document.body, { url: xRedirect, method: 'GET', target: '#page-body' });
+                // Show toasts AFTER page loads so they survive flash-zone sync
+                pendingFlashes.forEach(f => window.flash(f.type, f.text));
                 return;
             }
 
@@ -254,6 +293,15 @@
             if (currentNav) currentNav.innerHTML = newNav.innerHTML;
         }
 
+        // Synchronize Flash Zone
+        const newFlashZone = doc.getElementById('flash-zone');
+        if (newFlashZone) {
+            const currentFlashZone = document.getElementById('flash-zone');
+            if (currentFlashZone) {
+                currentFlashZone.innerHTML = newFlashZone.innerHTML;
+            }
+        }
+
         // Re-init newly added content
         initElements(document.body);
         updateBulkBar();
@@ -311,6 +359,9 @@
             btn.style.padding = '0 12px';
             btn.setAttribute('data-toggle', btnId);
             btn.setAttribute('aria-expanded', 'false');
+            if (select.disabled) {
+                btn.disabled = true;
+            }
 
             const label = document.createElement('span');
             label.className = 'custom-select-label';
@@ -333,6 +384,46 @@
             menu.style.zIndex = '100';
             menu.style.maxHeight = '300px';
             menu.style.overflowY = 'auto';
+
+            // If there are many options (> 8), add a sticky search input to filter them
+            if (select.options.length > 8) {
+                const searchWrap = document.createElement('div');
+                searchWrap.className = 'custom-select-search-wrap';
+                searchWrap.style.padding = '8px';
+                searchWrap.style.borderBottom = '1px solid var(--border)';
+                searchWrap.style.position = 'sticky';
+                searchWrap.style.top = '0';
+                searchWrap.style.background = 'var(--surface)';
+                searchWrap.style.zIndex = '10';
+
+                const searchInput = document.createElement('input');
+                searchInput.type = 'text';
+                searchInput.placeholder = 'Search options…';
+                searchInput.className = 'custom-select-search-input';
+                searchInput.style.width = '100%';
+                searchInput.style.padding = '6px 10px';
+                searchInput.style.border = '1px solid var(--border)';
+                searchInput.style.borderRadius = 'var(--r-sm)';
+                searchInput.style.fontSize = '0.825rem';
+                searchInput.style.background = 'var(--surface-2)';
+                searchInput.style.outline = 'none';
+
+                searchWrap.appendChild(searchInput);
+                menu.appendChild(searchWrap);
+
+                searchInput.addEventListener('input', (e) => {
+                    const q = e.target.value.toLowerCase();
+                    menu.querySelectorAll('.custom-opt').forEach(opt => {
+                        const match = opt.textContent.toLowerCase().includes(q);
+                        opt.style.display = match ? 'flex' : 'none';
+                    });
+                });
+                
+                // Prevent click on search input from closing the dropdown menu
+                searchInput.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                });
+            }
 
             Array.from(select.options).forEach((opt, idx) => {
                 const item = document.createElement('div');
@@ -371,6 +462,177 @@
             wrap.appendChild(btn);
             wrap.appendChild(menu);
             select.parentNode.insertBefore(wrap, select.nextSibling);
+        });
+    }
+
+    function initFKAutocomplete(root) {
+        root.querySelectorAll('.fk-autocomplete').forEach(container => {
+            if (container.dataset.customInit) return;
+            container.dataset.customInit = 'true';
+
+            const input = container.querySelector('.fk-ac-input');
+            const hidden = container.querySelector('input[type="hidden"]');
+            const results = container.querySelector('.fk-ac-results');
+            const slug = container.dataset.fkSlug;
+            const adminPrefix = window.adminPrefix || '/admin';
+
+            if (!input || !hidden || !results || !slug) return;
+
+            let debounceTimeout;
+
+            input.addEventListener('input', (e) => {
+                const q = e.target.value.trim();
+                clearTimeout(debounceTimeout);
+
+                if (!q) {
+                    results.setAttribute('hidden', '');
+                    hidden.value = '';
+                    return;
+                }
+
+                debounceTimeout = setTimeout(async () => {
+                    try {
+                        const res = await fetch(`${adminPrefix}/${slug}/lookup?q=${encodeURIComponent(q)}`, {
+                            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                        });
+                        if (!res.ok) throw new Error('Search failed');
+                        const data = await res.json();
+                        
+                        results.innerHTML = '';
+                        if (data.length === 0) {
+                            results.innerHTML = `<div class="fk-ac-empty">No results found</div>`;
+                        } else {
+                            data.forEach(item => {
+                                const div = document.createElement('div');
+                                div.className = 'fk-ac-item';
+                                div.textContent = item.label;
+                                div.addEventListener('click', () => {
+                                    input.value = item.label;
+                                    hidden.value = item.id;
+                                    results.setAttribute('hidden', '');
+                                });
+                                results.appendChild(div);
+                            });
+                        }
+                        results.removeAttribute('hidden');
+                    } catch (err) {
+                        console.error('[Asok] Autocomplete error:', err);
+                    }
+                }, 250);
+            });
+
+            // Close results on click outside
+            document.addEventListener('click', (e) => {
+                if (!container.contains(e.target)) {
+                    results.setAttribute('hidden', '');
+                }
+            });
+        });
+    }
+
+    function initAsokDropdowns(root) {
+        root.querySelectorAll('.asok-dropdown').forEach(dropdown => {
+            if (dropdown.dataset.asokDropdownInit) return;
+            dropdown.dataset.asokDropdownInit = 'true';
+
+            const trigger = dropdown.querySelector('.asok-dropdown-trigger');
+            const menu = dropdown.querySelector('.asok-dropdown-menu');
+            const input = dropdown.querySelector('input[type="hidden"]');
+            const searchInput = dropdown.querySelector('.asok-dropdown-search input');
+            const labelSpan = trigger ? trigger.querySelector('span') : null;
+            const arrowSvg = trigger ? trigger.querySelector('.asok-dropdown-arrow') : null;
+
+            if (!trigger || !menu || !input) return;
+
+            // Initially hide the menu
+            menu.style.display = 'none';
+
+            const toggleMenu = (show) => {
+                if (show === undefined) {
+                    show = menu.style.display === 'none';
+                }
+                if (show) {
+                    menu.style.display = 'block';
+                    trigger.setAttribute('aria-expanded', 'true');
+                    if (arrowSvg) arrowSvg.classList.add('rotate-180');
+                    if (searchInput) {
+                        searchInput.value = '';
+                        searchInput.focus();
+                        dropdown.querySelectorAll('.asok-dropdown-item').forEach(item => {
+                            item.style.display = 'flex';
+                        });
+                    }
+                } else {
+                    menu.style.display = 'none';
+                    trigger.setAttribute('aria-expanded', 'false');
+                    if (arrowSvg) arrowSvg.classList.remove('rotate-180');
+                }
+            };
+
+            trigger.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Close other dropdowns
+                document.querySelectorAll('.asok-dropdown-menu').forEach(otherMenu => {
+                    if (otherMenu !== menu) {
+                        otherMenu.style.display = 'none';
+                        const otherTrigger = otherMenu.closest('.asok-dropdown')?.querySelector('.asok-dropdown-trigger');
+                        if (otherTrigger) otherTrigger.setAttribute('aria-expanded', 'false');
+                        const otherArrow = otherTrigger?.querySelector('.asok-dropdown-arrow');
+                        if (otherArrow) otherArrow.classList.remove('rotate-180');
+                    }
+                });
+                toggleMenu();
+            });
+
+            menu.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+
+            dropdown.querySelectorAll('.asok-dropdown-item').forEach(item => {
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const val = item.getAttribute('data-value');
+                    const title = item.getAttribute('data-title') || item.querySelector('.asok-dropdown-item-title')?.textContent.trim();
+                    
+                    if (val !== null) {
+                        input.value = val;
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    if (title && labelSpan) {
+                        labelSpan.textContent = title;
+                    }
+                    toggleMenu(false);
+                });
+            });
+
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    const q = e.target.value.toLowerCase().trim();
+                    dropdown.querySelectorAll('.asok-dropdown-item').forEach(item => {
+                        const titleEl = item.querySelector('.asok-dropdown-item-title');
+                        const subtitleEl = item.querySelector('.asok-dropdown-item-subtitle');
+                        const titleText = titleEl ? titleEl.textContent.toLowerCase() : '';
+                        const subtitleText = subtitleEl ? subtitleEl.textContent.toLowerCase() : '';
+                        
+                        if (!q || titleText.includes(q) || subtitleText.includes(q)) {
+                            item.style.display = 'flex';
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                });
+
+                searchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleMenu(false);
+                        trigger.focus();
+                    }
+                });
+            }
         });
     }
 
@@ -439,9 +701,20 @@
                 el.addEventListener('submit', (e) => {
                     e.preventDefault();
                     const overrides = {};
-                    if (e.submitter && e.submitter.name) {
-                        overrides.submitterName = e.submitter.name;
-                        overrides.submitterValue = e.submitter.value;
+                    if (e.submitter) {
+                        if (e.submitter.name) {
+                            overrides.submitterName = e.submitter.name;
+                            overrides.submitterValue = e.submitter.value;
+                        }
+                        if (e.submitter.hasAttribute('formaction')) {
+                            overrides.url = e.submitter.getAttribute('formaction');
+                        }
+                        if (e.submitter.hasAttribute('formmethod')) {
+                            overrides.method = e.submitter.getAttribute('formmethod');
+                        }
+                        if (e.submitter.hasAttribute('data-confirm')) {
+                            overrides.confirmMsg = e.submitter.getAttribute('data-confirm');
+                        }
                     }
                     performAction(el, overrides);
                 });
@@ -609,12 +882,34 @@
 
         // Flash dismiss
         root.querySelectorAll('.flash-msg[data-ttl]').forEach(msg => {
+            if (msg.dataset.asokInit) return;
+            msg.dataset.asokInit = 'true';
             const ttl = parseInt(msg.getAttribute('data-ttl')) || 6000;
             dismissFlash(msg, ttl);
         });
 
         // 5. Custom Select Dropdowns
         initCustomSelects(root);
+
+        // 6. M2M Search Filtering
+        root.querySelectorAll('.m2m-search-input').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const q = e.target.value.toLowerCase();
+                const container = input.closest('.form-section');
+                if (!container) return;
+                container.querySelectorAll('.m2m-tile').forEach(tile => {
+                    const text = tile.querySelector('span')?.textContent.toLowerCase() || "";
+                    const match = text.includes(q);
+                    tile.style.display = match ? 'flex' : 'none';
+                });
+            });
+        });
+
+        // 7. FK Autocomplete Dropdowns
+        initFKAutocomplete(root);
+
+        // 8. Asok Dropdowns
+        initAsokDropdowns(root);
     }
 
     /**
@@ -657,6 +952,7 @@
         // 1. Dropdown Toggles
         const toggleBtn = e.target.closest('[data-toggle]');
         if (toggleBtn) {
+            if (toggleBtn.disabled || toggleBtn.hasAttribute('disabled')) return;
             e.preventDefault();
             e.stopPropagation();
             const targetId = toggleBtn.getAttribute('data-toggle');
@@ -715,10 +1011,37 @@
                 if (b) b.setAttribute('aria-expanded', 'false');
             }
         });
+
+        document.querySelectorAll('.asok-dropdown').forEach(d => {
+            if (!d.contains(e.target)) {
+                const menu = d.querySelector('.asok-dropdown-menu');
+                if (menu && menu.style.display !== 'none') {
+                    menu.style.display = 'none';
+                    const trigger = d.querySelector('.asok-dropdown-trigger');
+                    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+                    const arrow = trigger?.querySelector('.asok-dropdown-arrow');
+                    if (arrow) arrow.classList.remove('rotate-180');
+                }
+            }
+        });
     });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') document.querySelectorAll('[data-dropdown]').forEach(d => d.setAttribute('hidden', ''));
+        if (e.key === 'Escape') {
+            document.querySelectorAll('[data-dropdown]').forEach(d => d.setAttribute('hidden', ''));
+            document.querySelectorAll('.asok-dropdown').forEach(d => {
+                const menu = d.querySelector('.asok-dropdown-menu');
+                if (menu && menu.style.display !== 'none') {
+                    menu.style.display = 'none';
+                    const trigger = d.querySelector('.asok-dropdown-trigger');
+                    if (trigger) {
+                        trigger.setAttribute('aria-expanded', 'false');
+                        const arrow = trigger.querySelector('.asok-dropdown-arrow');
+                        if (arrow) arrow.classList.remove('rotate-180');
+                    }
+                }
+            });
+        }
     });
 
     window.addEventListener('popstate', (e) => {

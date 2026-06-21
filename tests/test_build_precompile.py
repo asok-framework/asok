@@ -51,7 +51,9 @@ def test_build_time_directives_precompilation(tmp_path):
     assert 'asok-on:click="clickCount++"' not in transformed_html
 
     # Check that directives_registry.js was generated
-    registry_file_path = os.path.join(build_root, "src", "partials", "js", "directives_registry.js")
+    registry_file_path = os.path.join(
+        build_root, "src", "partials", "js", "directives_registry.js"
+    )
     assert os.path.exists(registry_file_path)
 
     with open(registry_file_path, "r", encoding="utf-8") as f:
@@ -86,7 +88,9 @@ def test_runtime_precompiled_asset_injection(tmp_path):
 
     # Verify app configuration and path setup
     assert app.config.get("DEBUG") is False
-    assert os.path.exists(os.path.join(app._partials_path, "js", "directives_registry.js"))
+    assert os.path.exists(
+        os.path.join(app._partials_path, "js", "directives_registry.js")
+    )
 
     # Mock request and environment
     environ = {
@@ -104,9 +108,7 @@ def test_runtime_precompiled_asset_injection(tmp_path):
 
     # Inject assets
     result_html = app._inject_assets(
-        content=transformed_content,
-        request=request,
-        nonce="test-nonce-csp-entropy"
+        content=transformed_content, request=request, nonce="test-nonce-csp-entropy"
     )
 
     # Ensure runtime precompilation was bypassed (no inline functions generated)
@@ -114,7 +116,10 @@ def test_runtime_precompiled_asset_injection(tmp_path):
     assert "window.__asok_registry = Object.assign" not in result_html
 
     # It should inject a link to the static registry file
-    assert '/js/directives_registry.js?v=' in result_html
+    assert "/js/directives_registry.js?v=" in result_html
     assert 'nonce="test-nonce-csp-entropy"' in result_html
     # It should still include the directives runner script
-    assert "asok_directives.min.js" in request._asok_pending_scripts or "window.AsokDirectives" in result_html
+    assert (
+        "asok_directives.min.js" in request._asok_pending_scripts
+        or "window.AsokDirectives" in result_html
+    )

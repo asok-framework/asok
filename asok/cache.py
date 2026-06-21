@@ -38,7 +38,7 @@ class Cache:
         self._path = path
         self._max_entries = max_entries
         # Use OrderedDict for O(1) LRU eviction (move_to_end + popitem(last=False)).
-        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._store: OrderedDict[str, tuple[Any, Optional[float]]] = OrderedDict()
         self._lock = threading.Lock()
 
         if backend == "file":
@@ -59,7 +59,9 @@ class Cache:
             or os.environ.get("REDIS_URL")
             or "redis://localhost:6379/0"
         )
-        self._redis = redis.Redis.from_url(redis_url)
+        self._redis = redis.Redis.from_url(
+            redis_url, socket_timeout=5.0, socket_connect_timeout=5.0
+        )
 
     def _get_redis_client(self):
         if not hasattr(self, "_redis") or self._redis is None:
@@ -72,17 +74,20 @@ class Cache:
             return self._file_get(key, default)
         elif self.backend == "redis":
             return self._redis_get(key, default)
+        return self._memory_get(key, default)
 
+    def _memory_get(self, key: str, default: Any) -> Any:
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
                 return default
-            if entry["expires"] and time.time() > entry["expires"]:
+            val, expires = entry
+            if expires and time.time() > expires:
                 del self._store[key]
                 return default
             # Move to end to mark as recently used (LRU)
             self._store.move_to_end(key)
-            return entry["value"]
+            return val
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """Store an item in the cache with an optional time-to-live in seconds."""
@@ -92,17 +97,15 @@ class Cache:
             return self._file_set(key, value, expires)
         elif self.backend == "redis":
             return self._redis_set(key, value, ttl)
+        return self._memory_set(key, value, expires)
 
+    def _memory_set(self, key: str, value: Any, expires: Optional[float]) -> None:
         with self._lock:
             if key in self._store:
-                # Update in-place and move to end (most recently used)
                 self._store.move_to_end(key)
-                self._store[key] = {"value": value, "expires": expires}
-            else:
-                self._store[key] = {"value": value, "expires": expires}
-                # Evict least-recently-used entries when limit is exceeded
-                while len(self._store) > self._max_entries:
-                    self._store.popitem(last=False)
+            self._store[key] = (value, expires)
+            while len(self._store) > self._max_entries:
+                self._store.popitem(last=False)
 
     def forget(self, key: str) -> None:
         """Remove a specific key from the cache."""
@@ -188,9 +191,14 @@ class Cache:
         client = self._get_redis_client()
         pattern = self._redis_key("*")
         try:
-            keys = client.keys(pattern)
-            if keys:
-                client.delete(*keys)
+            chunk = []
+            for key in client.scan_iter(match=pattern):
+                chunk.append(key)
+                if len(chunk) >= 500:
+                    client.delete(*chunk)
+                    chunk = []
+            if chunk:
+                client.delete(*chunk)
         except Exception:
             pass
 

@@ -6,6 +6,7 @@ import hmac
 import secrets
 import struct
 import time
+from typing import Any, Optional
 from urllib.parse import quote, urlencode
 
 
@@ -26,17 +27,28 @@ def _totp_at(
     return str(code).zfill(digits)
 
 
-def _totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
-    if not secret_b32 or not code:
-        return False
-    code = "".join(c for c in code if c.isdigit())
-    if len(code) != 6:
-        return False
-    now = int(time.time())
+def _normalize_totp_code(code: str) -> str:
+    res = []
+    for c in code:
+        if c.isdigit():
+            res.append(c)
+    return "".join(res)
+
+
+def _verify_totp_offsets(secret_b32: str, code: str, now: int, window: int) -> bool:
     for offset in range(-window, window + 1):
         if _totp_at(secret_b32, t=now + offset * 30) == code:
             return True
     return False
+
+
+def _totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
+    if not secret_b32 or not code:
+        return False
+    normalized = _normalize_totp_code(code)
+    if len(normalized) != 6:
+        return False
+    return _verify_totp_offsets(secret_b32, normalized, int(time.time()), window)
 
 
 def _totp_new_secret() -> str:
@@ -167,14 +179,28 @@ def _humanize(name: str) -> str:
     return "".join(out) + "s"
 
 
-def _display(obj: any) -> str:
-    if obj is None:
-        return ""
-    s = str(obj)
-    if not s.startswith("<") or "id=" not in s:
-        return s
+def _find_display_attribute(obj: Any) -> Optional[str]:
     for attr in ("name", "title", "label", "email", "username", "slug"):
         v = getattr(obj, attr, None)
         if v:
             return str(v)
+    return None
+
+
+def _is_generic_repr(s: str) -> bool:
+    return s.startswith("<") and "id=" in s
+
+
+def _display(obj: any) -> str:
+    if obj is None:
+        return ""
+    import enum
+    if isinstance(obj, enum.Enum):
+        return str(obj.value)
+    s = str(obj)
+    if not _is_generic_repr(s):
+        return s
+    v = _find_display_attribute(obj)
+    if v:
+        return v
     return f"#{getattr(obj, 'id', '?')}"

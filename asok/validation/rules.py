@@ -87,48 +87,57 @@ def check_max(val: Any, limit: str) -> bool:
 def check_unique(val: Any, model_name: str, field_name: str) -> bool:
     """Check if value is unique in database.
 
-    SECURITY: Validates model and field names to prevent injection.
+    SECURITY: model and field names are validated before reaching the ORM.
     """
-    # SECURITY: Validate model_name format to prevent injection
-    if not model_name or not isinstance(model_name, str):
+    if not _is_valid_unique_ident(model_name) or not _is_valid_unique_field(field_name):
         return False
-    # SECURITY: Validate field_name format to prevent injection
-    if not field_name or not isinstance(field_name, str):
-        return False
-    if not field_name.replace("_", "").isalnum():
+    model = MODELS_REGISTRY.get(model_name)
+    if not model:
+        return True
+    try:
+        return not model.find(**{field_name: val})
+    except (AttributeError, TypeError, ValueError):
         return False
 
-    model = MODELS_REGISTRY.get(model_name)
-    if model:
-        try:
-            return not model.find(**{field_name: val})
-        except (AttributeError, TypeError, ValueError):
-            return False
-    return True
+
+def _is_valid_unique_ident(name: Any) -> bool:
+    return bool(name) and isinstance(name, str)
+
+
+def _is_valid_unique_field(name: Any) -> bool:
+    if not _is_valid_unique_ident(name):
+        return False
+    return name.replace("_", "").isalnum()
 
 
 def check_ext(file: Any, allowed_exts_str: str) -> bool:
     """Check if file has one of the allowed extensions.
 
-    SECURITY: Validates the actual extension (last component after final dot)
-    to prevent double extension attacks like "malicious.php.jpg".
-    Also validates filename to prevent path traversal.
+    SECURITY: only the last segment after the final dot is matched, blocking
+    double-extension bypasses like ``malicious.php.jpg``. Filename is also
+    checked for path traversal.
     """
     if not file:
         return True
     filename = getattr(file, "filename", "").lower()
+    if not _is_valid_ext_filename(filename):
+        return False
+    actual_ext = filename.rsplit(".", 1)[1]
+    allowed = [e.strip().lower() for e in allowed_exts_str.split(",")]
+    return actual_ext in allowed
+
+
+def _is_valid_ext_filename(filename: str) -> bool:
     if not filename or "." not in filename:
         return False
+    return not _has_path_traversal(filename)
 
-    # SECURITY: Prevent path traversal attacks via filename
-    if ".." in filename or "/" in filename or "\\" in filename:
-        return False
 
-    # SECURITY: Extract only the final extension to prevent double extension bypass
-    actual_ext = filename.rsplit(".", 1)[1] if "." in filename else ""
-    allowed_exts = [e.strip().lower() for e in allowed_exts_str.split(",")]
+def _has_path_traversal(filename: str) -> bool:
+    return ".." in filename or "/" in filename or "\\" in filename
 
-    return actual_ext in allowed_exts
+
+_SIZE_UNITS = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}
 
 
 def check_size(file: Any, limit_arg: str) -> bool:
@@ -138,20 +147,22 @@ def check_size(file: Any, limit_arg: str) -> bool:
     """
     if not file:
         return True
-
-    # SECURITY: Validate filename to prevent path traversal
     filename = getattr(file, "filename", "")
-    if filename and (".." in filename or "/" in filename or "\\" in filename):
+    if filename and _has_path_traversal(filename):
         return False
-
-    limit = limit_arg.lower()
-    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
     try:
-        num = float(limit[:-1]) if limit[-1] in units else float(limit)
-        bytes_limit = num * units.get(limit[-1], 1)
-        return len(getattr(file, "content", b"")) <= bytes_limit
+        bytes_limit = _parse_size_limit(limit_arg)
     except (ValueError, OverflowError):
         return True
+    return len(getattr(file, "content", b"")) <= bytes_limit
+
+
+def _parse_size_limit(limit_arg: str) -> float:
+    limit = limit_arg.lower()
+    suffix = limit[-1]
+    if suffix in _SIZE_UNITS:
+        return float(limit[:-1]) * _SIZE_UNITS[suffix]
+    return float(limit)
 
 
 def check_confirmed(val: Any, confirm_val: Any) -> bool:
@@ -199,35 +210,39 @@ def check_numeric(val: Any) -> bool:
 def check_regex(val: Any, pattern_str: str) -> bool:
     """Check if value matches regex pattern.
 
-    SECURITY: Limited cache size prevents DoS via cache exhaustion.
-    Pattern length limits prevent compilation attacks.
+    SECURITY: bounded cache and pattern length prevent compilation/cache DoS.
+    Runtime errors guard against catastrophic backtracking.
     """
     val_str = str(val)
     if not val_str:
         return True
-    if len(val_str) > _MAX_REGEX_INPUT_LENGTH:
+    if len(val_str) > _MAX_REGEX_INPUT_LENGTH or len(pattern_str) > 500:
         return False
+    pattern = _compile_regex_cached(pattern_str)
+    return _safe_regex_match(pattern, val_str)
 
-    # SECURITY: Reject excessively long patterns to prevent compilation DoS
-    if len(pattern_str) > 500:
-        return False
 
-    pattern = _regex_cache.get(pattern_str)
+def _safe_regex_match(pattern, val_str: str) -> bool:
     if pattern is None:
-        try:
-            # SECURITY: Clear cache if it grows too large to prevent memory exhaustion
-            if len(_regex_cache) >= _MAX_REGEX_CACHE_SIZE:
-                _regex_cache.clear()
-            pattern = re.compile(pattern_str)
-            _regex_cache[pattern_str] = pattern
-        except (re.error, OverflowError, RuntimeError):
-            return False
-
+        return False
     try:
         return bool(pattern.match(val_str))
     except (RuntimeError, OverflowError):
-        # SECURITY: Catch catastrophic backtracking at runtime
         return False
+
+
+def _compile_regex_cached(pattern_str: str):
+    pattern = _regex_cache.get(pattern_str)
+    if pattern is not None:
+        return pattern
+    try:
+        if len(_regex_cache) >= _MAX_REGEX_CACHE_SIZE:
+            _regex_cache.clear()
+        pattern = re.compile(pattern_str)
+    except (re.error, OverflowError, RuntimeError):
+        return None
+    _regex_cache[pattern_str] = pattern
+    return pattern
 
 
 def check_url(val: Any) -> bool:
@@ -266,15 +281,18 @@ def check_date(val: Any) -> bool:
 def check_required_if(val: Any, other_val: Any, expected: str) -> bool:
     """Check if field is required when other field matches expected value.
 
-    SECURITY: Length limits prevent DoS via extremely long comparison strings.
+    SECURITY: cap comparison-string length to bound CPU.
     """
-    # SECURITY: Prevent DoS via extremely long strings
     other_str = str(other_val) if other_val is not None else ""
-    if len(other_str) > 10_000 or len(expected) > 10_000:
+    if _exceeds_length(other_str, expected):
         return False
-    if other_str == expected:
-        return val is not None and str(val).strip() != ""
-    return True
+    if other_str != expected:
+        return True
+    return val is not None and str(val).strip() != ""
+
+
+def _exceeds_length(*strs: str, limit: int = 10_000) -> bool:
+    return any(len(s) > limit for s in strs)
 
 
 def check_required_with(val: Any, other_val: Any) -> bool:
@@ -311,14 +329,20 @@ def check_digits(val: Any, count_str: str) -> bool:
     val_str = str(val)
     if not val_str:
         return True
+    count = _parse_digit_count(count_str)
+    if count is None:
+        return False
+    return val_str.isdigit() and len(val_str) == count
+
+
+def _parse_digit_count(count_str: str):
     try:
         count = int(count_str)
-        # SECURITY: Reject unreasonably large digit counts
-        if count < 0 or count > 1000:
-            return False
-        return val_str.isdigit() and len(val_str) == count
     except (ValueError, OverflowError):
-        return False
+        return None
+    if count < 0 or count > 1000:
+        return None
+    return count
 
 
 def check_boolean(val: Any) -> bool:
@@ -402,49 +426,49 @@ def check_tel(val: Any) -> bool:
     return bool(_RE_TEL.match(val_str))
 
 
+_IMAGE_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+
 def check_image(file: Any) -> bool:
     """Check if file is a valid image.
 
-    SECURITY: Uses magic bytes validation via UploadedFile.validate_mime_type()
-    to prevent extension-based bypass attacks. Also validates filename for path traversal.
+    SECURITY: ``UploadedFile.validate_mime_type`` reads magic bytes — extension
+    spoofing is rejected.
     """
     if not file:
         return True
     try:
-        from ..request import UploadedFile
-
-        if isinstance(file, UploadedFile):
-            # SECURITY: Validate filename to prevent path traversal
-            filename = getattr(file, "filename", "")
-            if filename and (".." in filename or "/" in filename or "\\" in filename):
-                return False
-
-            # SECURITY: Magic bytes validation (not just extension)
-            file.validate_mime_type(
-                ["image/jpeg", "image/png", "image/gif", "image/webp"]
-            )
-        return True
+        return _validate_image_file(file)
     except (ValueError, AttributeError):
         return False
+
+
+def _validate_image_file(file: Any) -> bool:
+    from ..request import UploadedFile
+
+    if not isinstance(file, UploadedFile):
+        return True
+    filename = getattr(file, "filename", "")
+    if filename and _has_path_traversal(filename):
+        return False
+    file.validate_mime_type(_IMAGE_MIMES)
+    return True
+
+
+_PASSWORD_PATTERNS = (_RE_PASSWORD_UPPER, _RE_PASSWORD_DIGIT, _RE_PASSWORD_SPECIAL)
 
 
 def check_password_strength(val: Any) -> bool:
     """Check if password is strong enough.
 
-    SECURITY: Uses precompiled regex patterns for performance and DoS prevention.
+    SECURITY: 8+ chars, 1 uppercase, 1 digit, 1 special char via precompiled regex.
     """
     val_str = str(val)
     if not val_str:
         return True
-    # 8+ chars, 1 uppercase, 1 number, 1 special char
-    if (
-        len(val_str) < 8
-        or not _RE_PASSWORD_UPPER.search(val_str)
-        or not _RE_PASSWORD_DIGIT.search(val_str)
-        or not _RE_PASSWORD_SPECIAL.search(val_str)
-    ):
+    if len(val_str) < 8:
         return False
-    return True
+    return all(p.search(val_str) for p in _PASSWORD_PATTERNS)
 
 
 def check_color(val: Any) -> bool:
@@ -469,18 +493,19 @@ def check_month(val: Any) -> bool:
     val_str = str(val)
     if not val_str:
         return True
-    # SECURITY: Month format is exactly 7 chars (YYYY-MM)
-    if len(val_str) != 7:
+    # SECURITY: Month format is exactly 7 chars (YYYY-MM).
+    if len(val_str) != 7 or not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", val_str):
         return False
-    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", val_str):
-        return False
+    return _validate_year_month(val_str)
+
+
+def _validate_year_month(val_str: str) -> bool:
     try:
         year, month = val_str.split("-")
-        year_int = int(year)
-        month_int = int(month)
-        return 1 <= month_int <= 12 and 1000 <= year_int <= 9999
+        year_int, month_int = int(year), int(month)
     except (ValueError, AttributeError):
         return False
+    return 1 <= month_int <= 12 and 1000 <= year_int <= 9999
 
 
 def check_base64(val: Any) -> bool:
@@ -539,31 +564,35 @@ def check_daterange(val: Any, limit_arg: str | None = None) -> bool:
     if not val:
         return True
     try:
-        if isinstance(val, str):
-            # SECURITY: Reject large JSON to prevent DoS (max 10KB for date ranges)
-            if len(val) > 10_000:
-                return False
-            d = json_mod.loads(val)
-        else:
-            d = val
-        start = d.get("start")
-        end = d.get("end")
-        if start and end:
-            ds = datetime.date.fromisoformat(start)
-            de = datetime.date.fromisoformat(end)
-            if de < ds:
-                return False
-            if limit_arg == "future" and ds < datetime.date.today():
-                return False
-            return True
-        elif start or end:
+        d = _decode_daterange_payload(val)
+        if d is None:
             return False
-        return True
-    except (
-        ValueError,
-        json_mod.JSONDecodeError,
-        TypeError,
-        AttributeError,
-        RecursionError,
-    ):
+        return _validate_daterange_dict(d, limit_arg)
+    except (ValueError, json_mod.JSONDecodeError, TypeError, AttributeError, RecursionError):
         return False
+
+
+def _decode_daterange_payload(val: Any):
+    if not isinstance(val, str):
+        return val
+    # SECURITY: cap payload size to keep JSON parsing bounded.
+    if len(val) > 10_000:
+        return None
+    return json_mod.loads(val)
+
+
+def _validate_daterange_dict(d, limit_arg: str | None) -> bool:
+    start, end = d.get("start"), d.get("end")
+    if not (start and end):
+        return not (start or end)
+    return _validate_daterange_bounds(start, end, limit_arg)
+
+
+def _validate_daterange_bounds(start: str, end: str, limit_arg: str | None) -> bool:
+    ds = datetime.date.fromisoformat(start)
+    de = datetime.date.fromisoformat(end)
+    if de < ds:
+        return False
+    if limit_arg == "future" and ds < datetime.date.today():
+        return False
+    return True

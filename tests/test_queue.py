@@ -26,6 +26,7 @@ def test_redis_queue_enqueue() -> None:
             {
                 "ASOK_QUEUE_BACKEND": "redis",
                 "ASOK_REDIS_URL": "redis://localhost:6379/1",
+                "SECRET_KEY": "test-secret-key",
             },
         ):
             future = background(dummy_task, "val1", kwarg1="val2")
@@ -35,7 +36,10 @@ def test_redis_queue_enqueue() -> None:
             called_args = mock_client.lpush.call_args[0]
             assert called_args[0] == "asok:queue"
 
-            job = json.loads(called_args[1])
+            envelope = json.loads(called_args[1])
+            assert envelope["v"] == 1
+            assert "sig" in envelope
+            job = json.loads(envelope["job"])
             assert job["module"] == dummy_task.__module__
             assert job["function"] == "dummy_task"
             assert job["args"] == ["val1"]
@@ -43,27 +47,34 @@ def test_redis_queue_enqueue() -> None:
 
 
 def test_worker_loop() -> None:
+    import hashlib
+    import hmac as _hmac
+
     mock_redis = MagicMock()
     mock_client = MagicMock()
     mock_redis.Redis.from_url.return_value = mock_client
 
-    job_data = {
+    secret = "test-secret-key"
+    job = {
         "module": dummy_task.__module__,
         "function": "dummy_task",
         "args": ["val1"],
         "kwargs": {"kwarg1": "val2"},
     }
+    job_json = json.dumps(job, sort_keys=True)
+    sig = _hmac.new(secret.encode(), job_json.encode(), hashlib.sha256).hexdigest()
+    envelope = json.dumps({"v": 1, "job": job_json, "sig": sig})
 
     # mock brpop to return task once, then raise KeyboardInterrupt to break the worker loop
     mock_client.brpop.side_effect = [
-        (b"asok:queue", json.dumps(job_data).encode("utf-8")),
+        (b"asok:queue", envelope.encode("utf-8")),
         KeyboardInterrupt(),
     ]
 
     from asok.cli.worker import run_worker
 
     with patch.dict(sys.modules, {"redis": mock_redis}):
-        with patch.dict(os.environ, {"ASOK_QUEUE_BACKEND": "redis"}):
+        with patch.dict(os.environ, {"ASOK_QUEUE_BACKEND": "redis", "SECRET_KEY": secret}):
             global _dummy_task_executed
             _dummy_task_executed = False
 

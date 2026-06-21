@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+from http.cookies import SimpleCookie
 from typing import Any, Optional, Union
 from urllib.parse import parse_qsl, unquote
 
@@ -63,7 +64,14 @@ class Request(
         self.path: str = environ.get("PATH_INFO", "/")
         self.method: str = environ.get("REQUEST_METHOD", "GET")
         self.query_string: str = unquote(environ.get("QUERY_STRING", ""))
+        self._init_state()
+        self._init_cookies(environ.get("HTTP_COOKIE", ""))
+        self._init_csrf(environ)
+        self._init_locale(environ)
+        self._init_flash()
+        self._init_body(environ)
 
+    def _init_state(self) -> None:
         self.body: bytes = b""
         self._csrf_verified = False
         self.args: QueryDict = QueryDict(parse_qsl(self.query_string))
@@ -76,181 +84,195 @@ class Request(
         self.status: str = "200 OK"
         self.params: dict[str, str] = {}
         self.response_headers: list[tuple[str, str]] = []
-
-        # SECURITY: Use proper RFC 6265 cookie parsing with URL decoding
-        self.cookies_dict = {}
-        cookie_header = environ.get("HTTP_COOKIE", "")
-        if cookie_header:
-            from http.cookies import SimpleCookie
-
-            try:
-                cookies = SimpleCookie()
-                cookies.load(cookie_header)
-                for key, morsel in cookies.items():
-                    # URL-decode cookie values (they may be encoded)
-                    self.cookies_dict[key] = unquote(morsel.value)
-            except Exception:
-                # Fallback to manual parsing if SimpleCookie fails
-                import logging
-
-                logger = logging.getLogger("asok.request")
-                logger.warning(
-                    "Failed to parse cookies with SimpleCookie, using fallback"
-                )
-                for pair in cookie_header.split(";"):
-                    pair = pair.strip()
-                    if "=" in pair:
-                        k, v = pair.split("=", 1)
-                        val = v.strip()
-                        # Handle optional quotes
-                        if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
-                            val = val[1:-1]
-                        self.cookies_dict[k.strip()] = unquote(val)
-
-        self._csrf_cookie_name = "asok_csrf"
-        self.csrf_token_value = self.cookies_dict.get(self._csrf_cookie_name)
-        if not self.csrf_token_value:
-            # Generate new CSRF token
-            self.csrf_token_value = secrets.token_hex(32)
-            # SECURITY: Mark CSRF token to be set as cookie in response
-            # This ensures first-time users get the token
-            if "asok.csrf_token_new" not in environ:
-                environ["asok.csrf_token_new"] = self.csrf_token_value
-
         self._user_instance = None
         self._auth_resolved = False
         self._session = None
         self.env = _Env()
+        self.meta: Metadata = Metadata()
+        self.page_id: Optional[str] = None
+        self.scoped_assets: dict[str, Optional[str]] = {"css": None, "js": None}
+        self._nonce: Optional[str] = None
+        self._body_rejected = False
 
+    def _init_cookies(self, cookie_header: str) -> None:
+        # SECURITY: RFC 6265 cookie parsing with URL decoding
+        self.cookies_dict: dict[str, str] = {}
+        if not cookie_header:
+            return
+
+        try:
+            cookies = SimpleCookie()
+            cookies.load(cookie_header)
+            for key, morsel in cookies.items():
+                self.cookies_dict[key] = unquote(morsel.value)
+        except Exception:
+            self._parse_cookies_fallback(cookie_header)
+
+    def _parse_cookies_fallback(self, cookie_header: str) -> None:
+        import logging
+
+        logging.getLogger("asok.request").warning(
+            "Failed to parse cookies with SimpleCookie, using fallback"
+        )
+        for pair in cookie_header.split(";"):
+            self._set_cookie_from_pair(pair.strip())
+
+    def _set_cookie_from_pair(self, pair: str) -> None:
+        if "=" not in pair:
+            return
+        k, v = pair.split("=", 1)
+        val = v.strip()
+        if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+            val = val[1:-1]
+        self.cookies_dict[k.strip()] = unquote(val)
+
+    def _init_csrf(self, environ: dict[str, Any]) -> None:
+        self._csrf_cookie_name = "asok_csrf"
+        self.csrf_token_value = self.cookies_dict.get(self._csrf_cookie_name)
+        if self.csrf_token_value:
+            return
+        self.csrf_token_value = secrets.token_hex(32)
+        if "asok.csrf_token_new" not in environ:
+            environ["asok.csrf_token_new"] = self.csrf_token_value
+
+    def _init_locale(self, environ: dict[str, Any]) -> None:
         self.lang = self.form.get("lang", self.cookies_dict.get("asok_lang"))
         if not self.lang:
             accept_lang = environ.get("HTTP_ACCEPT_LANGUAGE", "")
             if accept_lang:
                 self.lang = accept_lang.split(",")[0].split("-")[0].split(";")[0]
-
         app_ref = environ.get("asok.app")
         self.lang = self.lang or (app_ref.config.get("LOCALE") if app_ref else "en")
 
+    def _init_flash(self) -> None:
         self._flash_cookie_name = "asok_flash"
         self.flashed_messages: list[dict[str, str]] = []
         self._new_flashes: list[dict[str, str]] = []
         self._new_flashes_consumed: bool = False
-        self.meta: Metadata = Metadata()
-        self.page_id: Optional[str] = None
-        self.scoped_assets: dict[str, Optional[str]] = {"css": None, "js": None}
-        self._nonce: Optional[str] = None
         raw_flash = self.cookies_dict.get(self._flash_cookie_name)
-        if raw_flash:
-            try:
-                # Cookie payload is HMAC-signed to prevent spoofing. Legacy
-                # unsigned cookies (pre-upgrade) are silently ignored.
-                unsigned = self._unsign(unquote(raw_flash))
-                if unsigned:
-                    self.flashed_messages = json.loads(unsigned)
-            except Exception as e:
-                # SECURITY: Log failed flash message deserialization (could indicate tampering)
-                import logging
-
-                logger = logging.getLogger("asok.security")
-                logger.warning("Failed to deserialize flash messages: %s", e)
-
+        if not raw_flash:
+            return
         try:
-            content_length = int(environ.get("CONTENT_LENGTH", 0))
+            # Cookie payload is HMAC-signed; legacy unsigned cookies are ignored.
+            unsigned = self._unsign(unquote(raw_flash))
+            if unsigned:
+                self.flashed_messages = json.loads(unsigned)
+        except Exception as e:
+            import logging
+
+            logging.getLogger("asok.security").warning(
+                "Failed to deserialize flash messages: %s", e
+            )
+
+    def _content_length(self, environ: dict[str, Any]) -> int:
+        try:
+            return int(environ.get("CONTENT_LENGTH", 0))
         except ValueError:
-            content_length = 0
+            return 0
 
-        # SECURITY: Initialize body rejection flag
-        self._body_rejected = False
-
+    def _max_body_size(self, environ: dict[str, Any]) -> int:
         app_ref = environ.get("asok.app")
-        max_body = (
-            app_ref.config.get("MAX_CONTENT_LENGTH", 10 * 1024 * 1024)
-            if app_ref
-            else 10 * 1024 * 1024
-        )
-        if content_length > max_body:
+        default = 10 * 1024 * 1024
+        if app_ref:
+            return app_ref.config.get("MAX_CONTENT_LENGTH", default)
+        return default
+
+    def _init_body(self, environ: dict[str, Any]) -> None:
+        content_length = self._content_length(environ)
+        if content_length > self._max_body_size(environ):
             self.status = "413 Payload Too Large"
             self._body_rejected = True
-            content_length = 0
+            return
+        if content_length <= 0:
+            return
+        self.body = environ["wsgi.input"].read(content_length)
+        self._parse_body(environ.get("CONTENT_TYPE", ""))
 
-        # SECURITY: Only read body if size is valid AND not rejected
-        if content_length > 0 and not self._body_rejected:
-            self.body = environ["wsgi.input"].read(content_length)
-            enc_content_type = environ.get("CONTENT_TYPE", "")
+    def _parse_body(self, enc_content_type: str) -> None:
+        if "application/x-www-form-urlencoded" in enc_content_type:
+            self.form.update(dict(parse_qsl(self.body.decode("utf-8"))))
+        elif "application/json" in enc_content_type:
+            self._parse_json_body()
+        elif "multipart/form-data" in enc_content_type:
+            self._parse_multipart_body(enc_content_type)
 
-            if "application/x-www-form-urlencoded" in enc_content_type:
-                self.form.update(dict(parse_qsl(self.body.decode("utf-8"))))
-            elif "application/json" in enc_content_type:
-                try:
-                    # SECURITY: MAX_CONTENT_LENGTH prevents large payloads
-                    # RecursionError prevents deeply nested JSON DoS attacks
-                    self.json_body = json.loads(self.body.decode("utf-8"))
-                except (json.JSONDecodeError, RecursionError) as e:
-                    # Log deeply nested JSON attempts for security monitoring
-                    if isinstance(e, RecursionError):
-                        import logging
+    def _parse_json_body(self) -> None:
+        try:
+            # SECURITY: MAX_CONTENT_LENGTH caps size; RecursionError stops deep-JSON DoS.
+            self.json_body = json.loads(self.body.decode("utf-8"))
+        except (json.JSONDecodeError, RecursionError) as e:
+            if isinstance(e, RecursionError):
+                import logging
 
-                        logger = logging.getLogger("asok.security")
-                        logger.warning(
-                            "Rejected deeply nested JSON payload (possible DoS attempt)"
-                        )
-                    pass
-            elif "multipart/form-data" in enc_content_type:
-                # SECURITY: Extract boundary with proper quote handling (RFC 2046)
-                # Boundary may be quoted: boundary="----WebKitFormBoundary"
-                boundary_match = re.search(
-                    r'boundary=([^;\s]+|"[^"]+")', enc_content_type
+                logging.getLogger("asok.security").warning(
+                    "Rejected deeply nested JSON payload (possible DoS attempt)"
                 )
-                if boundary_match:
-                    boundary_raw = boundary_match.group(1).strip()
-                    # Remove quotes if present
-                    if boundary_raw.startswith('"') and boundary_raw.endswith('"'):
-                        boundary_raw = boundary_raw[1:-1]
-                    boundary = boundary_raw.encode()
-                    # Split body by boundary
-                    parts = self.body.split(b"--" + boundary)
-                    for part in parts:
-                        if not part or part == b"--\r\n" or part == b"--":
-                            continue
 
-                        # Split headers and content
-                        if b"\r\n\r\n" not in part:
-                            continue
+    def _extract_boundary(self, enc_content_type: str) -> Optional[bytes]:
+        # SECURITY: RFC 2046 — boundary may be quoted.
+        match = re.search(r'boundary=([^;\s]+|"[^"]+")', enc_content_type)
+        if not match:
+            return None
+        raw = match.group(1).strip()
+        if raw.startswith('"') and raw.endswith('"'):
+            raw = raw[1:-1]
+        return raw.encode()
 
-                        head, payload = part.split(b"\r\n\r\n", 1)
-                        # Remove trailing \r\n from payload
-                        if payload.endswith(b"\r\n"):
-                            payload = payload[:-2]
+    def _parse_multipart_body(self, enc_content_type: str) -> None:
+        boundary = self._extract_boundary(enc_content_type)
+        if not boundary:
+            return
+        for part in self.body.split(b"--" + boundary):
+            self._handle_multipart_part(part)
 
-                        head_str = head.decode("utf-8", errors="ignore")
-                        cdisp = ""
-                        for line in head_str.split("\r\n"):
-                            if line.lower().startswith("content-disposition:"):
-                                cdisp = line
-                                break
+    def _handle_multipart_part(self, part: bytes) -> None:
+        if not self._is_valid_multipart_part(part):
+            return
+        head, payload = self._split_multipart_part(part)
+        cdisp = self._content_disposition(head)
+        name = self._multipart_field_name(cdisp)
+        if name:
+            self._store_multipart_field(name, cdisp, payload)
 
-                        if cdisp and "name=" in cdisp:
-                            name_match = _RE_NAME.search(cdisp)
-                            filename_match = _RE_FILENAME.search(cdisp)
-                            if name_match:
-                                name = name_match.group(1)
-                                if filename_match:
-                                    raw_filename = filename_match.group(1)
-                                    if (
-                                        raw_filename
-                                    ):  # Only if a file was actually selected
-                                        safe_filename = secure_filename(raw_filename)
-                                        uploaded = UploadedFile(safe_filename, payload)
-                                        self.files[name] = uploaded
-                                        self.all_files.append(uploaded)
-                                        self._files_multi.setdefault(name, []).append(
-                                            (name, uploaded)
-                                        )
-                                else:
-                                    # Regular form field
-                                    self.form[name] = payload.decode(
-                                        "utf-8", errors="ignore"
-                                    )
+    @staticmethod
+    def _is_valid_multipart_part(part: bytes) -> bool:
+        if not part or part in (b"--\r\n", b"--"):
+            return False
+        return b"\r\n\r\n" in part
+
+    @staticmethod
+    def _split_multipart_part(part: bytes) -> tuple[bytes, bytes]:
+        head, payload = part.split(b"\r\n\r\n", 1)
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        return head, payload
+
+    @staticmethod
+    def _multipart_field_name(cdisp: str) -> Optional[str]:
+        if not cdisp or "name=" not in cdisp:
+            return None
+        match = _RE_NAME.search(cdisp)
+        return match.group(1) if match else None
+
+    def _content_disposition(self, head: bytes) -> str:
+        head_str = head.decode("utf-8", errors="ignore")
+        for line in head_str.split("\r\n"):
+            if line.lower().startswith("content-disposition:"):
+                return line
+        return ""
+
+    def _store_multipart_field(self, name: str, cdisp: str, payload: bytes) -> None:
+        filename_match = _RE_FILENAME.search(cdisp)
+        if not filename_match:
+            self.form[name] = payload.decode("utf-8", errors="ignore")
+            return
+        raw_filename = filename_match.group(1)
+        if not raw_filename:
+            return
+        uploaded = UploadedFile(secure_filename(raw_filename), payload)
+        self.files[name] = uploaded
+        self.all_files.append(uploaded)
+        self._files_multi.setdefault(name, []).append((name, uploaded))
 
     def file(self, name: str) -> Optional[UploadedFile]:
         """Get a single uploaded file by form field name."""
@@ -292,6 +314,7 @@ class Request(
         # Auto-generate a prefix based on the caller's stack frame if not provided
         if not prefix:
             import inspect
+
             frame = inspect.currentframe()
             try:
                 # Walk up to the caller's frame (the view function calling request.rate_limit)
@@ -427,16 +450,16 @@ class Request(
         """
         remote_addr = self.environ.get("REMOTE_ADDR", "")
         forwarded = self.environ.get("HTTP_X_FORWARDED_FOR")
-        if not forwarded:
+        if not forwarded or not self._is_proxy_trusted(remote_addr):
             return remote_addr
+        return forwarded.split(",")[-1].strip()
 
+    def _is_proxy_trusted(self, remote_addr: str) -> bool:
         app_ref = self.environ.get("asok.app")
         trusted = app_ref.config.get("TRUSTED_PROXIES") if app_ref else None
         if trusted is None:
-            return remote_addr
-        if trusted != "*" and remote_addr not in trusted:
-            return remote_addr
-        return forwarded.split(",")[0].strip()
+            return False
+        return trusted == "*" or remote_addr in trusted
 
     @property
     def user_agent(self) -> str:
@@ -452,6 +475,22 @@ class Request(
         self.__dict__["_browser_cache"] = UserAgent(self.user_agent)
         return self.__dict__["_browser_cache"]
 
+    _LANG_TO_COUNTRY = {
+        "fr": "FR", "en": "US", "es": "ES", "de": "DE", "it": "IT",
+        "ja": "JP", "zh": "CN", "pt": "BR", "ru": "RU",
+    }
+
+    _UNKNOWN_COUNTRY = {
+        "iso": "Unknown",
+        "name": "Unknown",
+        "dial_code": "",
+        "flag": "🌐",
+        "capital": "Unknown",
+        "continent": "Unknown",
+        "currency": "Unknown",
+        "languages": "Unknown",
+    }
+
     @property
     def geo(self) -> dict[str, Any]:
         """Get comprehensive geographic information for the current request.
@@ -462,44 +501,12 @@ class Request(
         cache = self.__dict__.setdefault("_geo_cache", None)
         if cache:
             return cache
-
-        # 1. Basic IP location (city, country code, lat, lon)
         loc = IPLocation.get_instance().lookup(self.ip)
-
-        # 2. Enrich with framework country data
         from asok.utils.geo import Countries
 
-        country_code = loc.get("country", "")
-        if not country_code or country_code == "Unknown":
-            # Fallback based on request language
-            lang_to_country = {
-                "fr": "FR",
-                "en": "US",
-                "es": "ES",
-                "de": "DE",
-                "it": "IT",
-                "ja": "JP",
-                "zh": "CN",
-                "pt": "BR",
-                "ru": "RU",
-            }
-            country_code = lang_to_country.get(self.lang, "US")
-
-        country_info = Countries.get(country_code) or {
-            "iso": "Unknown",
-            "name": "Unknown",
-            "dial_code": "",
-            "flag": "🌐",
-            "capital": "Unknown",
-            "continent": "Unknown",
-            "currency": "Unknown",
-            "languages": "Unknown",
-        }
-
-        city = loc.get("city", "Unknown")
-        if (not city or city == "Unknown") and country_info.get("capital") != "Unknown":
-            city = country_info.get("capital", "Unknown")
-
+        country_code = self._resolve_country_code(loc)
+        country_info = Countries.get(country_code) or self._UNKNOWN_COUNTRY
+        city = self._resolve_city(loc, country_info)
         geo_data = {
             "ip": self.ip,
             "city": city,
@@ -508,14 +515,23 @@ class Request(
             "lon": loc.get("lon", 0.0),
             **country_info,
         }
-
-        # 3. Add derived info
-        from asok.utils.geo import Countries as GeoUtils
-
-        geo_data["timezone"] = GeoUtils.get_timezone(geo_data["iso"])
-
+        geo_data["timezone"] = Countries.get_timezone(geo_data["iso"])
         self.__dict__["_geo_cache"] = geo_data
         return geo_data
+
+    def _resolve_country_code(self, loc: dict[str, Any]) -> str:
+        code = loc.get("country", "")
+        if code and code != "Unknown":
+            return code
+        return self._LANG_TO_COUNTRY.get(self.lang, "US")
+
+    @staticmethod
+    def _resolve_city(loc: dict[str, Any], country_info: dict[str, Any]) -> str:
+        city = loc.get("city", "Unknown")
+        if city and city != "Unknown":
+            return city
+        capital = country_info.get("capital", "Unknown")
+        return capital if capital != "Unknown" else "Unknown"
 
     @property
     def location(self) -> dict[str, Any]:
@@ -524,27 +540,28 @@ class Request(
 
     def require_auth(self, redirect_url: str = "/login") -> None:
         """Ensure the user is authenticated, else redirect to login with a 'next' parameter."""
-        if not self.is_authenticated:
-            from urllib.parse import quote
+        if self.is_authenticated:
+            return
+        from urllib.parse import quote
 
-            next_url = self.path
-            if self.query_string:
-                next_url += "?" + self.query_string
+        next_url = self._safe_next_url()
+        next_encoded = quote(next_url, safe="/?&=")
+        separator = "&" if "?" in redirect_url else "?"
+        raise RedirectException(f"{redirect_url}{separator}next={next_encoded}")
 
-            # SECURITY: Validate next_url to prevent open redirect
-            # Only allow relative URLs (no protocol, no different host)
-            if next_url and ("://" in next_url or next_url.startswith("//")):
-                # Absolute URL - potential open redirect attack
-                import logging
+    def _safe_next_url(self) -> str:
+        # SECURITY: only relative URLs may be carried in `next` (no open redirect).
+        next_url = self.path
+        if self.query_string:
+            next_url += "?" + self.query_string
+        if next_url and ("://" in next_url or next_url.startswith("//")):
+            import logging
 
-                logger = logging.getLogger("asok.security")
-                logger.warning("Open redirect attempt blocked: %s", next_url)
-                next_url = "/"
-
-            # URL-encode the next parameter to prevent injection
-            next_encoded = quote(next_url, safe="/?&=")
-            separator = "&" if "?" in redirect_url else "?"
-            raise RedirectException(f"{redirect_url}{separator}next={next_encoded}")
+            logging.getLogger("asok.security").warning(
+                "Open redirect attempt blocked: %s", next_url
+            )
+            return "/"
+        return next_url
 
     @property
     def scheme(self) -> str:
@@ -555,27 +572,24 @@ class Request(
     def host(self) -> str:
         """The Host header value with validation against injection attacks."""
         host = self.environ.get("HTTP_HOST", "localhost")
-
-        # SECURITY: Validate Host header format to prevent injection
-        # Block control characters that could be used in attacks
+        # SECURITY: reject control chars to block injection attacks.
         if any(c in host for c in ("\r", "\n", "\t", " ", "\x00")):
             import logging
 
-            logger = logging.getLogger("asok.security")
-            logger.warning("Malformed Host header detected: %r", host)
+            logging.getLogger("asok.security").warning(
+                "Malformed Host header detected: %r", host
+            )
             return "localhost"
+        return self._strip_host_port(host)
 
-        # Remove port number if present (for comparison purposes)
-        # Handle IPv6: [::1]:8080 format
+    @staticmethod
+    def _strip_host_port(host: str) -> str:
         if host.startswith("["):
-            # IPv6 with port: [::1]:8080
             if "]:" in host:
                 return host.split("]:")[0] + "]"
             return host
-        elif ":" in host:
-            # IPv4 or hostname with port
+        if ":" in host:
             return host.split(":")[0]
-
         return host
 
     @property

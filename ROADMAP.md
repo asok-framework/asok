@@ -6,6 +6,22 @@ This roadmap outlines the planned features and improvements for upcoming Asok re
 
 ## Current Stable Release
 
+### v0.5.0 (Released: June 2026)
+
+**Status**: ✅ Stable
+
+Security hardening release — full audit pass, GraphQL authentication enforcement, HMAC-signed Redis job queue, offline GraphiQL playground, and SECRET_KEY exposure fix.
+
+**Security:**
+- **GraphQL mutations blocked by default** — fail-closed authentication (`GRAPHQL_AUTHORIZE` required or `GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS=True`)
+- **GraphQL mass assignment protection** — `protected=True` fields now correctly filtered in mutations
+- **Password/hidden fields excluded from GraphQL schema** — `is_password` and `hidden` fields no longer queryable or returned
+- **HMAC-signed Redis job envelopes** — background jobs are now signed with `SECRET_KEY`, unsigned jobs rejected by the worker
+- **SECRET_KEY removed from WSGI environ** — no longer exposed to third-party middleware and loggers
+- **Offline GraphiQL** — `asok graphql --install` downloads playground assets locally (no CDN dependency in dev)
+
+---
+
 ### v0.4.0 (Released: June 2026)
 
 **Status**: ✅ Stable
@@ -133,7 +149,8 @@ Check [GitHub Discussions](https://github.com/asok-framework/asok/discussions) f
 | v0.1.7 | May 25, 2026 | ✅ Released | Architecture Overhaul |
 | v0.3.0 | June 1, 2026 | ✅ Released | Async & Multi-DB Support |
 | v0.4.0 | June 7, 2026 | ✅ Released | GraphQL & Extensions |
-| v0.5.0 | Q1 2027 | 📋 Planned | Enterprise Scaling & Monitoring |
+| v0.5.0 | June 20, 2026 | ✅ Released | Security Hardening |
+| v1.0.0 | Q3 2026 | 📋 Planned | Stable API, Monitoring & Observability |
 
 **Note**: Dates are approximate and subject to change based on community priorities and development capacity.
 

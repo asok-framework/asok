@@ -4,6 +4,7 @@ import functools
 import logging
 import threading
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ _security_logger = logging.getLogger("asok.security")
 _MAX_STORE_ENTRIES = 10_000
 
 # Shared store and lock for in-memory limiting across dynamic instances
-_local_store: dict[str, dict[str, Any]] = {}
+_local_store: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _local_store_lock = threading.Lock()
 
 
@@ -57,20 +58,22 @@ class RateLimit:
 
         self.key_func = key_func or self._default_key
         self.prefix = prefix
-
-        if storage is not None:
-            self.storage = storage
-        else:
-            from .cache import default_cache
-
-            if default_cache.backend in ("redis", "file"):
-                self.storage = default_cache
-            else:
-                self.storage = None
+        self.storage = self._init_storage(storage)
 
         self._store = _local_store
         self._lock = _local_store_lock
         self._last_cleanup: float = 0.0
+
+    def _init_storage(self, storage: Optional["Cache"]) -> Optional["Cache"]:
+        if storage is not None:
+            return storage
+        else:
+            from .cache import default_cache
+
+            if default_cache.backend in ("redis", "file"):
+                return default_cache
+            else:
+                return None
 
     @staticmethod
     def _parse_limit(limit_str: str) -> tuple[int, int]:
@@ -88,6 +91,62 @@ class RateLimit:
         """Default key generator using the client's IP address."""
         return request.ip or "unknown"
 
+    def _check_storage(self, key: str, now: float) -> dict[str, Any]:
+        bucket = self.storage.get(key)
+        if not bucket or bucket["reset"] <= now:
+            bucket = {"count": 0, "reset": now + self.window}
+
+        bucket["count"] += 1
+        self.storage.set(key, bucket, ttl=int(bucket["reset"] - now) + 1)
+        return bucket
+
+    def _cleanup_expired_local(self, now: float) -> None:
+        if now - self._last_cleanup >= self.window:
+            self._last_cleanup = now
+            expired = [k for k, v in self._store.items() if v["reset"] <= now]
+            for k in expired:
+                del self._store[k]
+
+    def _resolve_local_bucket(self, key: str, now: float) -> dict[str, Any]:
+        bucket = self._store.get(key)
+        if not bucket or bucket["reset"] <= now:
+            # SECURITY: Evict oldest bucket if store is full (prevents OOM DoS)
+            if len(self._store) >= _MAX_STORE_ENTRIES:
+                self._store.popitem(last=False)
+            bucket = {"count": 0, "reset": now + self.window}
+        return bucket
+
+    def _check_local(self, key: str, now: float) -> dict[str, Any]:
+        with self._lock:
+            self._cleanup_expired_local(now)
+            bucket = self._resolve_local_bucket(key, now)
+            bucket["count"] += 1
+            if key in self._store:
+                self._store.move_to_end(key)
+            self._store[key] = bucket
+            return bucket
+
+    def _log_and_raise_exceeded(
+        self, request: Request, bucket: dict[str, Any], now: float
+    ) -> None:
+        remaining = int(bucket["reset"] - now)
+
+        # SECURITY AUDIT LOG: Log rate limit hits for monitoring
+        _security_logger.warning(
+            "[RATE LIMIT] %s %s from %s — limit %d/%ds exceeded (retry in %ds)",
+            request.method,
+            request.path,
+            request.ip,
+            self.max_requests,
+            self.window,
+            remaining,
+        )
+
+        raise RateLimitExceeded(
+            message=f"Too Many Requests. Retry in {remaining}s.",
+            retry_after=remaining,
+        )
+
     def check(self, request: Request) -> None:
         """Check the rate limit for the current request.
 
@@ -97,51 +156,12 @@ class RateLimit:
         now = time.time()
 
         if self.storage:
-            # Use Cache backend for persistent/shared limiting
-            bucket = self.storage.get(key)
-            if not bucket or bucket["reset"] <= now:
-                bucket = {"count": 0, "reset": now + self.window}
-
-            bucket["count"] += 1
-            self.storage.set(key, bucket, ttl=int(bucket["reset"] - now) + 1)
+            bucket = self._check_storage(key, now)
         else:
-            # Use local in-memory store (per process)
-            with self._lock:
-                # Periodic cleanup: remove expired buckets (at most once per window)
-                if now - self._last_cleanup >= self.window:
-                    self._last_cleanup = now
-                    expired = [k for k, v in self._store.items() if v["reset"] <= now]
-                    for k in expired:
-                        del self._store[k]
-
-                bucket = self._store.get(key)
-                if not bucket or bucket["reset"] <= now:
-                    # SECURITY: Evict oldest bucket if store is full (prevents OOM DoS)
-                    if len(self._store) >= _MAX_STORE_ENTRIES:
-                        oldest = min(self._store, key=lambda k: self._store[k]["reset"])
-                        del self._store[oldest]
-                    bucket = {"count": 0, "reset": now + self.window}
-                bucket["count"] += 1
-                self._store[key] = bucket
+            bucket = self._check_local(key, now)
 
         if bucket["count"] > self.max_requests:
-            remaining = int(bucket["reset"] - now)
-
-            # SECURITY AUDIT LOG: Log rate limit hits for monitoring
-            _security_logger.warning(
-                "[RATE LIMIT] %s %s from %s — limit %d/%ds exceeded (retry in %ds)",
-                request.method,
-                request.path,
-                request.ip,
-                self.max_requests,
-                self.window,
-                remaining,
-            )
-
-            raise RateLimitExceeded(
-                message=f"Too Many Requests. Retry in {remaining}s.",
-                retry_after=remaining,
-            )
+            self._log_and_raise_exceeded(request, bucket, now)
 
     def __call__(self, request: Request, next_handler: Callable[[Request], Any]) -> Any:
         """Middleware/decorator entry point."""
@@ -191,4 +211,3 @@ def rate_limit(limit: str | int, window: Optional[int] = None, **kwargs):
         return wrapper
 
     return decorator
-

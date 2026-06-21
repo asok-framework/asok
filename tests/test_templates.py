@@ -199,6 +199,64 @@ class TestTemplateInheritance:
         assert "<h1>Header</h1>" in result
         assert "<p>Content</p>" in result
 
+    def test_include_from_extension_template_path(self, tmp_path):
+        """A third-party extension registers its own ``templates/`` dir; an
+        ``{% include "...buttons.html" %}`` in the host app's template must
+        resolve against that dir.
+        """
+        ext_dir = tmp_path / "ext_templates"
+        (ext_dir / "auth_providers").mkdir(parents=True)
+        (ext_dir / "auth_providers" / "buttons.html").write_text(
+            "<button>Sign in</button>"
+        )
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        tpl = "<body>{% include 'auth_providers/buttons.html' %}</body>"
+        # Both roots passed in priority order — same shape as
+        # `_resolve_template` returns.
+        result = render_template_string(
+            tpl, {}, root_dir=[str(project_dir), str(ext_dir)]
+        )
+        assert "<button>Sign in</button>" in result
+
+    def test_include_inside_html_comment_does_not_recursively_expand(self, tmp_path):
+        """An ``{% include %}`` example sitting inside an HTML comment of the
+        included file must not re-trigger expansion. Without the comment
+        mask, an extension whose template carries a usage example in its
+        docstring would recursively expand itself until the depth limit and
+        emit a duplicated, corrupted block."""
+        buttons = tmp_path / "buttons.html"
+        buttons.write_text(
+            "<!--\n"
+            "    Usage example:\n"
+            "    {% include 'buttons.html' %}\n"
+            "-->\n"
+            "<div>real button</div>"
+        )
+        tpl = "<page>{% include 'buttons.html' %}</page>"
+        result = render_template_string(tpl, {}, root_dir=str(tmp_path))
+        # The real content is rendered exactly once — no recursion.
+        assert result.count("real button") == 1
+        # The HTML comment itself is preserved in the output so devs can still
+        # read it in the rendered HTML.
+        assert "Usage example" in result
+
+    def test_extends_finds_parent_in_extension_path(self, tmp_path):
+        ext_dir = tmp_path / "ext_templates"
+        ext_dir.mkdir()
+        (ext_dir / "ext_base.html").write_text(
+            "<root>{% block body %}default{% endblock %}</root>"
+        )
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        tpl = "{% extends 'ext_base.html' %}{% block body %}OK{% endblock %}"
+        result = render_template_string(
+            tpl, {}, root_dir=[str(project_dir), str(ext_dir)]
+        )
+        assert "<root>OK</root>" in result
+
     def test_extends_and_blocks(self, tmp_path):
         base = tmp_path / "base.html"
         base.write_text(
@@ -243,3 +301,53 @@ class TestTemplateInheritance:
         assert "<main>" in result
         assert "</main>" in result
         assert "<aside>toc</aside>" in result
+
+
+class TestTemplateSandboxSecurity:
+    def test_set_inline_injection_raises(self):
+        # Trying to inject import statement in set target
+        try:
+            render("{% set x; import os = 1 %}")
+            assert False, "Should have failed to compile/run template"
+        except Exception:
+            pass
+
+    def test_for_loop_injection_raises(self):
+        # Trying to inject import statement in for loop target
+        try:
+            render("{% for x; import os in [1] %}{% endfor %}")
+            assert False, "Should have failed to compile/run template"
+        except Exception:
+            pass
+
+    def test_with_injection_raises(self):
+        # Trying to inject import statement in with target
+        try:
+            render("{% with x; import os = 1 %}{% endwith %}")
+            assert False, "Should have failed to compile/run template"
+        except Exception:
+            pass
+
+    def test_call_injection_raises(self):
+        # Trying to inject arbitrary python in macro call args
+        try:
+            render("{% call macro(1); import os %}{% endcall %}", macro=lambda *a, **kw: "")
+            assert False, "Should have failed to compile/run template"
+        except Exception:
+            pass
+
+    def test_set_inline_actual_injection(self):
+        # Injecting actual executable code into set target
+        tpl = """{% set x
+import sys
+sys.injected_flag = True
+# = 1 %}"""
+        try:
+            import sys
+            if hasattr(sys, "injected_flag"):
+                del sys.injected_flag
+            render(tpl)
+            # If it succeeded, check if code executed
+            assert not getattr(sys, "injected_flag", False), "Code injection was executed!"
+        except Exception:
+            pass

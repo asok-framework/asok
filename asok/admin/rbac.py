@@ -31,6 +31,24 @@ def _user_role_ids(self: Any) -> list[int]:
     return [r.id for r in self.roles]
 
 
+def _match_perm_pattern(p: str, perm: str) -> bool:
+    if p == "*" or p == perm:
+        return True
+    return p.endswith(".*") and perm.startswith(p[:-1])
+
+
+def _role_has_permission(role: Any, perm: str) -> bool:
+    """Return True if a role grants the given permission string."""
+    raw = getattr(role, "permissions", None)
+    if not raw:
+        return False
+    for p in raw.split(","):
+        trimmed = p.strip()
+        if trimmed and _match_perm_pattern(trimmed, perm):
+            return True
+    return False
+
+
 def _user_can(self: Any, perm: str) -> bool:
     """Check if this user has a permission.
 
@@ -54,25 +72,35 @@ def _user_can(self: Any, perm: str) -> bool:
             f"ADMIN ACCESS: User {user_email} (superadmin) granted permission '{perm}'"
         )
         return True
-    for r in self.roles:
-        raw = (getattr(r, "permissions", "") or "").strip()
-        if not raw:
-            continue
-        for p in raw.split(","):
-            p = p.strip()
-            if not p:
-                continue
-            if p == "*":
-                return True
-            if p == perm:
-                return True
-            if p.endswith(".*") and perm.startswith(p[:-1]):
-                return True
-    return False
+    return any(_role_has_permission(r, perm) for r in self.roles)
+
+
+def _get_user_roles(u: Any) -> list:
+    can_fn = getattr(u, "can", None)
+    if not callable(can_fn):
+        return []
+    try:
+        if hasattr(u, "roles"):
+            return u.roles
+    except Exception:
+        pass
+    return []
+
+
+def _user_log_identity(u: Any) -> str:
+    email = getattr(u, "email", None)
+    if email:
+        return email
+    return getattr(u, "username", f"ID:{getattr(u, 'id', 'unknown')}")
 
 
 class RBACMixin:
     """Mixin for Role-Based Access Control on the Admin application."""
+
+    def _is_admin_or_has_roles(self, u: Any) -> bool:
+        if not u:
+            return False
+        return getattr(u, "is_admin", False) or bool(_get_user_roles(u))
 
     def _require_admin(self, request: Any) -> None:
         # If the request is being impersonated by a valid admin, bypass require_admin
@@ -82,49 +110,35 @@ class RBACMixin:
         u = request.user
         if not u:
             raise RedirectException(self.prefix + "/login")
-        if getattr(u, "is_admin", False):
+        if self._is_admin_or_has_roles(u):
             return
-        # Non-superusers need at least one role with permissions
-        can_fn = getattr(u, "can", None)
-        if callable(can_fn):
-            try:
-                roles = u.roles if hasattr(u, "roles") else []
-            except Exception:
-                roles = []
-            if roles:
-                return
         # SECURITY: Use same message as wrong password to avoid leaking account status
         request.flash("error", self.t(request, "Invalid credentials"))
         raise RedirectException(self.prefix + "/login")
+
+    def _check_user_permission(self, u: Any, slug: str, verb: str) -> bool:
+        can_fn = getattr(u, "can", None)
+        if not callable(can_fn):
+            logger.debug(
+                f"Permission check: {_user_log_identity(u)} lacks can() method for {slug}.{verb}"
+            )
+            return False
+        result = bool(can_fn(f"{slug}.{verb}"))
+        if not result:
+            logger.debug(
+                f"Permission check: {_user_log_identity(u)} - no permission for {verb} on {slug}"
+            )
+        return result
 
     def _can(self, request: Any, slug: str, verb: str) -> bool:
         """Check if the current user may perform `verb` on admin `slug`."""
         u = request.user
         if not u:
-            # DEBUG: UI permission checks (menu building) are routine, not security events
+            # DEBUG: Routine permission checks for UI (not actual blocked access attempts)
             logger.debug(
                 f"Permission check: No authenticated user for {verb} on {slug}"
             )
             return False
         if getattr(u, "is_admin", False):
             return True
-        can_fn = getattr(u, "can", None)
-        if not callable(can_fn):
-            user_email = getattr(u, "email", None) or getattr(
-                u, "username", f"ID:{u.id}"
-            )
-            logger.debug(
-                f"Permission check: {user_email} lacks can() method for {slug}.{verb}"
-            )
-            return False
-        result = bool(can_fn(f"{slug}.{verb}"))
-        if not result:
-            user_email = getattr(u, "email", None) or getattr(
-                u, "username", f"ID:{u.id}"
-            )
-            # DEBUG: Routine permission checks for UI (not actual blocked access attempts)
-            # Actual HTTP access denials will log at WARNING level in the view layer
-            logger.debug(
-                f"Permission check: {user_email} - no permission for {verb} on {slug}"
-            )
-        return result
+        return self._check_user_permission(u, slug, verb)

@@ -82,6 +82,23 @@ class ResponseMixin:
 
         self.redirect(ref)
 
+    def _is_same_origin(self: Any, parsed: Any) -> bool:
+        # Get current request's origin
+        current_scheme = self.environ.get("wsgi.url_scheme", "http")
+        current_host = self.environ.get("HTTP_HOST") or self.environ.get(
+            "SERVER_NAME", ""
+        )
+        return parsed.scheme == current_scheme and parsed.netloc == current_host
+
+    def _parse_and_check_url(self: Any, url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            if not parsed.scheme and not parsed.netloc:
+                return True
+            return self._is_same_origin(parsed)
+        except Exception:
+            return False
+
     def _is_safe_redirect(self: Any, url: str) -> bool:
         """Validate that a redirect URL is safe (same-origin or relative path).
 
@@ -99,26 +116,83 @@ class ResponseMixin:
         if url.startswith("/") and not url.startswith("//"):
             return True
 
-        # Parse the URL to check if it's same-origin
+        return self._parse_and_check_url(url)
+
+    def _extract_filepath_parts(self: Any, filepath: str) -> list[str]:
+        from pathlib import Path as _Path
+        p = _Path(filepath)
+        parts = []
+        for part in p.parts:
+            if part not in ("/", "\\", ""):
+                parts.append(part)
+        return parts
+
+    def _resolve_and_check_relative(self: Any, base_dir: "Path", parts: list[str]) -> tuple["Path | None", str]:
+        from pathlib import Path as _Path
         try:
-            parsed = urlparse(url)
+            full_path = (base_dir / _Path(*parts)).resolve(strict=False)
+        except (ValueError, OSError, RuntimeError):
+            return None, "<h1>404 Not Found</h1>"
+        try:
+            full_path.relative_to(base_dir)
+            return full_path, ""
+        except ValueError:
+            return None, "<h1>403 Forbidden</h1>"
 
-            # If no scheme, it's a relative URL - allow it
-            if not parsed.scheme and not parsed.netloc:
+    def _validate_send_path(
+        self: Any, filepath: str, base_dir: "Path"
+    ) -> tuple["Path | None", str]:
+        """Resolve and validate a send_file path. Returns (full_path, error_html) or (None, error_html)."""
+        parts = self._extract_filepath_parts(filepath)
+        if not parts:
+            return None, "<h1>403 Forbidden</h1>"
+        return self._resolve_and_check_relative(base_dir, parts)
+
+    def _check_symlinks(
+        self: Any, full_path: "Path", base_dir: "Path"
+    ) -> bool:
+        """Return True if any path component is a symlink (disallowed)."""
+        current = full_path
+        while current != base_dir:
+            if current.is_symlink():
                 return True
+            current = current.parent
+            if current == current.parent:
+                break
+        return False
 
-            # Get current request's origin
-            current_scheme = self.environ.get("wsgi.url_scheme", "http")
-            current_host = self.environ.get("HTTP_HOST") or self.environ.get(
-                "SERVER_NAME", ""
-            )
+    def _check_file_validity(self: Any, full_path: "Path", base_dir: "Path") -> Optional[str]:
+        if self._check_symlinks(full_path, base_dir):
+            self.status = "403 Forbidden"
+            return "<h1>403 Forbidden: Symlinks not allowed</h1>"
 
-            # Only allow same-origin redirects
-            return parsed.scheme == current_scheme and parsed.netloc == current_host
+        if not full_path.is_file():
+            self.status = "404 Not Found"
+            return "<h1>404 Not Found</h1>"
 
-        except Exception:
-            # If parsing fails, reject the URL to be safe
-            return False
+        if full_path.stat().st_size > 100 * 1024 * 1024:
+            self.status = "413 Payload Too Large"
+            return "<h1>413 Payload Too Large</h1>"
+        return None
+
+    def _set_download_headers(self: Any, full_path: "Path", filename: Optional[str], as_attachment: bool, mimetype: Optional[str]) -> None:
+        fname = secure_filename(filename or full_path.name)
+        disposition = "attachment" if as_attachment else "inline"
+        file_size = full_path.stat().st_size
+
+        self.content_type = mimetype or "application/octet-stream"
+        self.environ.setdefault("asok.extra_headers", []).extend(
+            [
+                ("Content-Disposition", f'{disposition}; filename="{fname}"'),
+                ("Content-Length", str(file_size)),
+            ]
+        )
+
+        if file_size > 5 * 1024 * 1024:
+            self.environ["asok.stream_file"] = str(full_path)
+        else:
+            with open(full_path, "rb") as f:
+                self.environ["asok.binary_response"] = f.read()
 
     def send_file(
         self: Any,
@@ -138,73 +212,15 @@ class ResponseMixin:
         root = Path(self.environ.get("asok.root", os.getcwd()))
         base_dir = (root / "src/partials/uploads").resolve()
 
-        # SECURITY: Strip root/drive prefix to prevent absolute path override
-        p = Path(filepath)
-        parts = [part for part in p.parts if part not in ("/", "\\", "")]
-        if not parts:
-            self.status = "403 Forbidden"
-            return "<h1>403 Forbidden</h1>"
-        safe_path = Path(*parts)
+        full_path, error = self._validate_send_path(filepath, base_dir)
+        if full_path is None:
+            self.status = "403 Forbidden" if "403" in error else "404 Not Found"
+            return error
 
-        # Resolve the full path
-        try:
-            full_path = (base_dir / safe_path).resolve(strict=False)
-        except (ValueError, OSError, RuntimeError):
-            # File doesn't exist or path resolution failed
-            self.status = "404 Not Found"
-            return "<h1>404 Not Found</h1>"
-
-        # SECURITY: Verify the resolved path is still within the base directory
-        try:
-            full_path.relative_to(base_dir)
-        except ValueError:
-            # Path escapes the base directory
-            self.status = "403 Forbidden"
-            return "<h1>403 Forbidden</h1>"
-
-        # SECURITY: Check for symlinks in the entire path chain
-        # This prevents attacks using symlinks in parent directories
-        current = full_path
-        while current != base_dir:
-            if current.is_symlink():
-                self.status = "403 Forbidden"
-                return "<h1>403 Forbidden: Symlinks not allowed</h1>"
-            current = current.parent
-            if current == current.parent:  # Reached root
-                break
-
-        # Verify it's a regular file
-        if not full_path.is_file():
-            self.status = "404 Not Found"
-            return "<h1>404 Not Found</h1>"
+        file_error = self._check_file_validity(full_path, base_dir)
+        if file_error:
+            return file_error
 
         mimetype, _ = mimetypes.guess_type(str(full_path))
-
-        # Determine filename and sanitize it for the header
-        fname = secure_filename(filename or full_path.name)
-
-        disposition = "attachment" if as_attachment else "inline"
-        file_size = full_path.stat().st_size
-
-        # SECURITY: Prevent DoS by limiting max file size (100 MB)
-        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-        if file_size > MAX_FILE_SIZE:
-            self.status = "413 Payload Too Large"
-            return "<h1>413 Payload Too Large</h1>"
-
-        self.content_type = mimetype or "application/octet-stream"
-        self.environ.setdefault("asok.extra_headers", []).extend(
-            [
-                ("Content-Disposition", f'{disposition}; filename="{fname}"'),
-                ("Content-Length", str(file_size)),
-            ]
-        )
-
-        # Stream large files (> 5 MB) to avoid loading them entirely into memory
-        if file_size > 5 * 1024 * 1024:
-            self.environ["asok.stream_file"] = str(full_path)
-        else:
-            with open(full_path, "rb") as f:
-                self.environ["asok.binary_response"] = f.read()
-
+        self._set_download_headers(full_path, filename, as_attachment, mimetype)
         return ""

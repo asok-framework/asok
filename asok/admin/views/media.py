@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import datetime
 import os
-from typing import Any
+from typing import Any, Optional
 
 from ...exceptions import RedirectException
+from ..constants import ALLOWED_UPLOAD_MIMES
 
 
 class MediaViewsMixin:
@@ -59,36 +60,36 @@ class MediaViewsMixin:
             ],
         )
 
-    def _delete_media(self, request: Any, rel_path: str) -> None:
-        self._require_admin(request)
-        # SECURITY: Prevent path traversal with comprehensive validation
-        rel_path = rel_path.lstrip("/")
-
-        # Normalize path first to detect encoded or obfuscated traversal attempts
-        # e.g., %2e%2e, .%2F, double slashes, etc.
-        normalized = os.path.normpath(rel_path)
-
-        # Check for path traversal sequences in normalized path
-        if (
+    def _has_traversal_seqs(self, normalized: str) -> bool:
+        return (
             ".." in normalized
             or normalized.startswith("/")
             or normalized.startswith("\\")
-        ):
+        )
+
+    def _is_safe_under_base(self, base_dir: str, full_path: str) -> bool:
+        try:
+            common = os.path.commonpath([full_path, base_dir])
+        except ValueError:
+            return False
+        if common != base_dir:
+            return False
+        return not os.path.islink(full_path)
+
+    def _delete_media(self, request: Any, rel_path: str) -> None:
+        self._require_admin(request)
+        # Normalize path first to detect encoded or obfuscated traversal attempts
+        normalized = os.path.normpath(rel_path.lstrip("/"))
+
+        if self._has_traversal_seqs(normalized):
             return self._forbid(request)
 
         base_dir = os.path.abspath(
             os.path.join(self.app.root_dir, "src/partials/uploads")
         )
         full_path = os.path.abspath(os.path.join(base_dir, normalized))
-        try:
-            common = os.path.commonpath([full_path, base_dir])
-        except ValueError:
-            common = ""
-        if common != base_dir:
-            return self._forbid(request)
 
-        # Reject symlinks to avoid deleting files outside the media directory
-        if os.path.islink(full_path):
+        if not self._is_safe_under_base(base_dir, full_path):
             return self._forbid(request)
 
         if os.path.isfile(full_path):
@@ -99,11 +100,37 @@ class MediaViewsMixin:
 
         raise RedirectException(self.prefix + "/media")
 
+    def _get_upload_subdir(self, filename: str) -> str:
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"):
+            return "images"
+        if ext == ".pdf":
+            return "pdfs"
+        return "others"
+
+    def _upload_single_file(self, file: Any) -> tuple[bool, Optional[str]]:
+        subdir = self._get_upload_subdir(file.filename)
+        rel_dest = os.path.join(subdir, file.filename)
+        try:
+            file.save(rel_dest, allowed_types=list(ALLOWED_UPLOAD_MIMES))
+            return True, None
+        except ValueError as e:
+            return False, f"{file.filename}: {str(e)}"
+
+    def _flash_upload_results(self, request: Any, count: int, errors: list[str]) -> None:
+        if errors:
+            for err in errors:
+                request.flash("error", err)
+        if count > 0:
+            request.flash(
+                "success",
+                self.t(request, "Successfully uploaded {count} file(s)", count=count),
+            )
+
     def _media_upload(self, request: Any) -> None:
         self._require_admin(request)
         if request.method != "POST":
             raise RedirectException(self.prefix + "/media")
-
         if not request.files:
             request.flash("error", self.t(request, "No files selected"))
             raise RedirectException(self.prefix + "/media")
@@ -111,33 +138,11 @@ class MediaViewsMixin:
         count = 0
         errors = []
         for file in request.all_files:
-            ext = os.path.splitext(file.filename)[1].lower()
-
-            # Sorting logic based on user requirements
-            if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"):
-                subdir = "images"
-            elif ext == ".pdf":
-                subdir = "pdfs"
-            else:
-                subdir = "others"
-
-            # UploadedFile.save(path) prepends src/partials/uploads in Asok
-            rel_dest = os.path.join(subdir, file.filename)
-            try:
-                file.save(rel_dest)
+            success, err = self._upload_single_file(file)
+            if success:
                 count += 1
-            except ValueError as e:
-                # Capture validation errors (magic bytes, mime-type mismatch, etc.)
-                errors.append(f"{file.filename}: {str(e)}")
+            else:
+                errors.append(err)
 
-        if errors:
-            for err in errors:
-                request.flash("error", err)
-
-        if count > 0:
-            request.flash(
-                "success",
-                self.t(request, "Successfully uploaded {count} file(s)", count=count),
-            )
-
+        self._flash_upload_results(request, count, errors)
         raise RedirectException(self.prefix + "/media")

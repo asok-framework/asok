@@ -19,7 +19,7 @@
 
     <div class="card" style="overflow:hidden">
       {% if errors_global %}
-        <div style="padding:16px; margin: 24px 24px 0; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--r); color:#b91c1c; font-weight:500;">
+        <div class="alert alert-danger" style="margin: 24px 24px 0;">
           {{ icon('alert-triangle', 18) }} {{ errors_global }}
         </div>
       {% endif %}
@@ -89,7 +89,7 @@
 
       <div class="form-footer">
         <div class="form-footer-left">
-          {{ btn(t('Update Profile'), 'primary', icon='check', type='submit') }}
+          {{ btn(t('Update Profile'), 'primary', icon_name='check', type='submit') }}
           <a href="{{ admin_prefix }}" class="btn btn-default" data-spa>
             {{ t('Cancel') }}
           </a>
@@ -129,7 +129,7 @@
             <label class="form-label">{{ t('Current Password') }}</label>
             <input type="password" name="current_password" autocomplete="current-password" required placeholder="{{ t('Enter password to confirm…') }}">
           </div>
-          {{ btn(t('Disable 2FA'), 'danger', icon='trash', type='submit') }}
+          {{ btn(t('Disable 2FA'), 'danger', icon_name='trash', type='submit') }}
         </form>
       {% else %}
         <h3 style="font-weight:700; margin-bottom:8px">{{ t('Secure Your Account') }}</h3>

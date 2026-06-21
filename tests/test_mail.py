@@ -107,6 +107,7 @@ class TestMailDispatch:
                 {
                     "ASOK_QUEUE_BACKEND": "redis",
                     "ASOK_REDIS_URL": "redis://localhost:6379/1",
+                    "SECRET_KEY": "test-secret-key",
                 },
             ):
                 result = Mail.send(
@@ -120,7 +121,10 @@ class TestMailDispatch:
                 called_args = mock_client.lpush.call_args[0]
                 assert called_args[0] == "asok:queue"
 
-                job = json.loads(called_args[1])
+                envelope = json.loads(called_args[1])
+                assert envelope["v"] == 1
+                assert "sig" in envelope
+                job = json.loads(envelope["job"])
                 assert job["module"] == "asok.mail"
                 assert job["function"] == "_send_mail_task"
                 assert job["args"][0] == "default@test.com"

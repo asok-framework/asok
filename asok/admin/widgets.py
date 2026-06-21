@@ -43,33 +43,38 @@ class WidgetMixin:
 
         return deco
 
+    def _should_skip_widget(self, request: Any, permission: str | None) -> bool:
+        if not permission:
+            return False
+        try:
+            slug, verb = permission.split(".", 1)
+        except ValueError:
+            return True
+        return not self._can(request, slug, verb)
+
+    def _run_widget(self, request: Any, w: dict) -> dict:
+        try:
+            result = w["render"](request)
+        except Exception as e:
+            result = f'<div class="muted">Widget error: {e}</div>'
+        if isinstance(result, dict):
+            html = result.get("html", "")
+            footer = result.get("footer", "")
+        else:
+            html = str(result or "")
+            footer = ""
+        return {
+            "title": w["title"],
+            "size": w["size"],
+            "html": SafeString(html),
+            "footer": SafeString(footer),
+        }
+
     def _render_widgets(self, request: Any) -> list[dict[str, Any]]:
         """Run each registered widget; skip ones the user can't see or that error."""
         out = []
         for w in self._widgets:
-            if w["permission"]:
-                try:
-                    slug, verb = w["permission"].split(".", 1)
-                except ValueError:
-                    continue
-                if not self._can(request, slug, verb):
-                    continue
-            try:
-                result = w["render"](request)
-            except Exception as e:
-                result = f'<div class="muted">Widget error: {e}</div>'
-            if isinstance(result, dict):
-                html = result.get("html", "")
-                footer = result.get("footer", "")
-            else:
-                html = str(result or "")
-                footer = ""
-            out.append(
-                {
-                    "title": w["title"],
-                    "size": w["size"],
-                    "html": SafeString(html),
-                    "footer": SafeString(footer),
-                }
-            )
+            if self._should_skip_widget(request, w["permission"]):
+                continue
+            out.append(self._run_widget(request, w))
         return out

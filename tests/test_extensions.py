@@ -93,12 +93,16 @@ def get(req):
 
         # B. Template file
         ext_tpl_content = "<div>Extension Partial Content</div>"
-        with open(os.path.join(ext_tpls, "ext_partial.html"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(ext_tpls, "ext_partial.html"), "w", encoding="utf-8"
+        ) as f:
             f.write(ext_tpl_content)
 
         # C. Static file
         ext_style_content = "body { background: purple; }"
-        with open(os.path.join(ext_static_css, "ext_style.css"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(ext_static_css, "ext_style.css"), "w", encoding="utf-8"
+        ) as f:
             f.write(ext_style_content)
 
         # 2. Instantiate Asok app
@@ -120,7 +124,9 @@ def get(req):
 
         # 5. Verify Template processing (using include)
         main_tpl = "{% include 'ext_partial.html' %}"
-        rendered = render_template_string(main_tpl, {}, root_dir=app._template_search_paths)
+        rendered = render_template_string(
+            main_tpl, {}, root_dir=app._template_search_paths
+        )
         assert "Extension Partial Content" in rendered
 
         # 6. Verify Static files serving from Extension

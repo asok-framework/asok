@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from typing import Any, List
+
+from . import operations as operations
+
+
+class Migration:
+    """Base class for declarative project migrations."""
+    dependencies: List[str] = []
+    operations: List[Any] = []
+
 
 class Migrations:
     """Utility to track and manage applied database migrations."""
@@ -7,14 +17,13 @@ class Migrations:
     @staticmethod
     def ensure_table(engine=None):
         """Ensures the tracking table exists in the database."""
-        from .model import Model
+        from ..model import Model
 
         engine = engine or Model.get_engine()
         pk_def = getattr(
             engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
         )
 
-        # Define table structure dynamically to support SQLite, Postgres, MySQL
         sql = f"""
             CREATE TABLE IF NOT EXISTS _asok_migrations (
                 {pk_def},
@@ -28,7 +37,7 @@ class Migrations:
     @staticmethod
     def get_applied(engine=None) -> list[str]:
         """Return a list of all applied migration names in chronological order."""
-        from .model import Model
+        from ..model import Model
 
         engine = engine or Model.get_engine()
         Migrations.ensure_table(engine)
@@ -38,7 +47,7 @@ class Migrations:
     @staticmethod
     def log(name: str, batch: int, engine=None):
         """Record a new migration as applied."""
-        from .model import Model
+        from ..model import Model
 
         engine = engine or Model.get_engine()
         engine.execute(
@@ -49,7 +58,7 @@ class Migrations:
     @staticmethod
     def get_last_batch_number(engine=None) -> int:
         """Return the current maximum batch number."""
-        from .model import Model
+        from ..model import Model
 
         engine = engine or Model.get_engine()
         Migrations.ensure_table(engine)
@@ -62,7 +71,7 @@ class Migrations:
     @staticmethod
     def get_last_batch(engine=None) -> list[str]:
         """Return names of migrations belonging to the last executed batch."""
-        from .model import Model
+        from ..model import Model
 
         engine = engine or Model.get_engine()
         last_batch = Migrations.get_last_batch_number(engine)
@@ -77,7 +86,7 @@ class Migrations:
     @staticmethod
     def remove(name: str, engine=None):
         """Remove a migration record from the tracking table."""
-        from .model import Model
+        from ..model import Model
 
         engine = engine or Model.get_engine()
         engine.execute("DELETE FROM _asok_migrations WHERE name = ?", (name,))

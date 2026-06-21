@@ -28,6 +28,17 @@ def html_safe_json(data: Any) -> str:
     return escaped
 
 
+def escape_js_string(val: str) -> str:
+    """Escape backslashes, single quotes, and newlines for use in inline JavaScript string literals."""
+    return (
+        val.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+
 def _merge_attrs(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     """Merge base attributes with overrides, stripping trailing underscores from keys."""
     merged = dict(base)

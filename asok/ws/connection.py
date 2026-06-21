@@ -11,31 +11,59 @@ from ..session import Session
 from .protocol import _OP_CLOSE, _OP_TEXT, _send_frame
 
 
+def _is_valid_room_name(room) -> bool:
+    # SECURITY: bounded length + safe charset to keep room names sanitised.
+    if not _is_short_string(room):
+        return False
+    return all(c.isalnum() or c in "._:-" for c in room)
+
+
+def _is_short_string(value, limit: int = 200) -> bool:
+    return bool(value) and isinstance(value, str) and len(value) <= limit
+
+
 class _Route:
     """One WS route. Supports [param] segments like file-system routing."""
 
     def __init__(self, pattern: str):
         self.pattern = pattern
-        self.segments = [s for s in pattern.split("/") if s]
-        self.is_dynamic = any(
-            s.startswith("[") and s.endswith("]") for s in self.segments
-        )
+        self.segments = _split_path_segments(pattern)
+        self.is_dynamic = any(_is_dynamic_segment(s) for s in self.segments)
         self.on_message = None
         self.on_connect = None
         self.on_disconnect = None
 
     def match(self, path: str) -> Optional[dict[str, str]]:
         """Return params dict if `path` matches this route, else None."""
-        segs = [s for s in path.split("/") if s]
+        segs = _split_path_segments(path)
         if len(segs) != len(self.segments):
             return None
-        params = {}
-        for ps, s in zip(self.segments, segs):
-            if ps.startswith("[") and ps.endswith("]"):
-                params[ps[1:-1]] = s
-            elif ps != s:
-                return None
+        params: dict[str, str] = {}
+        if not _match_all_segments(self.segments, segs, params):
+            return None
         return params
+
+
+def _split_path_segments(path: str) -> list[str]:
+    return [s for s in path.split("/") if s]
+
+
+def _match_all_segments(segments, segs, params) -> bool:
+    for ps, s in zip(segments, segs):
+        if not _match_one_segment(ps, s, params):
+            return False
+    return True
+
+
+def _match_one_segment(ps: str, s: str, params: dict[str, str]) -> bool:
+    if _is_dynamic_segment(ps):
+        params[ps[1:-1]] = s
+        return True
+    return ps == s
+
+
+def _is_dynamic_segment(ps: str) -> bool:
+    return ps.startswith("[") and ps.endswith("]")
 
 
 class Connection:
@@ -81,22 +109,17 @@ class Connection:
 
         SECURITY: Room names are validated to prevent injection and DoS attacks.
         """
-        # SECURITY: Validate room name format and length
-        if not room or not isinstance(room, str):
+        if not _is_valid_room_name(room):
             return False
-        if len(room) > 200:
+        if not self._authorize_room(room):
             return False
-        # SECURITY: Only allow safe characters in room names
-        if not all(c.isalnum() or c in "._:-" for c in room):
-            return False
-
-        # Run room authorization check if server hook is present
-        if self.server and hasattr(self.server, "check_room_authorization"):
-            if not self.server.check_room_authorization(self, room):
-                return False
-
         self._rooms.add(room)
         return True
+
+    def _authorize_room(self, room: str) -> bool:
+        if not (self.server and hasattr(self.server, "check_room_authorization")):
+            return True
+        return self.server.check_room_authorization(self, room)
 
     def leave(self, room: str) -> None:
         """Leave a named room.

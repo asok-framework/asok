@@ -177,76 +177,117 @@ def _pluralize(word: str) -> str:
     return word + "s"
 
 
+def _numpy_cosine_similarity(v1: bytes, v2: bytes) -> float:
+    import numpy as np
+    a = np.frombuffer(v1, dtype=np.float32)
+    b = np.frombuffer(v2, dtype=np.float32)
+    if a.shape != b.shape:
+        return 0.0
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return 0.0
+    return float(np.dot(a, b) / denom)
+
+
+def _unpack_float_vectors(v1: bytes, v2: bytes) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
+    import logging
+    if len(v1) % 4 != 0 or len(v2) % 4 != 0:
+        logging.getLogger("asok.orm").debug(
+            "Vector byte length not divisible by 4: %d, %d", len(v1), len(v2)
+        )
+        return None
+    a = struct.unpack(f"{len(v1) // 4}f", v1)
+    b = struct.unpack(f"{len(v2) // 4}f", v2)
+    if len(a) != len(b):
+        return None
+    return a, b
+
+
+def _dot_product(a: tuple[float, ...], b: tuple[float, ...]) -> float:
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _l2_norm(v: tuple[float, ...]) -> float:
+    return math.sqrt(sum(x * x for x in v))
+
+
+def _python_cosine_similarity(v1: bytes, v2: bytes) -> float:
+    vectors = _unpack_float_vectors(v1, v2)
+    if not vectors:
+        return 0.0
+    a, b = vectors
+    dot = _dot_product(a, b)
+    n1 = _l2_norm(a)
+    n2 = _l2_norm(b)
+    if n1 == 0 or n2 == 0:
+        return 0.0
+    return dot / (n1 * n2)
+
+
 def _asok_cosine_similarity(v1, v2):
     """SQLite extension for cosine similarity: 1 - cosine_distance."""
     import logging
-
     if not v1 or not v2:
         return 0.0
     try:
         try:
-            import numpy as np
-            a = np.frombuffer(v1, dtype=np.float32)
-            b = np.frombuffer(v2, dtype=np.float32)
-            if a.shape != b.shape:
-                return 0.0
-            denom = np.linalg.norm(a) * np.linalg.norm(b)
-            if denom == 0:
-                return 0.0
-            return float(np.dot(a, b) / denom)
+            return _numpy_cosine_similarity(v1, v2)
         except ImportError:
-            # Fallback to pure Python implementation
-            if len(v1) % 4 != 0 or len(v2) % 4 != 0:
-                logging.getLogger("asok.orm").debug(
-                    "Vector byte length not divisible by 4: %d, %d", len(v1), len(v2)
-                )
-                return 0.0
-            a = struct.unpack(f"{len(v1) // 4}f", v1)
-            b = struct.unpack(f"{len(v2) // 4}f", v2)
-            if len(a) != len(b):
-                return 0.0
-            dot = sum(x * y for x, y in zip(a, b))
-            n1 = math.sqrt(sum(x * x for x in a))
-            n2 = math.sqrt(sum(x * x for x in b))
-            if n1 == 0 or n2 == 0:
-                return 0.0
-            return dot / (n1 * n2)
+            return _python_cosine_similarity(v1, v2)
     except Exception as e:
         # Log vector operation errors for debugging
         logging.getLogger("asok.orm").debug("Error in cosine_similarity: %s", e)
         return 0.0
 
 
+def _numpy_euclidean_distance(v1: bytes, v2: bytes) -> float:
+    import numpy as np
+    a = np.frombuffer(v1, dtype=np.float32)
+    b = np.frombuffer(v2, dtype=np.float32)
+    if a.shape != b.shape:
+        return 99999.0
+    return float(np.linalg.norm(a - b))
+
+
+def _python_euclidean_distance(v1: bytes, v2: bytes) -> float:
+    vectors = _unpack_float_vectors(v1, v2)
+    if not vectors:
+        return 99999.0
+    a, b = vectors
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+
 def _asok_euclidean_distance(v1, v2):
     """SQLite extension for euclidean distance."""
     import logging
-
     if not v1 or not v2:
         return 99999.0
     try:
         try:
-            import numpy as np
-            a = np.frombuffer(v1, dtype=np.float32)
-            b = np.frombuffer(v2, dtype=np.float32)
-            if a.shape != b.shape:
-                return 99999.0
-            return float(np.linalg.norm(a - b))
+            return _numpy_euclidean_distance(v1, v2)
         except ImportError:
-            # Fallback to pure Python implementation
-            if len(v1) % 4 != 0 or len(v2) % 4 != 0:
-                logging.getLogger("asok.orm").debug(
-                    "Vector byte length not divisible by 4: %d, %d", len(v1), len(v2)
-                )
-                return 99999.0
-            a = struct.unpack(f"{len(v1) // 4}f", v1)
-            b = struct.unpack(f"{len(v2) // 4}f", v2)
-            if len(a) != len(b):
-                return 99999.0
-            return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+            return _python_euclidean_distance(v1, v2)
     except Exception as e:
         # Log vector operation errors for debugging
         logging.getLogger("asok.orm").debug("Error in euclidean_distance: %s", e)
         return 99999.0
+
+
+def _format_sql_arg(arg: Any) -> str:
+    if isinstance(arg, str):
+        escaped = arg.replace("'", "''")
+        return f"'{escaped}'"
+    if arg is None:
+        return "NULL"
+    if isinstance(arg, bool):
+        return "1" if arg else "0"
+    return _format_sql_numeric_or_fallback(arg)
+
+
+def _format_sql_numeric_or_fallback(arg: Any) -> str:
+    if isinstance(arg, (int, float)):
+        return str(arg)
+    return f"'{str(arg)}'"
 
 
 def interpolate_sql(sql: str, args: list) -> str:
@@ -260,20 +301,9 @@ def interpolate_sql(sql: str, args: list) -> str:
     if not args:
         return sql
 
-    # Naive interpolation for inspection
     res = sql
     for arg in args:
-        if isinstance(arg, str):
-            escaped = arg.replace("'", "''")
-            val = f"'{escaped}'"
-        elif arg is None:
-            val = "NULL"
-        elif isinstance(arg, (int, float)):
-            val = str(arg)
-        elif isinstance(arg, bool):
-            val = "1" if arg else "0"
-        else:
-            val = f"'{str(arg)}'"
+        val = _format_sql_arg(arg)
         res = res.replace("?", val, 1)
     return res
 

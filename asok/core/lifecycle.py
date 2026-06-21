@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -20,6 +21,10 @@ class LifecycleMixin:
             middleware._asok_priority = priority
         self.middleware_handlers.sort(key=lambda m: getattr(m, "_asok_priority", 50))
         self._middleware_chain = None
+        self._has_async_middleware = any(
+            inspect.iscoroutinefunction(mw) for mw in self.middleware_handlers
+        )
+        self._middleware_handlers_reversed = list(reversed(self.middleware_handlers))
         return self
 
     def on_startup(self, fn: Callable) -> Callable:
@@ -35,6 +40,7 @@ class LifecycleMixin:
     def startup(self) -> None:
         """Run all registered startup hooks."""
         from .signals import app_startup
+
         app_startup.send(self)
         for fn in self._on_startup:
             fn()
@@ -42,22 +48,30 @@ class LifecycleMixin:
     def shutdown(self) -> None:
         """Run all registered shutdown hooks and stop background tasks."""
         from .signals import app_shutdown
+
         app_shutdown.send(self)
         for fn in self._on_shutdown:
             fn()
 
+        self._cancel_background_tasks()
+        self._shutdown_executor()
+        self._stop_session_cleanup()
+
+    def _cancel_background_tasks(self) -> None:
         for task in self._tasks:
             try:
                 task.cancel()
             except Exception:
                 pass
 
+    def _shutdown_executor(self) -> None:
         if self._executor:
             try:
                 self._executor.shutdown(wait=False)
             except Exception:
                 pass
 
+    def _stop_session_cleanup(self) -> None:
         if hasattr(self, "_session_store"):
             self._session_store.stop_cleanup_timer()
 

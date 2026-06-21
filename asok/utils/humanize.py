@@ -5,6 +5,51 @@ import math
 from typing import Any, Union
 
 
+def _parse_datetime(dt: Union[datetime.datetime, str, None]) -> datetime.datetime:
+    if not dt:
+        raise ValueError("Invalid datetime")
+    if isinstance(dt, str):
+        if len(dt) > 100:
+            raise ValueError("DoS protection: date string too long")
+        return datetime.datetime.fromisoformat(dt.replace("Z", "+00:00"))
+    return dt
+
+def _get_seconds_diff(dt: datetime.datetime) -> float:
+    now = datetime.datetime.now(dt.tzinfo) if dt.tzinfo else datetime.datetime.now()
+    diff = now - dt
+    return diff.total_seconds()
+
+def _get_plural_suffix(count: int) -> str:
+    if count > 1:
+        return "s"
+    return ""
+
+def _format_time_interval(seconds: float) -> str:
+    if seconds < 0:
+        return "in the future"
+    if seconds < 60:
+        return "just now"
+
+    intervals = [
+        (31536000, "year"),
+        (2592000, "month"),
+        (604800, "week"),
+        (86400, "day"),
+        (3600, "hour"),
+        (60, "minute"),
+    ]
+    for limit, unit in intervals:
+        if seconds >= limit:
+            count = int(seconds / limit)
+            suffix = _get_plural_suffix(count)
+            return f"{count} {unit}{suffix} ago"
+    return "just now"
+
+def _fallback_value(dt: Any) -> str:
+    if isinstance(dt, str):
+        return dt
+    return ""
+
 def time_ago(dt: Union[datetime.datetime, str, None]) -> str:
     """Convert a datetime object or ISO string to a relative time string.
 
@@ -18,48 +63,18 @@ def time_ago(dt: Union[datetime.datetime, str, None]) -> str:
     """
     if not dt:
         return ""
-    if isinstance(dt, str):
-        # SECURITY: Limit string length to prevent DoS
-        if len(dt) > 100:
-            return "invalid date"
-        try:
-            dt = datetime.datetime.fromisoformat(dt.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return dt if isinstance(dt, str) else ""
-
     try:
-        now = datetime.datetime.now(dt.tzinfo) if dt.tzinfo else datetime.datetime.now()
-        diff = now - dt
-        seconds = diff.total_seconds()
-    except (ValueError, OverflowError, AttributeError):
-        return "invalid date"
+        parsed_dt = _parse_datetime(dt)
+        seconds = _get_seconds_diff(parsed_dt)
+    except (ValueError, TypeError, OverflowError, AttributeError):
+        return _fallback_value(dt)
 
-    # SECURITY: Prevent overflow with extremely large time differences
     if abs(seconds) > 3_155_760_000:  # > 100 years
-        return "a very long time ago" if seconds > 0 else "in the distant future"
+        if seconds > 0:
+            return "a very long time ago"
+        return "in the distant future"
 
-    if seconds < 0:
-        return "in the future"
-    if seconds < 60:
-        return "just now"
-    if seconds < 3600:
-        minutes = int(seconds / 60)
-        return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
-    if seconds < 86400:
-        hours = int(seconds / 3600)
-        return f"{hours} hour{'s' if hours > 1 else ''} ago"
-    if seconds < 604800:
-        days = int(seconds / 86400)
-        return f"{days} day{'s' if days > 1 else ''} ago"
-    if seconds < 2592000:
-        weeks = int(seconds / 604800)
-        return f"{weeks} week{'s' if weeks > 1 else ''} ago"
-    if seconds < 31536000:
-        months = int(seconds / 2592000)
-        return f"{months} month{'s' if months > 1 else ''} ago"
-
-    years = int(seconds / 31536000)
-    return f"{years} year{'s' if years > 1 else ''} ago"
+    return _format_time_interval(seconds)
 
 
 def file_size(size_bytes: int) -> str:
@@ -109,6 +124,11 @@ def intcomma(value: Union[int, float, str]) -> Union[str, Any]:
         return value
 
 
+def _add_duration_part(parts: list[str], value: int, suffix: str) -> None:
+    if value > 0:
+        parts.append(f"{value}{suffix}")
+
+
 def duration(seconds: Union[int, float, None]) -> str:
     """Convert seconds to a human-readable duration (e.g. 5m 20s).
 
@@ -126,13 +146,13 @@ def duration(seconds: Union[int, float, None]) -> str:
     minutes, seconds = divmod(seconds, 60)
 
     parts = []
-    if days > 0:
-        parts.append(f"{days}d")
-    if hours > 0:
-        parts.append(f"{hours}h")
-    if minutes > 0:
-        parts.append(f"{minutes}m")
-    if seconds > 0 or not parts:
+    _add_duration_part(parts, days, "d")
+    _add_duration_part(parts, hours, "h")
+    _add_duration_part(parts, minutes, "m")
+
+    if seconds > 0:
+        parts.append(f"{seconds}s")
+    if not parts:
         parts.append(f"{seconds}s")
 
     return " ".join(parts)

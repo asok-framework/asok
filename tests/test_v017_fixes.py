@@ -216,7 +216,7 @@ def test_media_upload_value_error_handling(tmp_path):
         def __init__(self, filename):
             self.filename = filename
 
-        def save(self, dest):
+        def save(self, dest, allowed_types=None):
             raise ValueError("Invalid magic bytes or mime-type mismatch")
 
     # Mock a file that succeeds
@@ -225,7 +225,7 @@ def test_media_upload_value_error_handling(tmp_path):
             self.filename = filename
             self.saved = False
 
-        def save(self, dest):
+        def save(self, dest, allowed_types=None):
             self.saved = True
 
     environ = {

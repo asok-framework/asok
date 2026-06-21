@@ -801,6 +801,14 @@
     });
   }
 
+  window.addEventListener('popstate', function (e) {
+    if (e.state && e.state.url && e.state.b) {
+      performBlockSwap(e.state.url, e.state.b, e.state.sel, e.state.mode, {}, null);
+    } else {
+      location.reload();
+    }
+  });
+
   window.Asok = window.Asok || {};
   const oldInit = window.Asok.init;
   window.Asok.init = function (el) {

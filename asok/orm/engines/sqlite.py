@@ -112,18 +112,22 @@ class SQLiteEngine(BaseEngine):
         if hasattr(self._local, "conn"):
             delattr(self._local, "conn")
 
+    def _autocommit_if_needed(self, conn: Any) -> None:
+        txn_level = getattr(self._local, "txn_level", 0)
+        if txn_level == 0 and conn.in_transaction:
+            conn.commit()
+
     def execute(
         self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
     ) -> List[Dict[str, Any]] | int:
         conn = self.get_connection()
-        cursor = conn.execute(sql, args or ())
+        query_args = args if args is not None else ()
+        cursor = conn.execute(sql, query_args)
         if cursor.description:
             return [dict(row) for row in cursor.fetchall()]
         # Auto-commit DML statements when not inside an explicit transaction,
         # matching the autocommit=True behavior of the MySQL and PostgreSQL engines.
-        txn_level = getattr(self._local, "txn_level", 0)
-        if txn_level == 0 and conn.in_transaction:
-            conn.commit()
+        self._autocommit_if_needed(conn)
         return cursor.rowcount
 
     def quote_identifier(self, name: str) -> str:
@@ -150,9 +154,15 @@ class SQLiteEngine(BaseEngine):
     def search_sql(
         self, table: str, columns: List[str], term: str
     ) -> Tuple[str, List[Any]]:
+        import re
+        clean = re.sub(r"[^\w\s]", " ", term or "", flags=re.UNICODE)
+        words = clean.split()
+        if not words:
+            return "0 = 1", []
+        ft_term = " ".join(f'"{w}"*' for w in words)
         fts_table = f"{table}_fts"
         subquery = f"SELECT rowid FROM {self.quote_identifier(fts_table)} WHERE {self.quote_identifier(fts_table)} MATCH ?"
-        return f"id IN ({subquery})", [term]
+        return f"id IN ({subquery})", [ft_term]
 
     def vector_distance_sql(self, column: str, metric: str) -> str:
         if metric == "cosine":
@@ -195,52 +205,57 @@ class SQLiteEngine(BaseEngine):
             return ModelError(msg, original=e)
         return e
 
+    def _validate_and_get_search_field_names(self, model_class: Any) -> tuple[str, str, str]:
+        for field_name in model_class._search_fields:
+            model_class._valid_column(field_name)
+
+        f_names_quoted = ", ".join([f'"{n}"' for n in model_class._search_fields])
+        f_names_new = ", ".join([f"new.{n}" for n in model_class._search_fields])
+        f_names_old = ", ".join([f"old.{n}" for n in model_class._search_fields])
+        return f_names_quoted, f_names_new, f_names_old
+
+    def _setup_fts_tables_and_triggers(self, model_class: Any, f_names_quoted: str, f_names_new: str, f_names_old: str) -> None:
+        # Create FTS5 virtual table
+        fts_sql = f'CREATE VIRTUAL TABLE IF NOT EXISTS "{model_class._table}_fts" USING fts5({f_names_quoted}, content="{model_class._table}", content_rowid="id")'
+        self.execute(fts_sql)
+
+        # Triggers to keep FTS in sync
+        ai = f"""CREATE TRIGGER IF NOT EXISTS "{model_class._table}_ai" AFTER INSERT ON "{model_class._table}" BEGIN
+            INSERT INTO "{model_class._table}_fts"(rowid, {f_names_quoted}) VALUES (new.id, {f_names_new});
+        END;"""
+        ad = f"""CREATE TRIGGER IF NOT EXISTS "{model_class._table}_ad" AFTER DELETE ON "{model_class._table}" BEGIN
+            INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts", rowid, {f_names_quoted}) VALUES('delete', old.id, {f_names_old});
+        END;"""
+        au = f"""CREATE TRIGGER IF NOT EXISTS "{model_class._table}_au" AFTER UPDATE ON "{model_class._table}" BEGIN
+            INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts", rowid, {f_names_quoted}) VALUES('delete', old.id, {f_names_old});
+            INSERT INTO "{model_class._table}_fts"(rowid, {f_names_quoted}) VALUES (new.id, {f_names_new});
+        END;"""
+        self.execute(ai)
+        self.execute(ad)
+        self.execute(au)
+
+    def _auto_rebuild_fts_index(self, model_class: Any) -> None:
+        try:
+            source_count = self.execute(
+                f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table)}"
+            )[0]["cnt"]
+            fts_count = self.execute(
+                f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table + '_fts')}"
+            )[0]["cnt"]
+            if source_count > 0 and fts_count == 0:
+                self.execute(
+                    f'INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts") VALUES(\'rebuild\')'
+                )
+        except Exception as e:
+            logger.warning(
+                "Failed to rebuild FTS5 index for %s: %s", model_class._table, e
+            )
+
     def post_create_table(self, model_class: Any) -> None:
         if model_class._search_fields:
-            # SECURITY: Validate all searchable field names before using in SQL
-            for field_name in model_class._search_fields:
-                model_class._valid_column(field_name)
-
-            # SECURITY: Quote column names to prevent SQL injection
-            f_names_quoted = ", ".join([f'"{n}"' for n in model_class._search_fields])
-            f_names_new = ", ".join([f"new.{n}" for n in model_class._search_fields])
-            f_names_old = ", ".join([f"old.{n}" for n in model_class._search_fields])
-
-            # Create FTS5 virtual table
-            fts_sql = f'CREATE VIRTUAL TABLE IF NOT EXISTS "{model_class._table}_fts" USING fts5({f_names_quoted}, content="{model_class._table}", content_rowid="id")'
-            self.execute(fts_sql)
-
-            # Triggers to keep FTS in sync
-            ai = f"""CREATE TRIGGER IF NOT EXISTS "{model_class._table}_ai" AFTER INSERT ON "{model_class._table}" BEGIN
-                INSERT INTO "{model_class._table}_fts"(rowid, {f_names_quoted}) VALUES (new.id, {f_names_new});
-            END;"""
-            ad = f"""CREATE TRIGGER IF NOT EXISTS "{model_class._table}_ad" AFTER DELETE ON "{model_class._table}" BEGIN
-                INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts", rowid, {f_names_quoted}) VALUES('delete', old.id, {f_names_old});
-            END;"""
-            au = f"""CREATE TRIGGER IF NOT EXISTS "{model_class._table}_au" AFTER UPDATE ON "{model_class._table}" BEGIN
-                INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts", rowid, {f_names_quoted}) VALUES('delete', old.id, {f_names_old});
-                INSERT INTO "{model_class._table}_fts"(rowid, {f_names_quoted}) VALUES (new.id, {f_names_new});
-            END;"""
-            self.execute(ai)
-            self.execute(ad)
-            self.execute(au)
-
-            # Auto-rebuild if empty
-            try:
-                source_count = self.execute(
-                    f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table)}"
-                )[0]["cnt"]
-                fts_count = self.execute(
-                    f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(model_class._table + '_fts')}"
-                )[0]["cnt"]
-                if source_count > 0 and fts_count == 0:
-                    self.execute(
-                        f'INSERT INTO "{model_class._table}_fts"("{model_class._table}_fts") VALUES(\'rebuild\')'
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Failed to rebuild FTS5 index for %s: %s", model_class._table, e
-                )
+            f_quoted, f_new, f_old = self._validate_and_get_search_field_names(model_class)
+            self._setup_fts_tables_and_triggers(model_class, f_quoted, f_new, f_old)
+            self._auto_rebuild_fts_index(model_class)
 
     @property
     def primary_key_def(self) -> str:

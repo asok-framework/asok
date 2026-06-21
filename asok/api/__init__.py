@@ -68,95 +68,112 @@ def register_api_docs(app):
     pass
 
 
-def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
-    """Handle requests to documentation endpoints (/docs and /openapi.json)."""
+def _should_serve_docs(app: Asok, path: str, spec_path: str, docs_path: str) -> Optional[dict]:
+    if path != spec_path and path != docs_path:
+        return None
     from .openapi import OpenAPIGenerator
+    gen = OpenAPIGenerator(app)
+    spec = gen.generate()
+    if not spec.get("paths"):
+        return None
+    return spec
 
-    path = request.path
-    # Support custom doc paths via config
-    docs_path = app.config.get("DOCS_PATH", "/docs")
-    spec_path = app.config.get("OPENAPI_PATH", "/openapi.json")
 
-    if path == spec_path or path == docs_path:
-        gen = OpenAPIGenerator(app)
-        spec = gen.generate()
+def _render_docs_html(app: Asok, request: Request, spec: dict) -> Optional[str]:
+    current_dir = os.path.dirname(__file__)
+    template_path = os.path.join(current_dir, "templates", "docs.html")
 
-        # If no API paths are found, hide the docs (return None to 404)
-        if not spec.get("paths"):
+    if not os.path.exists(template_path):
+        return None
+
+    try:
+        file_size = os.path.getsize(template_path)
+        if file_size > 1_000_000:
             return None
+    except OSError:
+        return None
 
-        if path == spec_path:
-            return request.json(spec)
+    with open(template_path) as f:
+        content = f.read()
 
-        # Handle docs_path
-        current_dir = os.path.dirname(__file__)
-        template_path = os.path.join(current_dir, "templates", "docs.html")
+    from ..templates import render_template_string
+    css_url = "/asok-api/docs.min.css"
+    js_url = "/asok-api/docs.min.js"
 
-        if not os.path.exists(template_path):
-            # Fallback for when templates aren't in the expected spot
-            return None
+    return render_template_string(
+        content,
+        {
+            "spec": spec,
+            "csrf_token": request.csrf_token_value,
+            "api_title": app.config.get(
+                "API_TITLE", app.config.get("PROJECT_NAME", spec["info"]["title"])
+            ),
+            "api_logo": app.config.get("API_LOGO", app.config.get("SITE_LOGO")),
+            "css_url": css_url,
+            "js_url": js_url,
+            "graphql_enabled": bool(app.config.get("GRAPHQL_ENABLED", False)),
+            "graphql_path": app.config.get("GRAPHQL_PATH", "/graphql"),
+        },
+    )
 
-        # SECURITY: Limit template file size to prevent DoS (max 1MB)
-        try:
-            file_size = os.path.getsize(template_path)
-            if file_size > 1_000_000:
-                return None
-        except OSError:
-            return None
 
-        with open(template_path) as f:
-            content = f.read()
-
-        # Render using the app's engine
-        from ..templates import render_template_string
-
-        # Always use minified assets (package only contains .min files)
-        css_url = "/asok-api/docs.min.css"
-        js_url = "/asok-api/docs.min.js"
-
-        return render_template_string(
-            content,
-            {
-                "spec": spec,
-                "csrf_token": request.csrf_token_value,
-                "api_title": app.config.get(
-                    "API_TITLE", app.config.get("PROJECT_NAME", spec["info"]["title"])
-                ),
-                "api_logo": app.config.get("API_LOGO", app.config.get("SITE_LOGO")),
-                "css_url": css_url,
-                "js_url": js_url,
-                "graphql_enabled": bool(app.config.get("GRAPHQL_ENABLED", False)),
-                "graphql_path": app.config.get("GRAPHQL_PATH", "/graphql"),
-            },
-        )
-
-    # Serve static assets (CSS, JS, SVG)
+def _serve_static_asset(request: Request, path: str) -> Optional[bytes]:
     static_paths = {
         "/asok-api/docs.css": ("docs.css", "text/css"),
         "/asok-api/docs.min.css": ("docs.min.css", "text/css"),
         "/asok-api/docs.js": ("docs.js", "application/javascript"),
         "/asok-api/docs.min.js": ("docs.min.js", "application/javascript"),
         "/asok-api/logo.svg": ("logo.svg", "image/svg+xml"),
+        "/asok-api/fonts/inter-400.woff2": ("fonts/inter-400.woff2", "font/woff2"),
+        "/asok-api/fonts/inter-500.woff2": ("fonts/inter-500.woff2", "font/woff2"),
+        "/asok-api/fonts/inter-600.woff2": ("fonts/inter-600.woff2", "font/woff2"),
+        "/asok-api/fonts/inter-700.woff2": ("fonts/inter-700.woff2", "font/woff2"),
+        "/asok-api/fonts/outfit-500.woff2": ("fonts/outfit-500.woff2", "font/woff2"),
+        "/asok-api/fonts/outfit-600.woff2": ("fonts/outfit-600.woff2", "font/woff2"),
+        "/asok-api/fonts/outfit-700.woff2": ("fonts/outfit-700.woff2", "font/woff2"),
+        "/asok-api/fonts/outfit-800.woff2": ("fonts/outfit-800.woff2", "font/woff2"),
+        "/asok-graphql/react.min.js":     ("graphiql/react.min.js", "application/javascript"),
+        "/asok-graphql/react-dom.min.js": ("graphiql/react-dom.min.js", "application/javascript"),
+        "/asok-graphql/graphiql.min.js":  ("graphiql/graphiql.min.js", "application/javascript"),
+        "/asok-graphql/graphiql.min.css": ("graphiql/graphiql.min.css", "text/css"),
     }
 
-    if path in static_paths:
-        filename, content_type = static_paths[path]
-        current_dir = os.path.dirname(__file__)
-        file_path = os.path.join(current_dir, "static", filename)
+    if path not in static_paths:
+        return None
 
-        if not os.path.exists(file_path):
+    filename, content_type = static_paths[path]
+    current_dir = os.path.dirname(__file__)
+    file_path = os.path.join(current_dir, "static", filename)
+
+    if not os.path.exists(file_path):
+        return None
+
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > 5_000_000:
             return None
+    except OSError:
+        return None
 
-        # SECURITY: Limit static file size to prevent DoS (max 5MB)
-        try:
-            file_size = os.path.getsize(file_path)
-            if file_size > 5_000_000:
-                return None
-        except OSError:
-            return None
+    with open(file_path, "rb") as f:
+        request.content_type = content_type
+        return f.read()
 
-        with open(file_path, "rb") as f:
-            request.content_type = content_type
-            return f.read()
 
-    return None
+def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
+    """Handle requests to documentation endpoints (/docs and /openapi.json)."""
+    path = request.path
+    docs_path = app.config.get("DOCS_PATH", "/docs")
+    spec_path = app.config.get("OPENAPI_PATH", "/openapi.json")
+
+    spec = _should_serve_docs(app, path, spec_path, docs_path)
+    if spec is not None:
+        if path == spec_path:
+            auth_hook = app.config.get("OPENAPI_AUTHORIZE")
+            if auth_hook is not None and not auth_hook(request):
+                request.status = "403 Forbidden"
+                return request.json({"error": "Unauthorized"})
+            return request.json(spec)
+        return _render_docs_html(app, request, spec)
+
+    return _serve_static_asset(request, path)

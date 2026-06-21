@@ -54,9 +54,13 @@ class MockWebsocketConn:
         self.sent_messages = []
         self.graphql_subscriptions = {}
         self.path = "/graphql"
+        self.closed = False
 
     def send_json(self, data: dict):
         self.sent_messages.append(data)
+
+    def close(self, code: int = 1000, reason: str = ""):
+        self.closed = True
 
 
 # ── Test Cases ──────────────────────────────────────────
@@ -150,6 +154,7 @@ def get(request):
 
 
 def test_graphql_playground_in_dev(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
     client = TestClient(fresh_app)
 
     # GET in production should fail
@@ -164,8 +169,20 @@ def test_graphql_playground_in_dev(fresh_app):
     assert "Asok GraphQL Explorer" in res.text
 
 
+def test_graphql_disabled_by_default(fresh_app):
+    """GraphQL endpoint must NOT be exposed unless explicitly enabled."""
+    client = TestClient(fresh_app)
+    fresh_app.config["DEBUG"] = True
+    res = client.get("/graphql")
+    assert res.status_code == 404
+    res = client.post("/graphql", json_body={"query": "{ __typename }"})
+    assert res.status_code == 404
+
+
 def test_graphql_queries_and_mutations(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
     fresh_app.config["GRAPHQL_MAX_COMPLEXITY"] = 1000
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS"] = True
     client = TestClient(fresh_app)
 
     # Create test user
@@ -246,6 +263,7 @@ def test_graphql_queries_and_mutations(fresh_app):
 
 
 def test_graphql_query_complexity(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
     fresh_app.config["GRAPHQL_MAX_COMPLEXITY"] = 200
     client = TestClient(fresh_app)
 
@@ -268,7 +286,7 @@ def test_graphql_query_complexity(fresh_app):
     fresh_app.config["GRAPHQL_MAX_COMPLEXITY"] = 10
     # Complexity is: 1 (qlusers) + (10 (default limit) * (1 (name) + 1 (posts) + (10 (default posts limit) * 1 (title)))) = 121
     res = client.post("/graphql", json_body={"query": query})
-    assert res.status_code == 400
+    assert res.status_code == 200   # GraphQL errors always return 200 per the spec
     assert "errors" in res.json
     assert "complexity" in res.json["errors"][0]["message"]
 
@@ -304,3 +322,105 @@ def test_graphql_subscriptions(fresh_app):
     assert msg["type"] == "next"
     assert msg["id"] == "sub-id-123"
     assert msg["payload"]["data"]["qluserCreated"]["name"] == "Charlie"
+
+
+def test_graphql_query_depth_limit(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_MAX_DEPTH"] = 15
+    client = TestClient(fresh_app)
+
+    # Construct a deeply nested query (depth > 15)
+    nested_part = "posts { author { " * 10
+    closing_braces = "} } " * 10
+    query = f"query {{ qlusers {{ {nested_part} id {closing_braces} }} }}"
+
+    res = client.post("/graphql", json_body={"query": query})
+    assert res.status_code == 200   # GraphQL errors always return 200 per the spec
+    assert "errors" in res.json
+    assert "depth" in res.json["errors"][0]["message"].lower()
+
+
+def test_graphql_authorize_http_hook(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+
+    # Block all requests
+    fresh_app.config["GRAPHQL_AUTHORIZE"] = lambda req: False
+    client = TestClient(fresh_app)
+
+    res = client.post("/graphql", json_body={"query": "{ qlusers { id } }"})
+    assert res.status_code == 403
+    assert res.json["errors"][0]["message"] == "Unauthorized GraphQL access"
+
+    # Allow all requests
+    fresh_app.config["GRAPHQL_AUTHORIZE"] = lambda req: True
+    res = client.post("/graphql", json_body={"query": "{ qlusers { id } }"})
+    assert res.status_code == 200
+    assert "errors" not in res.json
+
+
+def test_graphql_authorize_ws_hook(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_AUTHORIZE"] = lambda req: False
+
+    server = WebSocketServer(app=fresh_app)
+    conn = MockWebsocketConn(server)
+
+    from asok.request import Request
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/graphql",
+        "wsgi.url_scheme": "http",
+        "HTTP_HOST": "localhost",
+    }
+    conn.request = Request(environ)
+
+    server._connections["/graphql"] = {conn}
+
+    on_graphql_ws_message(conn, json.dumps({"type": "connection_init"}))
+
+    assert len(conn.sent_messages) == 1
+    assert conn.sent_messages[0]["type"] == "connection_error"
+    assert conn.sent_messages[0]["payload"]["message"] == "Unauthorized GraphQL access"
+    assert conn.closed is True
+
+
+def test_graphql_disable_introspection(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    client = TestClient(fresh_app)
+
+    # 1. By default, in DEBUG=True mode, introspection is allowed
+    fresh_app.config["DEBUG"] = True
+    fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = None
+    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    assert res.status_code == 200
+    assert "errors" not in res.json
+    assert "__schema" in res.json["data"]
+
+    # 2. In non-DEBUG mode, introspection is disabled by default
+    fresh_app.config["DEBUG"] = False
+    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    assert res.status_code == 200
+    assert "errors" in res.json
+    assert "disabled" in res.json["errors"][0]["message"].lower()
+
+    # 3. Can explicitly disable introspection even in DEBUG mode
+    fresh_app.config["DEBUG"] = True
+    fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = True
+    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    assert res.status_code == 200
+    assert "errors" in res.json
+
+    # 4. Can explicitly enable introspection even in production
+    fresh_app.config["DEBUG"] = False
+    fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = False
+    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    assert res.status_code == 200
+    assert "errors" not in res.json
+
+    # 5. Queries like __typename are not blocked even when introspection is disabled
+    fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = True
+    res = client.post("/graphql", json_body={"query": "{ __typename }"})
+    assert res.status_code == 200
+    assert "errors" not in res.json
+
+

@@ -8,6 +8,20 @@ from typing import Any, Callable
 
 from asok.cache import default_cache
 
+_EXEMPT_PREFIXES = (
+    "/__health",
+    "/__reload",
+    "/static/",
+    "/css/",
+    "/js/",
+    "/images/",
+    "/uploads/",
+)
+
+
+def _is_exempt_path(path: str) -> bool:
+    return path.startswith(_EXEMPT_PREFIXES)
+
 
 def rate_limit_middleware(request: Any, next_handler: Callable) -> Any:
     """Apply global rate limiting per IP address.
@@ -33,16 +47,7 @@ def rate_limit_middleware(request: Any, next_handler: Callable) -> Any:
         return next_handler(request)
 
     # Exempt certain paths from rate limiting
-    exempt_paths = [
-        "/__health",
-        "/__reload",
-        "/static/",
-        "/css/",
-        "/js/",
-        "/images/",
-        "/uploads/",
-    ]
-    if any(request.path.startswith(prefix) for prefix in exempt_paths):
+    if _is_exempt_path(request.path):
         return next_handler(request)
 
     # Get rate limit from config (default: 100 req/min)

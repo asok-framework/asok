@@ -185,6 +185,32 @@ SAFE_SVG_ATTRIBUTES = {
 EVENT_HANDLER_PATTERN = re.compile(r"^on[a-z]+$", re.IGNORECASE)
 
 
+def _validate_svg_content_limits(svg_content: bytes) -> None:
+    if len(svg_content) > 10_000_000:  # 10MB limit
+        raise ValueError("SVG file too large (max 10MB)")
+    if not svg_content or len(svg_content) < 10:
+        raise ValueError("SVG file is empty or too small")
+
+
+def _decode_svg_bytes(svg_content: bytes) -> str:
+    try:
+        return svg_content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("SVG file is not valid UTF-8")
+
+
+def _parse_svg_string(svg_string: str) -> ET.Element:
+    # SECURITY: Remove XML processing instructions and DOCTYPE (can be used for XXE attacks)
+    svg_string = re.sub(r"<\?xml[^>]*\?>", "", svg_string)
+    svg_string = re.sub(r"<!DOCTYPE[^>]*>", "", svg_string, flags=re.IGNORECASE)
+    svg_string = re.sub(r"<!ENTITY[^>]*>", "", svg_string, flags=re.IGNORECASE)
+    svg_string = re.sub(r"<!--.*?-->", "", svg_string, flags=re.DOTALL)
+    try:
+        return ET.fromstring(svg_string.encode("utf-8"))
+    except ET.ParseError as e:
+        raise ValueError(f"Invalid SVG structure: {e}")
+
+
 def sanitize_svg(svg_content: bytes) -> bytes:
     """Sanitize an SVG file by removing dangerous content.
 
@@ -205,33 +231,9 @@ def sanitize_svg(svg_content: bytes) -> bytes:
     - Validates style attribute content
     - Limits document size to prevent DoS
     """
-    # SECURITY: Reject excessively large SVG files to prevent DoS
-    if len(svg_content) > 10_000_000:  # 10MB limit
-        raise ValueError("SVG file too large (max 10MB)")
-
-    # SECURITY: Reject empty files
-    if not svg_content or len(svg_content) < 10:
-        raise ValueError("SVG file is empty or too small")
-
-    # Decode to string for processing
-    try:
-        svg_string = svg_content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ValueError("SVG file is not valid UTF-8")
-
-    # SECURITY: Remove XML processing instructions and DOCTYPE (can be used for XXE attacks)
-    svg_string = re.sub(r"<\?xml[^>]*\?>", "", svg_string)
-    svg_string = re.sub(r"<!DOCTYPE[^>]*>", "", svg_string, flags=re.IGNORECASE)
-    svg_string = re.sub(r"<!ENTITY[^>]*>", "", svg_string, flags=re.IGNORECASE)
-    svg_string = re.sub(r"<!--.*?-->", "", svg_string, flags=re.DOTALL)
-
-    # Parse the SVG
-    try:
-        # SECURITY: defusedxml would be better, but ElementTree is safer than lxml for basic parsing
-        # We've already removed DOCTYPE and entities above
-        root = ET.fromstring(svg_string.encode("utf-8"))
-    except ET.ParseError as e:
-        raise ValueError(f"Invalid SVG structure: {e}")
+    _validate_svg_content_limits(svg_content)
+    svg_string = _decode_svg_bytes(svg_content)
+    root = _parse_svg_string(svg_string)
 
     # Sanitize the tree
     _sanitize_element(root)
@@ -261,35 +263,22 @@ def _remove_namespace_prefixes(element: ET.Element) -> None:
         _remove_namespace_prefixes(child)
 
 
-def _sanitize_element(element: ET.Element) -> None:
-    """Recursively sanitize an XML element and its children.
-
-    This function modifies the element tree in-place, removing dangerous
-    elements and attributes.
-    """
-    # Get the tag name without namespace
-    tag = _strip_namespace(element.tag)
-
-    # SECURITY: Remove dangerous elements entirely
+def _check_and_normalize_tag(element: ET.Element, tag: str) -> bool:
+    """Checks tag and normalizes it. Returns True if tag is dangerous/removed."""
     if tag.lower() in DANGEROUS_SVG_ELEMENTS:
-        # Clear all children and text
         element.clear()
-        element.tag = "removed"  # Mark for removal
-        return
+        element.tag = "removed"
+        return True
 
-    # SECURITY: Only allow whitelisted SVG elements
     if tag.lower() not in SAFE_SVG_ELEMENTS:
-        # Convert unknown elements to <g> (safe container)
         element.tag = "g"
+    return False
 
-    # Sanitize attributes
-    _sanitize_attributes(element)
 
-    # Recursively sanitize children
+def _process_element_children(element: ET.Element) -> None:
     children_to_remove = []
     for child in list(element):
         _sanitize_element(child)
-        # Remove elements marked as dangerous
         if _strip_namespace(child.tag) == "removed":
             children_to_remove.append(child)
 
@@ -297,37 +286,59 @@ def _sanitize_element(element: ET.Element) -> None:
         element.remove(child)
 
 
+def _sanitize_element(element: ET.Element) -> None:
+    """Recursively sanitize an XML element and its children.
+
+    This function modifies the element tree in-place, removing dangerous
+    elements and attributes.
+    """
+    tag = _strip_namespace(element.tag)
+
+    if _check_and_normalize_tag(element, tag):
+        return
+
+    _sanitize_attributes(element)
+    _process_element_children(element)
+
+
+def _is_dangerous_attribute_svg(attr_name_clean: str, attr_value: str) -> bool:
+    if EVENT_HANDLER_PATTERN.match(attr_name_clean):
+        return True
+
+    if attr_name_clean.lower() not in SAFE_SVG_ATTRIBUTES:
+        return True
+
+    if attr_name_clean.lower() in ("href", "xlink:href"):
+        if not _is_safe_url(attr_value):
+            return True
+
+    return False
+
+
+def _process_attribute_svg(element: ET.Element, attr_name: str, attr_value: str) -> bool:
+    """Returns True if the attribute should be removed, False otherwise."""
+    attr_name_clean = _strip_namespace(attr_name)
+
+    if _is_dangerous_attribute_svg(attr_name_clean, attr_value):
+        return True
+
+    if attr_name_clean.lower() == "style":
+        safe_style = _sanitize_style_attribute(attr_value)
+        if safe_style:
+            element.set(attr_name, safe_style)
+            return False
+        return True
+
+    return False
+
+
 def _sanitize_attributes(element: ET.Element) -> None:
     """Sanitize attributes of an XML element in-place."""
     attrs_to_remove = []
 
     for attr_name, attr_value in list(element.attrib.items()):
-        attr_name_clean = _strip_namespace(attr_name)
-
-        # SECURITY: Remove event handlers (onclick, onload, etc.)
-        if EVENT_HANDLER_PATTERN.match(attr_name_clean):
+        if _process_attribute_svg(element, attr_name, attr_value):
             attrs_to_remove.append(attr_name)
-            continue
-
-        # SECURITY: Remove attributes not in whitelist
-        if attr_name_clean.lower() not in SAFE_SVG_ATTRIBUTES:
-            attrs_to_remove.append(attr_name)
-            continue
-
-        # SECURITY: Validate URLs in href attributes
-        if attr_name_clean.lower() in ("href", "xlink:href"):
-            if not _is_safe_url(attr_value):
-                attrs_to_remove.append(attr_name)
-                continue
-
-        # SECURITY: Validate style attribute
-        if attr_name_clean.lower() == "style":
-            safe_style = _sanitize_style_attribute(attr_value)
-            if safe_style:
-                element.set(attr_name, safe_style)
-            else:
-                attrs_to_remove.append(attr_name)
-            continue
 
     # Remove dangerous attributes
     for attr in attrs_to_remove:
@@ -362,6 +373,33 @@ def _sanitize_style_attribute(style: str) -> Optional[str]:
     return style
 
 
+def _clean_url_svg(url: str) -> str:
+    # Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
+    return "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
+
+
+def _has_dangerous_protocol_svg(clean_url: str) -> bool:
+    dangerous_protocols = [
+        "javascript:",
+        "data:",  # Block all data: URLs in SVG (images should be external)
+        "vbscript:",
+        "file:",
+        "about:",
+    ]
+    for protocol in dangerous_protocols:
+        if clean_url.startswith(protocol):
+            return True
+    return False
+
+
+def _is_safe_relative_or_fragment_svg(url: str, clean_url: str) -> bool:
+    if clean_url.startswith(("http://", "https://", "#", "/")):
+        return True
+    if url.startswith("#") or ":" not in url:
+        return True
+    return False
+
+
 def _is_safe_url(url: str) -> bool:
     """Check if a URL is safe for use in SVG.
 
@@ -374,34 +412,12 @@ def _is_safe_url(url: str) -> bool:
     if not url:
         return False
 
-    # Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
-    clean_url = (
-        "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
-    )
+    clean_url = _clean_url_svg(url)
 
-    # SECURITY: Block dangerous protocols
-    dangerous_protocols = [
-        "javascript:",
-        "data:",  # Block all data: URLs in SVG (images should be external)
-        "vbscript:",
-        "file:",
-        "about:",
-    ]
+    if _has_dangerous_protocol_svg(clean_url):
+        return False
 
-    for protocol in dangerous_protocols:
-        if clean_url.startswith(protocol):
-            return False
-
-    # Allow relative URLs and http(s)
-    if clean_url.startswith(("http://", "https://", "#", "/")):
-        return True
-
-    # Allow fragment identifiers and relative paths
-    if url.startswith("#") or ":" not in url:
-        return True
-
-    # Block everything else
-    return False
+    return _is_safe_relative_or_fragment_svg(url, clean_url)
 
 
 def _strip_namespace(tag: str) -> str:

@@ -39,6 +39,19 @@ class MagicLink:
         return request._sign(payload)
 
     @staticmethod
+    def _parse_payload(payload: Optional[str]) -> tuple[str, int, bool]:
+        if not payload or "|" not in payload:
+            return "", 0, False
+        parts = payload.split("|", 1)
+        if len(parts) != 2:
+            return "", 0, False
+        email, exp_str = parts
+        try:
+            return email, int(exp_str), True
+        except ValueError:
+            return "", 0, False
+
+    @staticmethod
     def verify_token(request: Request, token: str) -> Optional[str]:
         """Verify a magic link token and return the associated email if valid and not expired.
 
@@ -46,31 +59,9 @@ class MagicLink:
         """
         import secrets
 
-        # Initialize default values for constant-time execution
-        email = ""
-        exp_time = 0
-        is_valid = True
-
         # Unsign the token
         payload = request._unsign(token)
-
-        # Validate payload structure (don't return early)
-        if not payload or "|" not in payload:
-            is_valid = False
-            # Continue execution with dummy values
-            parts = ["", "0"]
-        else:
-            parts = payload.split("|", 1)
-
-        # Extract email and expiration
-        if len(parts) == 2:
-            email, exp_str = parts
-            try:
-                exp_time = int(exp_str)
-            except ValueError:
-                is_valid = False
-        else:
-            is_valid = False
+        email, exp_time, is_valid = MagicLink._parse_payload(payload)
 
         # Check expiration with constant-time comparison
         current_time = int(time.time())
@@ -169,6 +160,79 @@ class OAuth:
         return f"{config['auth_url']}?{urllib.parse.urlencode(params)}"
 
     @staticmethod
+    def _exchange_code(
+        config: dict[str, str],
+        client_id: str,
+        client_secret: str,
+        code: str,
+        redirect_uri: str,
+    ) -> str:
+        token_data = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }
+        headers = {"Accept": "application/json"}
+        req = urllib.request.Request(
+            config["token_url"],
+            data=urllib.parse.urlencode(token_data).encode(),
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                response_data = response.read(100_000)
+                res_data = json.loads(response_data.decode())
+                access_token = res_data.get("access_token")
+                if not access_token:
+                    raise AuthError(f"OAuth token exchange failed: {res_data}")
+                return access_token
+        except Exception as e:
+            if isinstance(e, AuthError):
+                raise
+            raise AuthError(f"OAuth token request failed: {e}")
+
+    @staticmethod
+    def _fetch_raw_user_info(config: dict[str, str], access_token: str) -> dict[str, Any]:
+        user_headers = {
+            "Authorization": f"Bearer {access_token}",
+            "User-Agent": "Asok-Framework",
+        }
+        user_req = urllib.request.Request(config["user_url"], headers=user_headers)
+        with urllib.request.urlopen(user_req, timeout=10) as response:
+            response_data = response.read(100_000)
+            return json.loads(response_data.decode())
+
+    @staticmethod
+    def _normalize_user_info(
+        provider_name: str, user_info: dict[str, Any], email: Optional[str]
+    ) -> dict[str, Any]:
+        return {
+            "provider": provider_name,
+            "provider_id": str(user_info.get("id") or user_info.get("sub")),
+            "email": email,
+            "name": user_info.get("name") or user_info.get("login"),
+            "picture": user_info.get("picture") or user_info.get("avatar_url"),
+            "raw": user_info,
+        }
+
+    @staticmethod
+    def _fetch_user_info(
+        config: dict[str, str],
+        provider_name: str,
+        access_token: str,
+    ) -> dict[str, Any]:
+        try:
+            user_info = OAuth._fetch_raw_user_info(config, access_token)
+            email = user_info.get("email")
+            if provider_name == "github" and not email:
+                email = OAuth._fetch_github_email(access_token)
+            return OAuth._normalize_user_info(provider_name, user_info, email)
+        except Exception as e:
+            raise AuthError(f"Failed to fetch OAuth user info: {e}")
+
+    @staticmethod
     def callback(
         provider_name: str,
         client_id: str,
@@ -189,64 +253,10 @@ class OAuth:
         if not state or not secrets.compare_digest(state, expected_state):
             raise AuthError("OAuth state validation failed")
 
-        # 1. Exchange code for access token
-        token_data = {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "grant_type": "authorization_code",
-        }
-
-        headers = {"Accept": "application/json"}
-        req = urllib.request.Request(
-            config["token_url"],
-            data=urllib.parse.urlencode(token_data).encode(),
-            headers=headers,
+        access_token = OAuth._exchange_code(
+            config, client_id, client_secret, code, redirect_uri
         )
-
-        try:
-            # SECURITY: Set timeout to prevent DoS/hang (10 seconds)
-            with urllib.request.urlopen(req, timeout=10) as response:
-                # SECURITY: Limit response size to prevent DoS (max 100KB)
-                response_data = response.read(100_000)
-                res_data = json.loads(response_data.decode())
-                access_token = res_data.get("access_token")
-                if not access_token:
-                    raise AuthError(f"OAuth token exchange failed: {res_data}")
-        except Exception as e:
-            raise AuthError(f"OAuth token request failed: {e}")
-
-        # 2. Fetch user info
-        user_headers = {
-            "Authorization": f"Bearer {access_token}",
-            "User-Agent": "Asok-Framework",
-        }
-        user_req = urllib.request.Request(config["user_url"], headers=user_headers)
-
-        try:
-            # SECURITY: Set timeout to prevent DoS/hang (10 seconds)
-            with urllib.request.urlopen(user_req, timeout=10) as response:
-                # SECURITY: Limit response size to prevent DoS (max 100KB)
-                response_data = response.read(100_000)
-                user_info = json.loads(response_data.decode())
-
-                # Normalise common fields
-                email = user_info.get("email")
-                # GitHub specific: primary email might be in a different endpoint or hidden
-                if provider_name == "github" and not email:
-                    email = OAuth._fetch_github_email(access_token)
-
-                return {
-                    "provider": provider_name,
-                    "provider_id": str(user_info.get("id") or user_info.get("sub")),
-                    "email": email,
-                    "name": user_info.get("name") or user_info.get("login"),
-                    "picture": user_info.get("picture") or user_info.get("avatar_url"),
-                    "raw": user_info,
-                }
-        except Exception as e:
-            raise AuthError(f"Failed to fetch OAuth user info: {e}")
+        return OAuth._fetch_user_info(config, provider_name, access_token)
 
     @staticmethod
     def _fetch_github_email(access_token: str) -> Optional[str]:
@@ -289,28 +299,34 @@ class BearerToken:
         return request._sign(payload)
 
     @staticmethod
+    def _parse_payload(payload: str) -> tuple[Optional[str], int]:
+        if not payload or "|" not in payload:
+            return None, 0
+        try:
+            user_id, exp_str = payload.split("|", 1)
+            return user_id, int(exp_str)
+        except ValueError:
+            return None, 0
+
+    @staticmethod
     def verify(request: Request, token: str) -> Optional[str]:
         """Verify a bearer token and return the associated user ID if valid and not expired."""
         payload = request._unsign(token)
-        if not payload or "|" not in payload:
+        if not payload:
+            return None
+        user_id, exp = BearerToken._parse_payload(payload)
+        if not user_id:
             return None
 
-        try:
-            user_id, exp_str = payload.split("|", 1)
-            exp = int(exp_str)
+        current_time = int(time.time())
 
-            # SECURITY: Fixed expiration logic (was allowing exp==0 without validation)
-            # exp == 0 means permanent token (should be avoided in production)
-            # exp > 0 and exp <= now means expired
-            # exp > 0 and exp > now means valid
-            current_time = int(time.time())
+        # SECURITY: Fixed expiration logic (was allowing exp==0 without validation)
+        # exp == 0 means permanent token (should be avoided in production)
+        # exp > 0 and exp <= now means expired
+        # exp > 0 and exp > now means valid
+        is_expired = exp > 0 and exp <= current_time
 
-            # Check if token is expired (inclusive - token expires at exactly exp time)
-            is_expired = exp > 0 and exp <= current_time
-
-            if is_expired:
-                return None
-
-            return user_id
-        except ValueError:
+        if is_expired:
             return None
+
+        return user_id

@@ -20,7 +20,7 @@
   {# Step 1 — QR code #}
   <div class="card" style="overflow:hidden">
     <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
-      <span style="background:var(--brand);color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:800">1</span>
+      <span style="background:var(--brand);color:var(--brand-fg);border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:800">1</span>
       {{ t('Scan the QR code') }}
     </div>
     <div style="padding:32px">
@@ -45,7 +45,7 @@
   <form method="post" class="card" style="overflow:hidden" data-disable data-indicator="#top-loader">
     {{ request.csrf_input() }}
     <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
-      <span style="background:var(--brand);color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:800">2</span>
+      <span style="background:var(--brand);color:var(--brand-fg);border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:800">2</span>
       {{ t('Verify Setup') }}
     </div>
     <div style="padding:32px">
@@ -62,7 +62,7 @@
     </div>
     <div class="form-footer">
       <div class="form-footer-left">
-        {{ btn(t('Confirm & Activate'), 'primary', icon='shield', type='submit', style='width:100%') }}
+        {{ btn(t('Confirm & Activate'), 'primary', icon_name='shield', type='submit', style='width:100%') }}
       </div>
     </div>
   </form>

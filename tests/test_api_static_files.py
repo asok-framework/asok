@@ -77,3 +77,21 @@ def test_api_docs_template_references_minified_js():
     assert "initApiDocs" in template_content, (
         "Template should call initApiDocs function"
     )
+
+
+def test_api_static_font_files():
+    """Verify that WOFF2 font files are served with correct content type."""
+    app = Asok()
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/asok-api/fonts/inter-400.woff2",
+        "wsgi.url_scheme": "http",
+        "HTTP_HOST": "localhost",
+    }
+    request = Request(environ)
+    response = handle_docs_request(app, request)
+
+    assert response is not None, "inter-400.woff2 should be served"
+    assert request.content_type == "font/woff2"
+

@@ -13,41 +13,50 @@ class UserAgent:
         self._os: str = "Unknown"
         self._is_mobile: bool = False
 
+    def _is_opera(self, ua: str) -> bool:
+        return "OPR/" in ua or "Opera" in ua
+
+    def _is_ie(self, ua: str) -> bool:
+        return "MSIE" in ua or "Trident/" in ua
+
+    def _detect_other_browsers(self, ua: str) -> str:
+        for key, name in (("Firefox/", "Firefox"), ("Chrome/", "Chrome"), ("Safari/", "Safari")):
+            if key in ua:
+                return name
+        return "Unknown"
+
+    def _detect_browser(self, ua: str) -> str:
+        """Detect browser name from user-agent string."""
+        if "Edg/" in ua:
+            return "Edge"
+        if self._is_opera(ua):
+            return "Opera"
+        if self._is_ie(ua):
+            return "Internet Explorer"
+        return self._detect_other_browsers(ua)
+
+    def _detect_other_os(self, ua_lower: str) -> str:
+        for key, name in (("android", "Android"), ("mac os x", "macOS"), ("linux", "Linux")):
+            if key in ua_lower:
+                return name
+        return "Unknown"
+
+    def _detect_os(self, ua_lower: str) -> str:
+        """Detect OS name from lowercased user-agent string."""
+        if "windows" in ua_lower:
+            return "Windows"
+        if "iphone" in ua_lower or "ipad" in ua_lower:
+            return "iOS"
+        return self._detect_other_os(ua_lower)
+
     def _parse(self) -> None:
         if self._parsed:
             return
         ua = self.raw
-        # Order matters: Edge/Opera/Chrome contain Safari; Edge/Chrome contain Chrome
-        if "Edg/" in ua:
-            self._name = "Edge"
-        elif "OPR/" in ua or "Opera" in ua:
-            self._name = "Opera"
-        elif "MSIE" in ua or "Trident/" in ua:
-            self._name = "Internet Explorer"
-        elif "Firefox/" in ua:
-            self._name = "Firefox"
-        elif "Chrome/" in ua:
-            self._name = "Chrome"
-        elif "Safari/" in ua:
-            self._name = "Safari"
-
-        # OS detection (case-insensitive to handle variations)
         ua_lower = ua.lower()
-        if "windows" in ua_lower:
-            self._os = "Windows"
-        elif "iphone" in ua_lower or "ipad" in ua_lower:
-            self._os = "iOS"
-        elif "android" in ua_lower:
-            self._os = "Android"
-        elif "mac os x" in ua_lower:
-            self._os = "macOS"
-        elif "linux" in ua_lower:
-            self._os = "Linux"
-
-        # Mobile detection
-        self._is_mobile = any(
-            x in ua.lower() for x in ["mobile", "android", "iphone", "ipad"]
-        )
+        self._name = self._detect_browser(ua)
+        self._os = self._detect_os(ua_lower)
+        self._is_mobile = any(x in ua_lower for x in ["mobile", "android", "iphone", "ipad"])
         self._parsed = True
 
     @property

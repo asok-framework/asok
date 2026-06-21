@@ -3,6 +3,68 @@ from __future__ import annotations
 import re
 
 
+def _prefix_css_selector(part: str, prefix: str, global_marker: str) -> str:
+    """Prefix a single CSS selector with the page scope, handling special cases."""
+    if part.startswith(global_marker):
+        return part.replace(global_marker, "")
+    if part in ("html", "body"):
+        return f"{part}{prefix}"
+    return f"{prefix} {part}"
+
+
+def _scope_selector_block(selector_text: str, prefix: str, global_marker: str) -> str:
+    """Scope a comma-separated selector list with the given prefix."""
+    prefixed_parts = []
+    for part in selector_text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        # Skip keyframe selectors (0%, 100%, from, to)
+        if part in ("from", "to") or re.match(r"^\d+%$", part):
+            prefixed_parts.append(part)
+            continue
+        prefixed_parts.append(_prefix_css_selector(part, prefix, global_marker))
+    return " " + ", ".join(prefixed_parts) + " "
+
+
+def _is_invalid_for_scoping(content: str, page_id: str) -> bool:
+    if not content:
+        return True
+    if len(content) > 1_000_000:
+        return True
+    if not page_id:
+        return True
+    if len(page_id) > 100:
+        return True
+    return False
+
+
+def _is_selector_token(i: int, tokens: list[str]) -> bool:
+    return i + 1 < len(tokens) and tokens[i + 1] == "{"
+
+
+def _should_scope_selector(selector_text: str) -> bool:
+    if not selector_text:
+        return False
+    if selector_text.startswith("@"):
+        return False
+    return True
+
+
+def _process_css_tokens(tokens: list[str], prefix: str, global_marker: str) -> str:
+    result = []
+    for i, t in enumerate(tokens):
+        if _is_selector_token(i, tokens):
+            selector_text = t.strip()
+            if _should_scope_selector(selector_text):
+                result.append(_scope_selector_block(selector_text, prefix, global_marker))
+            else:
+                result.append(t)
+        else:
+            result.append(t)
+    return "".join(result)
+
+
 def scope_css(content: str, page_id: str) -> str:
     """Scope CSS content by prefixing selectors with [data-page-id='ID'].
     Supports :global(.class) to opt-out of scoping.
@@ -16,70 +78,20 @@ def scope_css(content: str, page_id: str) -> str:
 
     SECURITY: Size limits prevent DoS via extremely large CSS.
     """
-    if not content:
-        return ""
-
-    # SECURITY: Reject excessively large CSS to prevent DoS (max 1MB)
-    if len(content) > 1_000_000:
-        return content  # Return unscoped
-
-    # SECURITY: Validate page_id to prevent injection
-    if not page_id or len(page_id) > 100:
-        return content  # Return unscoped if invalid
+    if _is_invalid_for_scoping(content, page_id):
+        return content or ""
 
     prefix = f'[data-page-id="{page_id}"]'
     global_marker = "___GLOBAL___"
 
-    # 1. Protect globals
-    # Matches :global(.selector)
+    # 1. Protect globals: :global(.selector)
     content = re.sub(
         r":global\s*\((.*?)\)", lambda m: f"{global_marker}{m.group(1)}", content
     )
 
-    # 2. Process selectors
-    # We use a stateful-like split to find selectors (text before {)
-    # This handles @media blocks because they also follow the 'text before {' pattern
+    # 2. Process selectors using a stateful split on { and }
     tokens = re.split(r"({|})", content)
-    result = []
+    output = _process_css_tokens(tokens, prefix, global_marker)
 
-    for i in range(len(tokens)):
-        t = tokens[i]
-
-        # If this token is followed by a '{', it's a selector or an @-rule
-        if i + 1 < len(tokens) and tokens[i + 1] == "{":
-            selector_text = t.strip()
-
-            if not selector_text or selector_text.startswith("@"):
-                # Pass @media, @keyframes, etc. through as-is
-                # Their internal contents will be processed in subsequent iterations
-                result.append(t)
-            else:
-                # It's a list of selectors to prefix
-                prefixed_parts = []
-                for part in selector_text.split(","):
-                    part = part.strip()
-                    if not part:
-                        continue
-
-                    # Skip keyframe selectors (0%, 100%, from, to)
-                    if part in ["from", "to"] or re.match(r"^\d+%$", part):
-                        prefixed_parts.append(part)
-                        continue
-
-                    if part.startswith(global_marker):
-                        # Unwrap :global
-                        prefixed_parts.append(part.replace(global_marker, ""))
-                    elif part in ["html", "body"]:
-                        # body -> body[data-page-id="id"]
-                        prefixed_parts.append(f"{part}{prefix}")
-                    else:
-                        # .class -> [data-page-id="id"] .class
-                        prefixed_parts.append(f"{prefix} {part}")
-
-                result.append(" " + ", ".join(prefixed_parts) + " ")
-        else:
-            result.append(t)
-
-    output = "".join(result)
     # Final cleanup of any lingering global markers
     return output.replace(global_marker, "")

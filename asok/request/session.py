@@ -8,6 +8,19 @@ from asok.session import Session
 class SessionMixin:
     """Mixin for session management on Request."""
 
+    def _load_session_from_store(self: Any, store: Any) -> Session:
+        signed_sid = self.cookies_dict.get("asok_sid")
+        sid = self._unsign(signed_sid) if signed_sid else None
+        data = store.load(sid) if sid else None
+        if data is not None:
+            sess = Session(data)
+            sess.sid = sid
+        else:
+            sess = Session()
+            sess.sid = store.generate_sid()
+        sess.modified = False
+        return sess
+
     @property
     def session(self: Any) -> Session:
         """Access the current request's session."""
@@ -17,17 +30,7 @@ class SessionMixin:
         if not app_ref or not hasattr(app_ref, "_session_store"):
             self._session = Session()
             return self._session
-        store = app_ref._session_store
-        signed_sid = self.cookies_dict.get("asok_sid")
-        sid = self._unsign(signed_sid) if signed_sid else None
-        data = store.load(sid) if sid else None
-        if data is not None:
-            self._session = Session(data)
-            self._session.sid = sid
-        else:
-            self._session = Session()
-            self._session.sid = store.generate_sid()
-        self._session.modified = False
+        self._session = self._load_session_from_store(app_ref._session_store)
         return self._session
 
     def session_regenerate(self: Any) -> None:

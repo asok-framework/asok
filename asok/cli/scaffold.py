@@ -21,55 +21,35 @@ def _ensure_init_py(directory: str) -> None:
             pass
 
 
-def scaffold(
-    app_name: str,
-    tailwind: Optional[bool] = None,
-    admin: Optional[bool] = None,
-    image: Optional[bool] = None,
-) -> None:
-    """Create a new Asok project structure with optional features.
+def _check_name_chars(app_name: str) -> None:
+    if not app_name.replace("_", "").replace("-", "").isalnum():
+        Style.error(
+            "Project name must contain only letters, numbers, hyphens, and underscores"
+        )
+        raise ValueError("Invalid chars")
 
-    SECURITY: Validates app_name to prevent path traversal attacks.
-    """
-    from .tools import image_install, tailwind_build, tailwind_install
-
-    # SECURITY: Validate app_name (unless it's "." for current directory)
-    if app_name != ".":
-        if not app_name or not isinstance(app_name, str):
-            Style.error("Invalid project name")
-            return
-        if len(app_name) > 100:
-            Style.error("Project name too long (max 100 characters)")
-            return
-        # SECURITY: Prevent path traversal
-        if ".." in app_name or "/" in app_name or "\\" in app_name:
+def _check_name_path(app_name: str) -> None:
+    for sep in ("..", "/", "\\"):
+        if sep in app_name:
             Style.error("Project name cannot contain path separators or '..'")
-            return
-        # SECURITY: Validate characters
-        if not app_name.replace("_", "").replace("-", "").isalnum():
-            Style.error(
-                "Project name must contain only letters, numbers, hyphens, and underscores"
-            )
-            return
+            raise ValueError("Path separators")
 
-    if tailwind is None:
-        tailwind = Style.confirm("Add Tailwind CSS support?")
-    if admin is None:
-        admin = Style.confirm("Add Admin interface?")
-    if image is None:
-        image = Style.confirm("Add Image Optimization (WebP)?")
-
+def _validate_app_name(app_name: str) -> None:
     if app_name == ".":
-        root = os.getcwd()
-        app_name = os.path.basename(root)
-    else:
-        root = os.path.join(os.getcwd(), app_name)
-        os.makedirs(root, exist_ok=True)
+        return
+    if not isinstance(app_name, str):
+        Style.error("Invalid project name")
+        raise ValueError("Invalid name type")
+    if not app_name:
+        Style.error("Invalid project name")
+        raise ValueError("Empty name")
+    if len(app_name) > 100:
+        Style.error("Project name too long (max 100 characters)")
+        raise ValueError("Name too long")
+    _check_name_path(app_name)
+    _check_name_chars(app_name)
 
-    print(
-        f"\n{Style.BOLD}{Style.CYAN}🚀 Creating Asok project: {Style.GREEN}{app_name}{Style.RESET}..."
-    )
-
+def _create_directories(root: str) -> None:
     for d in [
         "src",
         "src/components",
@@ -96,39 +76,33 @@ def scaffold(
         ):
             _ensure_init_py(dir_path)
 
-    def write(path, content):
-        with open(os.path.join(root, path), "w", encoding="utf-8") as f:
-            f.write(content)
+def _write_file(root: str, path: str, content: str) -> None:
+    with open(os.path.join(root, path), "w", encoding="utf-8") as f:
+        f.write(content)
 
+def _write_scaffold_files(root: str, app_name: str, tailwind: bool, admin: bool) -> None:
     if admin:
-        write(
-            "wsgi.py",
-            "from asok import Asok\nfrom asok.admin import Admin\n\napp = Asok()\nAdmin(app)\n",
-        )
+        _write_file(root, "wsgi.py", "from asok import Asok\nfrom asok.admin import Admin\n\napp = Asok()\nAdmin(app)\n")
     else:
-        write("wsgi.py", "from asok import Asok\n\napp = Asok()\n")
-    write(".env", "DEBUG=true\nSECRET_KEY=change-me-in-production\n")
-    write(
-        ".gitignore",
-        "__pycache__/\n*.py[cod]\nvenv/\n.venv/\ndb.sqlite3\ndb.sqlite3-shm\ndb.sqlite3-wal\n.env\n.DS_Store\n.asok/\nsrc/partials/uploads/\nsrc/partials/css/base.build.css\n",
-    )
-    write("src/partials/js/base.js", "")
-    write("src/partials/uploads/.gitkeep", "")
-    write("src/locales/en.json", "{}\n")
-    write("src/locales/fr.json", "{}\n")
+        _write_file(root, "wsgi.py", "from asok import Asok\n\napp = Asok()\n")
+
+    import secrets
+    secret_key = secrets.token_hex(32)
+    _write_file(root, ".env", f"DEBUG=true\nSECRET_KEY={secret_key}\n")
+    _write_file(root, ".gitignore", "__pycache__/\n*.py[cod]\nvenv/\n.venv/\ndb.sqlite3\ndb.sqlite3-shm\ndb.sqlite3-wal\n.env\n.DS_Store\n.asok/\nsrc/partials/uploads/\nsrc/partials/css/base.build.css\n")
+    _write_file(root, "src/partials/js/base.js", "")
+    _write_file(root, "src/partials/uploads/.gitkeep", "")
+    _write_file(root, "src/locales/en.json", "{}\n")
+    _write_file(root, "src/locales/fr.json", "{}\n")
 
     assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
-
     shutil.copy2(
         os.path.join(assets_dir, "logo.svg"),
         os.path.join(root, "src/partials/images/logo.svg"),
     )
 
     css_link = "css/base.build.css" if tailwind else "css/base.css"
-    write(
-        "src/partials/html/base.html",
-        f"""\
-<!DOCTYPE html>
+    _write_file(root, "src/partials/html/base.html", f"""<!DOCTYPE html>
 <html lang="{{{{ request.lang }}}}">
 <head>
     <meta charset="UTF-8">
@@ -142,19 +116,32 @@ def scaffold(
     <main>{{% block main %}}{{% endblock %}}</main>
 </body>
 </html>
-""",
-    )
+""")
 
     if tailwind:
-        write(
-            "src/partials/css/base.css",
-            '@import "tailwindcss";\n',
-        )
+        _write_file(root, "src/partials/css/base.css", '@import "tailwindcss";\n')
+        _write_file(root, "src/pages/page.html", """{% extends "html/base.html" %}
+{% block title %}Welcome{% endblock %}
+
+{% block main %}
+    <div class="min-h-screen flex items-center justify-center bg-slate-900 text-slate-200 font-sans">
+        <div class="max-w-2xl mx-auto px-5 py-10 text-center">
+            <img class="w-24 mx-auto mb-6 opacity-90" src="{{ static('images/logo.svg') }}" alt="Logo Asok">
+            <h1 class="text-5xl font-bold mb-4 tracking-tight">Welcome to Asok</h1>
+            <p class="text-lg text-slate-400 mb-4">No dependencies—just Python’s standard library</p>
+            <p class="text-slate-400">
+                Edit
+                <code class="bg-slate-800 text-sky-400 px-2 py-1 rounded-md text-sm hover:bg-slate-700 transition">
+                    src/pages/page.html
+                </code>
+                to get started.
+            </p>
+        </div>
+    </div>
+{% endblock %}
+""")
     else:
-        write(
-            "src/partials/css/base.css",
-            """\
-* {
+        _write_file(root, "src/partials/css/base.css", """* {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -209,43 +196,8 @@ code {
 code:hover {
   background: #334155;
 }
-""",
-        )
-
-    write(
-        "src/pages/page.py",
-        "from asok import Request\n\ndef render(request: Request):\n    return request.html('page.html')\n",
-    )
-    if tailwind:
-        write(
-            "src/pages/page.html",
-            """\
-{% extends "html/base.html" %}
-{% block title %}Welcome{% endblock %}
-
-{% block main %}
-    <div class="min-h-screen flex items-center justify-center bg-slate-900 text-slate-200 font-sans">
-        <div class="max-w-2xl mx-auto px-5 py-10 text-center">
-            <img class="w-24 mx-auto mb-6 opacity-90" src="{{ static('images/logo.svg') }}" alt="Logo Asok">
-            <h1 class="text-5xl font-bold mb-4 tracking-tight">Welcome to Asok</h1>
-            <p class="text-lg text-slate-400 mb-4">No dependencies—just Python’s standard library</p>
-            <p class="text-slate-400">
-                Edit
-                <code class="bg-slate-800 text-sky-400 px-2 py-1 rounded-md text-sm hover:bg-slate-700 transition">
-                    src/pages/page.html
-                </code>
-                to get started.
-            </p>
-        </div>
-    </div>
-{% endblock %}
-""",
-        )
-    else:
-        write(
-            "src/pages/page.html",
-            """\
-{% extends "html/base.html" %}
+""")
+        _write_file(root, "src/pages/page.html", """{% extends "html/base.html" %}
 {% block title %}Welcome{% endblock %}
 
 {% block main %}
@@ -256,14 +208,12 @@ code:hover {
         <p>Edit <code>src/pages/page.html</code> to get started.</p>
     </div>
 {% endblock %}
-""",
-        )
+""")
+
+    _write_file(root, "src/pages/page.py", "from asok import Request\n\ndef render(request: Request):\n    return request.html('page.html')\n")
 
     if admin:
-        write(
-            "src/models/user.py",
-            """\
-from asok import Field, Model
+        _write_file(root, "src/models/user.py", """from asok import Field, Model
 
 
 class User(Model):
@@ -275,8 +225,10 @@ class User(Model):
     totp_enabled = Field.Boolean(default=False)
     backup_codes = Field.String(nullable=True, hidden=True)
     created_at = Field.CreatedAt()
-""",
-        )
+""")
+
+def _run_post_install_setups(root: str, tailwind: bool, image: bool) -> None:
+    from .tools import image_install, tailwind_build, tailwind_install
 
     if tailwind:
         print()
@@ -285,9 +237,7 @@ class User(Model):
             tailwind_build(root, minify=False)
         except Exception as e:
             Style.error(f"Tailwind setup failed: {e}")
-            print(
-                f"  {Style.DIM}You can retry later with: asok tailwind --install{Style.RESET}\n"
-            )
+            print(f"  {Style.DIM}You can retry later with: asok tailwind --install{Style.RESET}\n")
 
     if image:
         print()
@@ -298,9 +248,46 @@ class User(Model):
         except Exception as e:
             Style.warn(f"Image optimization setup failed: {e}")
 
-    print(
-        f"\n  {Style.GREEN}{Style.BOLD}✅ Project '{app_name}' created!{Style.RESET}\n"
-    )
+def _resolve_options(
+    tailwind: Optional[bool],
+    admin: Optional[bool],
+    image: Optional[bool],
+) -> tuple[bool, bool, bool]:
+    if tailwind is None:
+        tailwind = Style.confirm("Add Tailwind CSS support?")
+    if admin is None:
+        admin = Style.confirm("Add Admin interface?")
+    if image is None:
+        image = Style.confirm("Add Image Optimization (WebP)?")
+    return bool(tailwind), bool(admin), bool(image)
+
+def scaffold(
+    app_name: str,
+    tailwind: Optional[bool] = None,
+    admin: Optional[bool] = None,
+    image: Optional[bool] = None,
+) -> None:
+    """Create a new Asok project structure with optional features.
+
+    SECURITY: Validates app_name to prevent path traversal attacks.
+    """
+    _validate_app_name(app_name)
+    tailwind_opt, admin_opt, image_opt = _resolve_options(tailwind, admin, image)
+
+    if app_name == ".":
+        root = os.getcwd()
+        app_name = os.path.basename(root)
+    else:
+        root = os.path.join(os.getcwd(), app_name)
+        os.makedirs(root, exist_ok=True)
+
+    print(f"\n{Style.BOLD}{Style.CYAN}🚀 Creating Asok project: {Style.GREEN}{app_name}{Style.RESET}...")
+
+    _create_directories(root)
+    _write_scaffold_files(root, app_name, tailwind_opt, admin_opt)
+    _run_post_install_setups(root, tailwind_opt, image_opt)
+
+    print(f"\n  {Style.GREEN}{Style.BOLD}✅ Project '{app_name}' created!{Style.RESET}\n")
     if root != os.getcwd():
         print(f"  {Style.DIM}$ cd {app_name}{Style.RESET}")
     print(f"  {Style.DIM}$ asok dev{Style.RESET}\n")

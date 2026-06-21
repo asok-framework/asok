@@ -158,7 +158,10 @@ class TestRateLimit:
             request.flash("error", "You have exceeded the rate limit.")
 
         assert len(request.get_flashed_messages()) == 1
-        assert request.get_flashed_messages()[0]["message"] == "You have exceeded the rate limit."
+        assert (
+            request.get_flashed_messages()[0]["message"]
+            == "You have exceeded the rate limit."
+        )
 
     def test_request_rate_limit_caller_prefix(self):
         """Verify that Request.rate_limit automatically infers prefix based on the caller's function name."""
@@ -176,10 +179,12 @@ class TestRateLimit:
         found_key = False
         prefix_to_find = f"rl:{my_view_func.__module__}.my_view_func"
         from asok.ratelimit import _local_store
+
         for key in _local_store:
             if key.startswith(prefix_to_find):
                 found_key = True
                 break
 
-        assert found_key, f"Expected key starting with '{prefix_to_find}' in local store: {_local_store}"
-
+        assert found_key, (
+            f"Expected key starting with '{prefix_to_find}' in local store: {_local_store}"
+        )

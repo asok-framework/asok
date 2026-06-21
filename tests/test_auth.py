@@ -3,6 +3,8 @@ Tests for the authentication module.
 Covers: BearerToken (create/verify/expiry/tampering), MagicLink, HMAC signing.
 """
 
+import hashlib
+import hmac as _hmac
 import io
 import time
 
@@ -16,8 +18,30 @@ from asok.request import Request
 SECRET = "test-secret-key-for-auth-tests"
 
 
-def make_request(method="GET", path="/", data=None, headers=None):
-    """Build a minimal Request with a configured secret key."""
+class _MockApp:
+    """Minimal app stub that provides _sign/_unsign, matching SecurityMixin."""
+
+    def __init__(self, secret: str):
+        self._secret = secret.encode()
+        self.config = {"SECRET_KEY": secret}
+
+    def _sign(self, value):
+        return f"{value}.{_hmac.new(self._secret, str(value).encode(), hashlib.sha256).hexdigest()}"
+
+    def _unsign(self, signed_value):
+        if not signed_value or "." not in signed_value:
+            return None
+        try:
+            val, _sig = signed_value.rsplit(".", 1)
+            if _hmac.compare_digest(self._sign(val), signed_value):
+                return val
+        except Exception:
+            pass
+        return None
+
+
+def make_request(method="GET", path="/", data=None, headers=None, secret=SECRET):
+    """Build a minimal Request with a configured secret key via mock app."""
     body = b""
     ct = ""
     if data:
@@ -38,7 +62,7 @@ def make_request(method="GET", path="/", data=None, headers=None):
         "wsgi.input": io.BytesIO(body),
         "wsgi.errors": io.BytesIO(),
         "wsgi.url_scheme": "http",
-        "asok.secret_key": SECRET,
+        "asok.app": _MockApp(secret),
     }
     for key, value in (headers or {}).items():
         wsgi_key = "HTTP_" + key.upper().replace("-", "_")
@@ -94,17 +118,15 @@ class TestHmacSigning:
         assert result is None
 
     def test_different_secrets_produce_different_signatures(self):
-        env1 = {**make_request().environ, "asok.secret_key": "secret_a"}
-        env2 = {**make_request().environ, "asok.secret_key": "secret_b"}
-        r1, r2 = Request(env1), Request(env2)
+        r1 = make_request(secret="secret_a")
+        r2 = make_request(secret="secret_b")
         s1 = r1._sign("payload")
         s2 = r2._sign("payload")
         assert s1 != s2
 
     def test_cross_secret_unsign_fails(self):
-        env1 = {**make_request().environ, "asok.secret_key": "secret_a"}
-        env2 = {**make_request().environ, "asok.secret_key": "secret_b"}
-        r1, r2 = Request(env1), Request(env2)
+        r1 = make_request(secret="secret_a")
+        r2 = make_request(secret="secret_b")
         signed = r1._sign("payload")
         # r2 uses a different key — should reject r1's signature
         assert r2._unsign(signed) is None
@@ -172,10 +194,8 @@ class TestBearerToken:
 
     def test_cross_secret_token_rejected(self):
         """A token signed with one secret must be rejected by another."""
-        env_a = {**make_request().environ, "asok.secret_key": "secret_a"}
-        env_b = {**make_request().environ, "asok.secret_key": "secret_b"}
-        req_a = Request(env_a)
-        req_b = Request(env_b)
+        req_a = make_request(secret="secret_a")
+        req_b = make_request(secret="secret_b")
         token = BearerToken.create(req_a, user_id=1)
         result = BearerToken.verify(req_b, token)
         assert result is None

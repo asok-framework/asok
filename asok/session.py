@@ -6,6 +6,7 @@ import re
 import secrets
 import threading
 import time
+from collections import OrderedDict
 from typing import Any, Optional
 
 
@@ -64,30 +65,36 @@ class SessionStore:
         self.ttl = ttl
         self.max_sessions = max_sessions
         self._lock = threading.Lock()
-        self._memory: dict[
+        self._memory: OrderedDict[
             str, dict[str, Any]
-        ] = {}  # sid -> {"data": dict, "ts": float}
+        ] = OrderedDict()  # sid -> {"data": dict, "ts": float}
 
         if backend == "file":
-            os.makedirs(path, exist_ok=True)
-            try:
-                os.chmod(path, 0o700)
-            except OSError:
-                pass
+            self._init_file_backend()
         elif backend == "redis":
-            try:
-                import redis
-            except ImportError:
-                raise ImportError(
-                    "The 'redis' library is required to use the Redis session backend. "
-                    "Install it using 'pip install asok[redis]'."
-                )
-            redis_url = (
-                os.environ.get("ASOK_REDIS_URL")
-                or os.environ.get("REDIS_URL")
-                or "redis://localhost:6379/0"
+            self._init_redis_backend()
+
+    def _init_file_backend(self) -> None:
+        os.makedirs(self.path, exist_ok=True)
+        try:
+            os.chmod(self.path, 0o700)
+        except OSError:
+            pass
+
+    def _init_redis_backend(self) -> None:
+        try:
+            import redis
+        except ImportError:
+            raise ImportError(
+                "The 'redis' library is required to use the Redis session backend. "
+                "Install it using 'pip install asok[redis]'."
             )
-            self._redis = redis.Redis.from_url(redis_url)
+        redis_url = (
+            os.environ.get("ASOK_REDIS_URL")
+            or os.environ.get("REDIS_URL")
+            or "redis://localhost:6379/0"
+        )
+        self._redis = redis.Redis.from_url(redis_url)
 
     def load(self, sid: str) -> Optional[dict[str, Any]]:
         """Load session data for the given session ID."""
@@ -176,6 +183,17 @@ class SessionStore:
                 del self._memory[k]
         return len(expired)
 
+    def _clean_single_file(self, fpath: str, now: float) -> bool:
+        try:
+            with open(fpath, "r") as f:
+                entry = json.load(f)
+            if now - entry.get("ts", 0) > self.ttl:
+                os.remove(fpath)
+                return True
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
+        return False
+
     def _cleanup_file(self) -> int:
         count = 0
         if not os.path.isdir(self.path):
@@ -185,14 +203,8 @@ class SessionStore:
             if not fname.endswith(".json"):
                 continue
             fpath = os.path.join(self.path, fname)
-            try:
-                with open(fpath, "r") as f:
-                    entry = json.load(f)
-                if now - entry.get("ts", 0) > self.ttl:
-                    os.remove(fpath)
-                    count += 1
-            except (json.JSONDecodeError, OSError, KeyError):
-                pass
+            if self._clean_single_file(fpath, now):
+                count += 1
         return count
 
     def start_cleanup_timer(self, interval: int = 3600) -> threading.Timer:
@@ -236,41 +248,55 @@ class SessionStore:
                 return None
             return entry["data"]
 
+    def _truncate_if_large(self, data: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(data, dict) or len(data) >= 200:
+            return self._perform_truncation_check(data)
+        return data
+
+    def _perform_truncation_check(self, data: dict[str, Any]) -> dict[str, Any]:
+        try:
+            data_str = json.dumps(data)
+            if len(data_str) > 100_000:
+                return self._do_truncate_session(data, len(data_str))
+        except (TypeError, ValueError):
+            pass
+        return data
+
+    def _do_truncate_session(self, data: dict[str, Any], size: int) -> dict[str, Any]:
+        import logging
+
+        logging.getLogger("asok.session").warning(
+            "Session data too large (%d bytes), truncating", size
+        )
+        if isinstance(data, dict) and len(data) > 1000:
+            return dict(list(data.items())[:1000])
+        return data
+
+    def _purge_expired_memory(self, now: float) -> None:
+        expired = [
+            k for k, v in self._memory.items() if now - v["ts"] > self.ttl
+        ]
+        for k in expired:
+            del self._memory[k]
+
+    def _evict_excess_memory_sessions(self) -> None:
+        if len(self._memory) > self.max_sessions:
+            self._purge_expired_memory(time.time())
+            while len(self._memory) > self.max_sessions:
+                self._memory.popitem(last=False)
+
     def _save_memory(self, sid, data):
         """Save session data to memory.
 
         SECURITY: Session data size limits prevent DoS.
         """
-        # SECURITY: Limit session data size to prevent DoS (max 100KB per session)
-        try:
-            data_str = json.dumps(data)
-            if len(data_str) > 100_000:
-                import logging
-
-                logging.getLogger("asok.session").warning(
-                    "Session data too large (%d bytes), truncating", len(data_str)
-                )
-                # Truncate to first 1000 items if dict
-                if isinstance(data, dict) and len(data) > 1000:
-                    data = dict(list(data.items())[:1000])
-        except (TypeError, ValueError):
-            pass
-
+        data = self._truncate_if_large(data)
         with self._lock:
+            if sid in self._memory:
+                self._memory.move_to_end(sid)
             self._memory[sid] = {"data": dict(data), "ts": time.time()}
             # Evict oldest sessions if over capacity
-            if len(self._memory) > self.max_sessions:
-                now = time.time()
-                # First purge expired
-                expired = [
-                    k for k, v in self._memory.items() if now - v["ts"] > self.ttl
-                ]
-                for k in expired:
-                    del self._memory[k]
-                # If still over, evict oldest
-                while len(self._memory) > self.max_sessions:
-                    oldest_key = min(self._memory, key=lambda k: self._memory[k]["ts"])
-                    del self._memory[oldest_key]
+            self._evict_excess_memory_sessions()
 
     def _delete_memory(self, sid):
         with self._lock:
@@ -299,32 +325,11 @@ class SessionStore:
         except (json.JSONDecodeError, OSError):
             return None
 
-    def _save_file(self, sid, data):
-        """Save session data to file.
-
-        SECURITY: Session data size limits prevent DoS.
-        """
-        # SECURITY: Limit session data size to prevent DoS (max 100KB per session)
-        try:
-            data_str = json.dumps(data)
-            if len(data_str) > 100_000:
-                import logging
-
-                logging.getLogger("asok.session").warning(
-                    "Session data too large (%d bytes), truncating", len(data_str)
-                )
-                # Truncate to first 1000 items if dict
-                if isinstance(data, dict) and len(data) > 1000:
-                    data = dict(list(data.items())[:1000])
-        except (TypeError, ValueError):
-            pass
-
-        fpath = self._session_file(sid)
-        # Use os.open with restrictive mode (0600) before writing
+    def _write_session_file(self, fpath: str, entry: dict[str, Any]) -> None:
         try:
             fd = os.open(fpath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
-                json.dump({"data": dict(data), "ts": time.time()}, f)
+                json.dump(entry, f)
         except OSError as e:
             # Fallback for systems that don't support os.open securely
             import logging
@@ -335,7 +340,7 @@ class SessionStore:
             )
 
             with open(fpath, "w") as f:
-                json.dump({"data": dict(data), "ts": time.time()}, f)
+                json.dump(entry, f)
             try:
                 os.chmod(fpath, 0o600)
             except OSError as chmod_err:
@@ -344,6 +349,15 @@ class SessionStore:
                     f"SECURITY WARNING: Failed to set secure permissions (0600) on session file {fpath}: {chmod_err}. "
                     "Session data may be exposed to other users on the system!"
                 )
+
+    def _save_file(self, sid, data):
+        """Save session data to file.
+
+        SECURITY: Session data size limits prevent DoS.
+        """
+        data = self._truncate_if_large(data)
+        fpath = self._session_file(sid)
+        self._write_session_file(fpath, {"data": dict(data), "ts": time.time()})
 
     def _delete_file(self, sid):
         fpath = self._session_file(sid)
@@ -370,18 +384,9 @@ class SessionStore:
             return None
 
     def _save_redis(self, sid: str, data: dict[str, Any]) -> None:
-        # SECURITY: Limit session data size to prevent DoS (max 100KB per session)
+        data = self._truncate_if_large(data)
         try:
             data_str = json.dumps(data)
-            if len(data_str) > 100_000:
-                import logging
-
-                logging.getLogger("asok.session").warning(
-                    "Session data too large (%d bytes), truncating", len(data_str)
-                )
-                if isinstance(data, dict) and len(data) > 1000:
-                    data = dict(list(data.items())[:1000])
-                    data_str = json.dumps(data)
         except (TypeError, ValueError):
             return
 

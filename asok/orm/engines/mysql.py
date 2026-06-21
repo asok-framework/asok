@@ -56,27 +56,39 @@ class MySQLEngine(BaseEngine):
         self.dsn = dsn
         self._local = threading.local()
 
-    def get_connection(self) -> Any:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None and conn.open:
-            return conn
-
+    def _import_pymysql(self) -> Any:
         try:
             import pymysql
             import pymysql.cursors
+            return pymysql
         except ImportError:
             raise ImportError(
                 "MySQL support requires 'pymysql'.\n"
                 'Please install it using: pip install "asok[mysql]"'
             )
 
-        # Parse DSN (mysql://user:password@host:port/database)
+    def _parse_mysql_dsn(self) -> tuple[str, int, str, str, str]:
         parsed = urlparse(self.dsn)
         host = parsed.hostname or "localhost"
         port = parsed.port or 3306
         user = parsed.username or "root"
         password = parsed.password or ""
         db = parsed.path.lstrip("/")
+        return host, port, user, password, db
+
+    def _track_connection_mysql(self, conn: Any) -> None:
+        self._local.conn = conn
+        if not hasattr(self._local, "_all_conns"):
+            self._local._all_conns = []
+        self._local._all_conns.append(conn)
+
+    def get_connection(self) -> Any:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None and conn.open:
+            return conn
+
+        pymysql = self._import_pymysql()
+        host, port, user, password, db = self._parse_mysql_dsn()
 
         conn = pymysql.connect(
             host=host,
@@ -87,12 +99,7 @@ class MySQLEngine(BaseEngine):
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=True,
         )
-        self._local.conn = conn
-
-        # Track for cleanup
-        if not hasattr(self._local, "_all_conns"):
-            self._local._all_conns = []
-        self._local._all_conns.append(conn)
+        self._track_connection_mysql(conn)
         return conn
 
     def close_connections(self) -> None:
@@ -142,43 +149,122 @@ class MySQLEngine(BaseEngine):
     ) -> Tuple[str, List[Any]]:
         # Translate ? to %s
         translated_sql = sql.replace("?", "%s")
+        translated_sql = self._translate_autoincrement(translated_sql)
+        translated_sql = self._translate_sqlite_fts(translated_sql)
         return translated_sql, list(args) if args else []
 
-    def get_column_type(self, field: Any) -> str:
-        if getattr(field, "is_boolean", False):
-            return "TINYINT(1)"
-        elif getattr(field, "is_json", False):
-            return "JSON"
-        elif getattr(field, "is_uuid", False):
-            return "VARCHAR(36)"
-        elif getattr(field, "is_datetime", False):
-            return "DATETIME"
-        elif getattr(field, "is_date", False):
-            return "DATE"
-        elif getattr(field, "is_time", False):
-            return "TIME"
-        elif getattr(field, "is_decimal", False):
-            return f"DECIMAL({getattr(field, 'precision', 10)}, 2)"
-        elif getattr(field, "is_vector", False):
-            # MySQL has no native vector support, store as JSON array
-            return "JSON"
-        elif getattr(field, "is_foreign_key", False):
-            return "INTEGER"
+    def _translate_autoincrement(self, sql: str) -> str:
+        import re
+        if "AUTOINCREMENT" not in sql:
+            return sql
+        sql = re.sub(
+            r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
+            'INT AUTO_INCREMENT PRIMARY KEY',
+            sql,
+            flags=re.IGNORECASE
+        )
+        return re.sub(
+            r'id\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
+            'id INT AUTO_INCREMENT PRIMARY KEY',
+            sql,
+            flags=re.IGNORECASE
+        )
 
+    def _translate_sqlite_fts(self, sql: str) -> str:
+        if "CREATE VIRTUAL TABLE" in sql and "fts5" in sql:
+            return self._build_fts_index_sql_from_virtual(sql)
+        if self._is_sqlite_only_fts_query(sql):
+            return "SELECT 1"
+        return sql
+
+    def _is_sqlite_only_fts_query(self, sql: str) -> bool:
+        if "CREATE TRIGGER" in sql:
+            return True
+        if "DROP TRIGGER" in sql:
+            return True
+        return self._is_fts_action(sql)
+
+    def _is_fts_action(self, sql: str) -> bool:
+        if "_fts" not in sql:
+            return False
+        return "INSERT INTO" in sql or "DROP TABLE" in sql
+
+
+    def _build_fts_index_sql_from_virtual(self, sql: str) -> str:
+        import re
+        match = re.search(
+            r'CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?(\w+)"?)\s+USING\s+fts5\((.*?)\)',
+            sql,
+            re.IGNORECASE | re.DOTALL
+        )
+        if not match:
+            return "SELECT 1"
+        return self._do_build_fts(match.group(1), match.group(2))
+
+    def _do_build_fts(self, fts_table: str, params_str: str) -> str:
+        import re
+        target_table = fts_table[:-4] if fts_table.endswith("_fts") else fts_table
+        content_match = re.search(r"content\s*=\s*'([^']+)'", params_str)
+        if content_match:
+            target_table = content_match.group(1)
+        cols = self._extract_fts_cols(params_str)
+        if not cols:
+            return "SELECT 1"
+        idx_cols = ", ".join(f"`{c}`" for c in cols)
+        idx_name = f"idx_{target_table}_fts"
+        return f'ALTER TABLE `{target_table}` ADD FULLTEXT INDEX `{idx_name}` ({idx_cols})'
+
+    def _extract_fts_cols(self, params_str: str) -> List[str]:
+        cols: List[str] = []
+        for param in params_str.split(','):
+            param = param.strip()
+            if not param:
+                continue
+            if any(kw in param.lower() for kw in ('content=', 'content_rowid=')):
+                continue
+            cols.append(param.strip('"`[]'))
+        return cols
+
+
+    def _detect_mysql_type_attrs(self, field: Any) -> str | None:
+        """Check field type attributes and return MySQL type, or None for standard mapping."""
+        mappings = (
+            ("is_boolean", "TINYINT(1)"),
+            ("is_json", "JSON"),
+            ("is_uuid", "VARCHAR(36)"),
+            ("is_datetime", "DATETIME"),
+            ("is_date", "DATE"),
+            ("is_time", "TIME"),
+            ("is_vector", "JSON"),
+            ("is_foreign_key", "INTEGER"),
+        )
+        for attr, mysql_type in mappings:
+            if getattr(field, attr, False):
+                return mysql_type
+
+        if getattr(field, "is_decimal", False):
+            return f"DECIMAL({getattr(field, 'precision', 10)}, 2)"
+        return None
+
+    def _map_mysql_sql_type(self, field: Any) -> str:
+        """Map SQLite sql_type to its MySQL equivalent."""
         sql_type = field.sql_type.upper()
         if sql_type == "TEXT":
             max_len = getattr(field, "max_length", None)
             if max_len:
                 return f"VARCHAR({max_len})"
             return "TEXT"
-        elif sql_type == "INTEGER":
-            return "INT"
-        elif sql_type == "REAL":
-            return "DOUBLE"
-        elif sql_type == "BLOB":
-            return "LONGBLOB"
 
-        return sql_type
+        mappings = {
+            "INTEGER": "INT",
+            "REAL": "DOUBLE",
+            "BLOB": "LONGBLOB",
+        }
+        return mappings.get(sql_type, sql_type)
+
+    def get_column_type(self, field: Any) -> str:
+        result = self._detect_mysql_type_attrs(field)
+        return result if result is not None else self._map_mysql_sql_type(field)
 
     def table_exists(self, table_name: str) -> bool:
         sql = "SELECT COUNT(*) as cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
@@ -193,19 +279,19 @@ class MySQLEngine(BaseEngine):
     # MySQL/MariaDB default minimum full-text word length (innodb_ft_min_token_size)
     _FT_MIN_WORD_LEN: int = 3
 
+    def _clean_search_term_mysql(self, term: str) -> str:
+        import re
+        return re.sub(r"[^\w\s]", " ", term or "", flags=re.UNICODE).strip()
+
+    def _get_search_words_mysql(self, clean: str) -> list[str]:
+        return [w for w in clean.split() if len(w) >= self._FT_MIN_WORD_LEN]
+
     def search_sql(
         self, table: str, columns: List[str], term: str
     ) -> Tuple[str, List[Any]]:
-        import re
-
         cols = ", ".join([self.quote_identifier(c) for c in columns])
-
-        # Sanitize: keep only alphanumeric chars and spaces; strip FTS operators
-        # that the user may have accidentally typed (+ - @ ~ < > ( ) " *)
-        clean = re.sub(r"[^\w\s]", " ", term or "", flags=re.UNICODE).strip()
-
-        # Split into words and keep only those meeting minimum length
-        words = [w for w in clean.split() if len(w) >= self._FT_MIN_WORD_LEN]
+        clean = self._clean_search_term_mysql(term)
+        words = self._get_search_words_mysql(clean)
 
         if not words:
             # Nothing left after sanitization — return a no-match condition
@@ -228,43 +314,65 @@ class MySQLEngine(BaseEngine):
             return json.dumps(list(value))
         return value
 
+    def _deserialize_vector_json_mysql(self, value: str) -> list[float]:
+        import json
+        try:
+            return [float(x) for x in json.loads(value)]
+        except Exception:
+            return []
+
+    def _deserialize_vector_list_mysql(self, value: list) -> list[float]:
+        return [float(x) for x in value]
+
     def deserialize_value(self, field: Any, value: Any) -> Any:
         if getattr(field, "is_vector", False) and value is not None:
-            import json
-
             if isinstance(value, str):
-                try:
-                    return [float(x) for x in json.loads(value)]
-                except Exception:
-                    return []
-            elif isinstance(value, list):
-                return [float(x) for x in value]
+                return self._deserialize_vector_json_mysql(value)
+            if isinstance(value, list):
+                return self._deserialize_vector_list_mysql(value)
         return value
 
-    def handle_exception(self, e: Exception) -> Exception:
+    def _get_pymysql_module(self) -> Any:
         try:
             import pymysql
+            return pymysql
         except ImportError:
+            return None
+
+    def _handle_mysql_duplicate_key(self, err_msg: str, e: Any) -> Exception:
+        import re
+
+        from ..exceptions import ModelError
+        m = re.search(r"for key '.*?\.(\w+)'", err_msg)
+        if not m:
+            m = re.search(r"for key '(\w+)'", err_msg)
+        field = m.group(1) if m else "field"
+        return ModelError(f"{field} already exists", field=field, original=e)
+
+    def _handle_mysql_not_null(self, err_msg: str, e: Any) -> Exception:
+        import re
+
+        from ..exceptions import ModelError
+        m = re.search(r"Column '(\w+)' cannot be null", err_msg)
+        field = m.group(1) if m else "field"
+        return ModelError(f"{field} is required", field=field, original=e)
+
+    def _get_err_code_msg(self, e: Any) -> tuple[Any, str]:
+        err_code = e.args[0] if e.args else None
+        err_msg = e.args[1] if len(e.args) > 1 else ""
+        return err_code, err_msg
+
+    def handle_exception(self, e: Exception) -> Exception:
+        pymysql = self._get_pymysql_module()
+        if pymysql is None:
             return e
         if isinstance(e, pymysql.err.IntegrityError):
-            from ..exceptions import ModelError
-
-            err_code = e.args[0] if e.args else None
-            err_msg = e.args[1] if len(e.args) > 1 else ""
+            err_code, err_msg = self._get_err_code_msg(e)
             if err_code == 1062:
-                import re
-
-                m = re.search(r"for key '.*?\.(\w+)'", err_msg)
-                if not m:
-                    m = re.search(r"for key '(\w+)'", err_msg)
-                field = m.group(1) if m else "field"
-                return ModelError(f"{field} already exists", field=field, original=e)
-            elif err_code in (1048, 1364):
-                import re
-
-                m = re.search(r"Column '(\w+)' cannot be null", err_msg)
-                field = m.group(1) if m else "field"
-                return ModelError(f"{field} is required", field=field, original=e)
+                return self._handle_mysql_duplicate_key(err_msg, e)
+            if err_code in (1048, 1364):
+                return self._handle_mysql_not_null(err_msg, e)
+            from ..exceptions import ModelError
             return ModelError(err_msg, original=e)
         return e
 

@@ -189,6 +189,55 @@
   </div>
 {% endmacro %}
 
+{# ── Detail field row (Read-only inputs) ──────────────────── #}
+{% macro detail_field_row(f, m, item) %}
+  {% set is_cb = 'type="checkbox"' in str(f.input) or 'type="radio"' in str(f.input) %}
+  <div class="form-group" id="fg-{{ m.name }}"{% if not is_cb %} style="grid-column: 1 / -1"{% endif %}>
+    {% if is_cb %}
+      <label class="form-label" style="cursor: default; width:fit-content; margin-bottom:0">
+        {{ f.input(disabled=True) }}
+        <span style="font-weight:600; color:var(--fg)">{{ t(f._label) }}</span>
+      </label>
+    {% else %}
+      <label class="form-label" for="{{ m.name }}">
+        <span style="font-weight:600">{{ t(f._label) }}</span>
+      </label>
+
+      {% if m.is_file and m.file_value %}
+        <div style="display:flex; flex-direction:column; gap:8px">
+          {% if m.is_image %}
+            <div style="margin-bottom:8px">
+              <img src="{{ m.file_value }}" alt="" class="detail-image-thumb">
+            </div>
+          {% endif %}
+          <div class="file-preview" style="display:flex;align-items:center;gap:12px;background:var(--bg-2);padding:8px 12px;border-radius:var(--r);border:1px solid var(--border); width:fit-content">
+            <a href="{{ m.file_value }}" target="_blank" class="detail-link">
+              {{ icon('download', 14) }} {{ m.file_value.split('/')[-1] }}
+            </a>
+          </div>
+        </div>
+      {% elif m.is_fk %}
+        {% set fk_obj = item[m.fk_rel_name] if (item and m.fk_rel_name) else none %}
+        {% set choice_label = none %}
+        {% if f.choices %}
+          {% for opt_val, opt_label in f.choices %}
+            {% if opt_val | string == f.value | string %}
+              {% set choice_label = opt_label %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        <input type="text" disabled value="{{ m.fk_current_label or choice_label or (fk_obj | display) or f.value or '' }}">
+      {% elif m.wysiwyg %}
+        <div class="wysiwyg-container-readonly" style="background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r); padding:16px; min-height:100px; max-height:400px; overflow-y:auto">
+          <div class="detail-wysiwyg-content">{{ (f.value or '') | safe }}</div>
+        </div>
+      {% else %}
+        {{ f.input(disabled=True) }}
+      {% endif %}
+    {% endif %}
+  </div>
+{% endmacro %}
+
 {# ── Multiple flashes ─────────────────────────────────── #}
 {% macro flashes() %}
   {% for f in get_flashed_messages() %}

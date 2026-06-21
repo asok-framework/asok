@@ -15,6 +15,11 @@ import warnings
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from ..events import events
+from ._model_relations import (
+    build_foreign_key_property,
+    build_relation_property,
+    build_translatable_property,
+)
 from .exceptions import ModelError
 from .field import Field
 from .fileref import FileRef
@@ -39,6 +44,337 @@ logger = logging.getLogger("asok.orm")
 # The SHA-256 derivation + base64 encoding is computed at most once per unique
 # SECRET_KEY value, then reused across all model instances and requests.
 _ENCRYPTION_KEY_CACHE: dict[str, bytes] = {}
+_PERSIST_SQL_CACHE: dict[tuple[type, type], tuple[str, str]] = {}
+
+
+def _build_column_def(engine: Any, name: str, f: Any) -> str:
+    col_type = engine.get_column_type(f)
+    def_str = f"{name} {col_type}"
+    if f.unique:
+        def_str += " UNIQUE"
+    if not f.nullable:
+        def_str += " NOT NULL"
+    if f.default is not None:
+        def_str += f" DEFAULT {_format_column_default(f.default)}"
+    return def_str
+
+
+def _format_column_default(default: Any) -> str:
+    if isinstance(default, bool):
+        return str(default).lower()
+    if isinstance(default, (int, float)):
+        return str(default)
+    return "'" + str(default).replace("'", "''") + "'"
+
+
+def _create_pivot_table(cls, engine: Any, rel: Any) -> None:
+    a = cls.__name__.lower()
+    b = rel.target_model_name.lower()
+    pivot_table = rel.pivot_table or "_".join(sorted([a, b]))
+    pivot_fk = rel.pivot_fk or f"{a}_id"
+    pivot_other_fk = rel.pivot_other_fk or f"{b}_id"
+    # SECURITY: validate identifiers before quoting and embedding in SQL.
+    validate_sql_identifier(pivot_table, "pivot table name")
+    validate_sql_identifier(pivot_fk, "pivot foreign key")
+    validate_sql_identifier(pivot_other_fk, "pivot foreign key")
+    q_pivot = engine.quote_identifier(pivot_table)
+    q_pfk = engine.quote_identifier(pivot_fk)
+    q_pofk = engine.quote_identifier(pivot_other_fk)
+    q_table = engine.quote_identifier(cls._table)
+    q_other_table = engine.quote_identifier(_pluralize(b))
+    engine.execute(
+        f"CREATE TABLE IF NOT EXISTS {q_pivot} ("
+        f"{q_pfk} INTEGER NOT NULL, {q_pofk} INTEGER NOT NULL, "
+        f"PRIMARY KEY ({q_pfk}, {q_pofk}), "
+        f"FOREIGN KEY ({q_pfk}) REFERENCES {q_table}(id) ON DELETE CASCADE, "
+        f"FOREIGN KEY ({q_pofk}) REFERENCES {q_other_table}(id) ON DELETE CASCADE)"
+    )
+
+
+def _create_index_for_field(cls, engine: Any, field_name: str) -> None:
+    index_name = f"idx_{cls._table}_{field_name}"
+    validate_sql_identifier(index_name, "index name")
+    q_index = engine.quote_identifier(index_name)
+    q_table = engine.quote_identifier(cls._table)
+    q_field = engine.quote_identifier(field_name)
+    index_sql = _build_create_index_sql(engine, q_index, q_table, q_field)
+    _execute_index_creation(engine, index_sql, index_name, cls._table, field_name)
+
+
+def _build_create_index_sql(engine: Any, q_index: str, q_table: str, q_field: str) -> str:
+    from .engines import MySQLEngine
+
+    # MySQL has no `IF NOT EXISTS` for CREATE INDEX; fall through to try/except.
+    if isinstance(engine, MySQLEngine):
+        return f"CREATE INDEX {q_index} ON {q_table}({q_field})"
+    return f"CREATE INDEX IF NOT EXISTS {q_index} ON {q_table}({q_field})"
+
+
+def _execute_index_creation(
+    engine: Any, index_sql: str, index_name: str, table: str, field_name: str
+) -> None:
+    try:
+        engine.execute(index_sql)
+        logger.info("Created index %s on %s.%s", index_name, table, field_name)
+    except Exception as e:
+        if _is_duplicate_index_error(e):
+            return
+        logger.error(
+            "Failed to create index %s on %s.%s: %s",
+            index_name, table, field_name, e,
+        )
+
+
+def _is_duplicate_index_error(e: Exception) -> bool:
+    msg = str(e)
+    return (
+        "Duplicate key name" in msg
+        or "already exists" in msg
+        or "1061" in msg
+    )
+
+
+# (Removed _SERIALIZER_FLAGS and _field_type_flag for O(1) lookup performance)
+
+
+def _serialize_default(self, engine, field, val, f):
+    return engine.prepare_value(field, val)
+
+
+def _serialize_json(self, engine, field, val, f):
+    return json.dumps(val)
+
+
+def _serialize_decimal(self, engine, field, val, f):
+    return str(val)
+
+
+def _serialize_enum(self, engine, field, val, f):
+    if isinstance(val, enum.Enum):
+        return val.value
+    return val
+
+
+def _serialize_vector(self, engine, field, val, f):
+    if len(val) != field.dimensions:
+        raise ModelError(
+            f"Vector field '{f}' expects {field.dimensions} dims, got {len(val)}"
+        )
+    return engine.prepare_value(field, val)
+
+
+def _serialize_encrypted(self, engine, field, val, f):
+    return self._encrypt_value(val)
+
+
+_SERIALIZERS_BY_LABEL = {
+    "json": _serialize_json,
+    "decimal": _serialize_decimal,
+    "enum": _serialize_enum,
+    "vector": _serialize_vector,
+    "encrypted": _serialize_encrypted,
+}
+
+
+def _coerce_file(self, name, field, val, _trust):
+    if isinstance(val, FileRef):
+        return val
+    return FileRef(val, field.upload_to)
+
+
+def _coerce_boolean(self, name, field, val, _trust):
+    if isinstance(val, str):
+        return _bool_from_str(val)
+    if isinstance(val, bool):
+        return 1 if val else 0
+    return int(bool(val)) if val else val
+
+
+def _bool_from_str(val: str) -> int:
+    return 1 if val and val != "0" else 0
+
+
+def _coerce_json(self, name, field, val, _trust):
+    if not isinstance(val, str):
+        return val
+    try:
+        return json.loads(val)
+    except Exception as e:
+        logger.debug("Failed to parse JSON field '%s': %s", name, e)
+        return val
+
+
+def _coerce_decimal(self, name, field, val, _trust):
+    if isinstance(val, decimal.Decimal):
+        return val
+    try:
+        return decimal.Decimal(str(val))
+    except Exception as e:
+        logger.debug("Failed to convert Decimal field '%s': %s", name, e)
+        return val
+
+
+def _coerce_enum(self, name, field, val, _trust):
+    if isinstance(val, enum.Enum):
+        return val
+    try:
+        return field.enum_class(val)
+    except Exception as e:
+        logger.debug("Failed to convert Enum field '%s': %s", name, e)
+        return val
+
+
+def _coerce_vector(self, name, field, val, _trust):
+    return self.get_engine().deserialize_value(field, val)
+
+
+def _coerce_encrypted(self, name, field, val, _trust):
+    if _trust:
+        return self._decrypt_value(val)
+    return val
+
+
+_FIELD_COERCERS = {
+    "file": _coerce_file,
+    "boolean": _coerce_boolean,
+    "json": _coerce_json,
+    "decimal": _coerce_decimal,
+    "enum": _coerce_enum,
+    "vector": _coerce_vector,
+    "encrypted": _coerce_encrypted,
+}
+
+
+def _extract_typed_attrs(attrs: dict, base_type: type) -> dict:
+    return {k: v for k, v in attrs.items() if isinstance(v, base_type)}
+
+
+def _populate_model_metadata(
+    attrs: dict, fields: dict, relations: dict, bases: tuple, name: str
+) -> None:
+    _collect_field_bucket_lists(attrs, fields)
+    _collect_field_type_map(attrs, fields)
+    _collect_soft_delete_and_search(attrs, fields)
+    _collect_global_scopes(attrs, bases)
+    _collect_meta(attrs, name)
+    attrs["_relations"] = relations
+    _attach_foreign_key_properties(attrs, fields)
+    _attach_relation_properties(attrs, relations)
+    _strip_field_descriptors(attrs, fields)
+    _attach_translatable_properties(attrs, fields)
+
+
+_FIELD_BUCKETS = (
+    ("_password_fields", "is_password"),
+    ("_slug_fields", "is_slug"),
+    ("_timestamp_fields", "is_timestamp"),
+    ("_file_fields", "is_file"),
+    ("_email_fields", "is_email"),
+    ("_tel_fields", "is_tel"),
+    ("_json_fields", "is_json"),
+    ("_decimal_fields", "is_decimal"),
+    ("_enum_fields", "is_enum"),
+    ("_uuid_fields", "is_uuid"),
+    ("_vector_fields", "is_vector"),
+    ("_encrypted_fields", "is_encrypted"),
+)
+
+# Ordered tuple → first match wins (mirrors original elif chain).
+_FIELD_TYPE_FLAGS = (
+    ("file", "is_file"),
+    ("boolean", "is_boolean"),
+    ("json", "is_json"),
+    ("decimal", "is_decimal"),
+    ("enum", "is_enum"),
+    ("vector", "is_vector"),
+    ("encrypted", "is_encrypted"),
+)
+
+
+def _collect_field_bucket_lists(attrs: dict, fields: dict) -> None:
+    attrs["_fields"] = fields
+    attrs["_fields_list"] = list(fields.keys())
+    for bucket_name, flag in _FIELD_BUCKETS:
+        attrs[bucket_name] = [k for k, v in fields.items() if hasattr(v, flag)]
+
+
+def _collect_field_type_map(attrs: dict, fields: dict) -> None:
+    type_map: dict[str, str] = {}
+    for k, v in fields.items():
+        for label, flag in _FIELD_TYPE_FLAGS:
+            if hasattr(v, flag):
+                type_map[k] = label
+                break
+    attrs["_field_type_map"] = type_map
+
+
+def _collect_soft_delete_and_search(attrs: dict, fields: dict) -> None:
+    soft_delete_fields = _filter_field_names(fields, "is_soft_delete")
+    attrs["_soft_delete_field"] = soft_delete_fields[0] if soft_delete_fields else None
+    attrs["_search_fields"] = [
+        k for k, v in fields.items() if getattr(v, "searchable", False)
+    ]
+
+
+def _filter_field_names(fields: dict, flag: str) -> list[str]:
+    return [k for k, v in fields.items() if hasattr(v, flag)]
+
+
+def _collect_global_scopes(attrs: dict, bases: tuple) -> None:
+    scopes: dict[str, Any] = {}
+    for base in bases:
+        if hasattr(base, "_global_scopes"):
+            scopes.update(base._global_scopes)
+    if "_global_scopes" in attrs:
+        scopes.update(attrs["_global_scopes"])
+    sdf = attrs["_soft_delete_field"]
+    if sdf:
+        scopes["soft_delete"] = lambda q, sdf=sdf: q.where_null(sdf)
+    attrs["_global_scopes"] = scopes
+
+
+def _collect_meta(attrs: dict, name: str) -> None:
+    attrs["_table"] = attrs.get("__tablename__", _pluralize(name))
+    attrs["_model_name"] = name
+    attrs["_conn_attr"] = f"conn_{attrs.get('_db_path') or 'db.sqlite3'}"
+
+
+def _attach_foreign_key_properties(attrs: dict, fields: dict) -> None:
+    for k, v in fields.items():
+        if not hasattr(v, "is_foreign_key"):
+            continue
+        rel_name = k.replace("_id", "")
+        attrs[rel_name] = build_foreign_key_property(k, v.related_model)
+
+
+def _attach_relation_properties(attrs: dict, relations: dict) -> None:
+    for k, v in relations.items():
+        prop = build_relation_property(v, k)
+        if prop is not None:
+            attrs[k] = prop
+
+
+def _strip_field_descriptors(attrs: dict, fields: dict) -> None:
+    for k in fields:
+        if k in attrs and isinstance(attrs[k], Field):
+            attrs.pop(k)
+
+
+def _attach_translatable_properties(attrs: dict, fields: dict) -> None:
+    for base_name in _detect_translatable_bases(fields):
+        if base_name not in attrs:
+            attrs[base_name] = build_translatable_property(base_name)
+
+
+def _detect_translatable_bases(fields: dict) -> set[str]:
+    return {field_name[:-3] for field_name in fields if _is_translatable_field(field_name)}
+
+
+def _is_translatable_field(field_name: str) -> bool:
+    if len(field_name) <= 3 or field_name[-3] != "_":
+        return False
+    lang_suffix = field_name[-2:]
+    return lang_suffix.isalpha() and lang_suffix.islower()
 
 
 class ModelMeta(type):
@@ -50,351 +386,11 @@ class ModelMeta(type):
     def __new__(mcs, name, bases, attrs):
         if name == "Model":
             return super().__new__(mcs, name, bases, attrs)
-
-        fields = {k: v for k, v in attrs.items() if isinstance(v, Field)}
-        attrs["_fields"] = fields
-        attrs["_fields_list"] = list(fields.keys())
-        attrs["_password_fields"] = [
-            k for k, v in fields.items() if hasattr(v, "is_password")
-        ]
-        attrs["_slug_fields"] = [k for k, v in fields.items() if hasattr(v, "is_slug")]
-        attrs["_timestamp_fields"] = [
-            k for k, v in fields.items() if hasattr(v, "is_timestamp")
-        ]
-        attrs["_file_fields"] = [k for k, v in fields.items() if hasattr(v, "is_file")]
-        attrs["_email_fields"] = [
-            k for k, v in fields.items() if hasattr(v, "is_email")
-        ]
-        attrs["_tel_fields"] = [k for k, v in fields.items() if hasattr(v, "is_tel")]
-        attrs["_json_fields"] = [k for k, v in fields.items() if hasattr(v, "is_json")]
-        attrs["_decimal_fields"] = [
-            k for k, v in fields.items() if hasattr(v, "is_decimal")
-        ]
-        attrs["_enum_fields"] = [k for k, v in fields.items() if hasattr(v, "is_enum")]
-        attrs["_uuid_fields"] = [k for k, v in fields.items() if hasattr(v, "is_uuid")]
-        attrs["_vector_fields"] = [
-            k for k, v in fields.items() if hasattr(v, "is_vector")
-        ]
-        attrs["_encrypted_fields"] = [
-            k for k, v in fields.items() if hasattr(v, "is_encrypted")
-        ]
-        # Pre-compute field type map once at class definition to avoid repeated hasattr()
-        # calls in __init__ (which runs for every row returned from the database).
-        _ftm = {}
-        for k, v in fields.items():
-            if hasattr(v, "is_file"):
-                _ftm[k] = "file"
-            elif hasattr(v, "is_boolean"):
-                _ftm[k] = "boolean"
-            elif hasattr(v, "is_json"):
-                _ftm[k] = "json"
-            elif hasattr(v, "is_decimal"):
-                _ftm[k] = "decimal"
-            elif hasattr(v, "is_enum"):
-                _ftm[k] = "enum"
-            elif hasattr(v, "is_vector"):
-                _ftm[k] = "vector"
-            elif hasattr(v, "is_encrypted"):
-                _ftm[k] = "encrypted"
-        attrs["_field_type_map"] = _ftm
-        soft_delete_fields = [
-            k for k, v in fields.items() if hasattr(v, "is_soft_delete")
-        ]
-        attrs["_soft_delete_field"] = (
-            soft_delete_fields[0] if soft_delete_fields else None
-        )
-        attrs["_search_fields"] = [
-            k for k, v in fields.items() if getattr(v, "searchable", False)
-        ]
-        # Inherit and setup global scopes
-        scopes = {}
-        for base in bases:
-            if hasattr(base, "_global_scopes"):
-                scopes.update(base._global_scopes)
-        if "_global_scopes" in attrs:
-            scopes.update(attrs["_global_scopes"])
-        if attrs["_soft_delete_field"]:
-            sdf = attrs["_soft_delete_field"]
-            scopes["soft_delete"] = lambda q, sdf=sdf: q.where_null(sdf)
-        attrs["_global_scopes"] = scopes
-
-        # Use explicit __tablename__ if provided, otherwise auto-pluralize
-        attrs["_table"] = attrs.get("__tablename__", _pluralize(name))
-        attrs["_model_name"] = name
-        attrs["_conn_attr"] = f"conn_{attrs.get('_db_path') or 'db.sqlite3'}"
-
-        relations = {k: v for k, v in attrs.items() if isinstance(v, Relation)}
-        attrs["_relations"] = relations
-
-        for k, v in fields.items():
-            if hasattr(v, "is_foreign_key"):
-                rel_name = k.replace("_id", "")
-
-                def get_related(self, field_name=k, model=v.related_model):
-                    val = getattr(self, field_name)
-                    if not val:
-                        return None
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        return model.find(id=val)
-
-                attrs[rel_name] = property(get_related)
-
-        for k, v in relations.items():
-            if v.type == "HasMany":
-
-                def get_collection(self, rel=v, rel_name=k):
-                    cached = self.__dict__.get(f"_eager_{rel_name}")
-                    if cached is not None:
-                        return cached
-                    target_model = MODELS_REGISTRY.get(rel.target_model_name)
-                    if not target_model:
-                        return []
-                    fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        return target_model.all(**{fk: self.id})
-
-                attrs[k] = property(get_collection)
-
-            elif v.type == "HasOne":
-
-                def get_one(self, rel=v, rel_name=k):
-                    cached = self.__dict__.get(f"_eager_{rel_name}")
-                    if cached is not None:
-                        return cached
-                    target_model = MODELS_REGISTRY.get(rel.target_model_name)
-                    if not target_model:
-                        return None
-                    fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        return target_model.find(**{fk: self.id})
-
-                attrs[k] = property(get_one)
-
-            elif v.type == "BelongsTo":
-
-                def get_parent(self, rel=v, rel_name=k):
-                    cached = self.__dict__.get(f"_eager_{rel_name}")
-                    if cached is not None:
-                        return cached
-                    target_model = MODELS_REGISTRY.get(rel.target_model_name)
-                    if not target_model:
-                        return None
-                    fk = rel.foreign_key or f"{rel.target_model_name.lower()}_id"
-                    val = getattr(self, fk, None)
-                    if not val:
-                        return None
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        return target_model.find(id=val)
-
-                attrs[k] = property(get_parent)
-
-            elif v.type == "BelongsToMany":
-
-                def get_many_to_many(self, rel=v, rel_name=k):
-                    cached = self.__dict__.get(f"_eager_{rel_name}")
-                    if cached is not None:
-                        return cached
-                    target_model = MODELS_REGISTRY.get(rel.target_model_name)
-                    if not target_model:
-                        return []
-                    # SECURITY: _pivot_info validates identifiers
-                    pivot, pfk, pofk = self._pivot_info(rel)
-
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        engine = self.get_engine(op="read")
-                        q_target = engine.quote_identifier(target_model._table)
-                        q_pivot = engine.quote_identifier(pivot)
-                        q_pfk = engine.quote_identifier(pfk)
-                        q_pofk = engine.quote_identifier(pofk)
-
-                        # SECURITY: Quote all table and column names to prevent SQL injection
-                        sql = (
-                            f"SELECT t.* FROM {q_target} t "
-                            f"JOIN {q_pivot} p ON p.{q_pofk} = t.id "
-                            f"WHERE p.{q_pfk} = ?"
-                        )
-                        rows = engine.execute(sql, (self.id,))
-                        results = ModelList(
-                            (target_model(**row) for row in rows),
-                            sql=sql,
-                            args=[self.id],
-                        )
-                        for r in results:
-                            r._shard = getattr(self, "_shard", None)
-                        return results
-
-                attrs[k] = property(get_many_to_many)
-
-            elif v.type == "MorphTo":
-
-                def get_morph_to(self, rel=v, rel_name=k):
-                    cached = self.__dict__.get(f"_eager_{rel_name}")
-                    if cached is not None:
-                        return cached
-                    fk_id = rel.foreign_key or f"{rel_name}_id"
-                    fk_type = rel.owner_key or f"{rel_name}_type"
-
-                    target_id = getattr(self, fk_id, None)
-                    target_type = getattr(self, fk_type, None)
-                    if not target_id or not target_type:
-                        return None
-
-                    target_model = MODELS_REGISTRY.get(target_type)
-                    if not target_model:
-                        return None
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        return target_model.find(id=target_id)
-
-                attrs[k] = property(get_morph_to)
-
-            elif v.type == "MorphMany":
-
-                def get_morph_many(self, rel=v, rel_name=k):
-                    cached = self.__dict__.get(f"_eager_{rel_name}")
-                    if cached is not None:
-                        return cached
-                    target_model = MODELS_REGISTRY.get(rel.target_model_name)
-                    if not target_model:
-                        return []
-                    fk_id = f"{rel.foreign_key}_id"
-                    fk_type = f"{rel.foreign_key}_type"
-                    from .router import database_router_context
-
-                    with database_router_context(shard=getattr(self, "_shard", None)):
-                        return (
-                            target_model.where(fk_id, self.id)
-                            .where(fk_type, self.__class__.__name__)
-                            .get()
-                        )
-
-                attrs[k] = property(get_morph_many)
-
-        for k in fields:
-            if k in attrs and isinstance(attrs[k], Field):
-                attrs.pop(k)
-
-        # Auto-detect and generate translatable properties for fields suffix with _xx (e.g. title_fr)
-        translatable_bases = set()
-        for field_name in fields:
-            if len(field_name) > 3 and field_name[-3] == "_":
-                lang_suffix = field_name[-2:]
-                if lang_suffix.isalpha() and lang_suffix.islower():
-                    base_name = field_name[:-3]
-                    translatable_bases.add(base_name)
-
-        for base_name in translatable_bases:
-            if base_name not in attrs:
-
-                def make_getter(b_name=base_name):
-                    def getter(self):
-                        from ..context import current_request
-
-                        try:
-                            lang = current_request.lang if current_request else "en"
-                        except RuntimeError:
-                            lang = "en"
-
-                        # Load default application locale
-                        app_ref = None
-                        if current_request and hasattr(current_request, "environ"):
-                            app_ref = current_request.environ.get("asok.app")
-                        default_lang = (
-                            app_ref.config.get("LOCALE") if app_ref else "en"
-                        ) or "en"
-
-                        # 1. Try active language specific field (e.g. title_fr, title_en)
-                        target_field = f"{b_name}_{lang}"
-                        if target_field in self._fields:
-                            val = getattr(self, target_field, None)
-                            if val:
-                                return val
-
-                        # 2. If the active language is the default language,
-                        # or if the target field for the active language does not exist in fields,
-                        # try the base field (e.g. title) from raw dictionary.
-                        if lang == default_lang or target_field not in self._fields:
-                            val = self.__dict__.get(b_name)
-                            if val:
-                                return val
-
-                        # 3. Fallback to default application locale field if it exists
-                        default_field = f"{b_name}_{default_lang}"
-                        if default_field in self._fields:
-                            val = getattr(self, default_field, None)
-                            if val:
-                                return val
-                        elif default_lang == "en":
-                            val = self.__dict__.get(b_name)
-                            if val:
-                                return val
-
-                        # 4. Try common fallbacks (default_lang, then en, then fr)
-                        for fallback in (default_lang, "en", "fr"):
-                            fallback_field = f"{b_name}_{fallback}"
-                            if fallback_field in self._fields:
-                                val = getattr(self, fallback_field, None)
-                            elif fallback == default_lang:
-                                val = self.__dict__.get(b_name)
-                            if val:
-                                return val
-
-                        # 5. Fallback to any defined translation field
-                        for f_name in self._fields:
-                            if f_name.startswith(f"{b_name}_"):
-                                val = getattr(self, f_name, None)
-                                if val:
-                                    return val
-                        return self.__dict__.get(b_name)
-
-                    return getter
-
-                def make_setter(b_name=base_name):
-                    def setter(self, value):
-                        from ..context import current_request
-
-                        try:
-                            lang = current_request.lang if current_request else "en"
-                        except RuntimeError:
-                            lang = "en"
-
-                        # Load default application locale
-                        app_ref = None
-                        if current_request and hasattr(current_request, "environ"):
-                            app_ref = current_request.environ.get("asok.app")
-                        default_lang = (
-                            app_ref.config.get("LOCALE") if app_ref else "en"
-                        ) or "en"
-
-                        target_field = f"{b_name}_{lang}"
-                        if lang == default_lang:
-                            self.__dict__[b_name] = value
-                            if target_field in self._fields:
-                                setattr(self, target_field, value)
-                        else:
-                            if target_field in self._fields:
-                                setattr(self, target_field, value)
-                            else:
-                                self.__dict__[b_name] = value
-
-                    return setter
-
-                attrs[base_name] = property(make_getter(), make_setter())
-
+        fields = _extract_typed_attrs(attrs, Field)
+        relations = _extract_typed_attrs(attrs, Relation)
+        _populate_model_metadata(attrs, fields, relations, bases, name)
         cls = super().__new__(mcs, name, bases, attrs)
-        if name != "Model":
-            MODELS_REGISTRY[name] = cls
+        MODELS_REGISTRY[name] = cls
         return cls
 
 
@@ -404,56 +400,56 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def get_engine(cls, op: str | None = None, shard: str | None = None):
-        from .engines import _ENGINES_CACHE
         from .engines import get_engine as get_engine_raw
-        from .router import _routing_state, resolve_primary_dsn, route_database
+        from .router import _routing_state, route_database
 
         if op is None:
             op = getattr(_routing_state, "op", "write")
         if shard is None:
             shard = getattr(_routing_state, "shard", None)
-
-        primary_dsn = resolve_primary_dsn(cls, shard)
-        primary_engine = _ENGINES_CACHE.get(primary_dsn)
-        if (
-            primary_engine
-            and hasattr(primary_engine, "_local")
-            and getattr(primary_engine._local, "txn_level", 0) > 0
-        ):
+        if cls._primary_engine_in_txn(shard):
             op = "write"
+        return get_engine_raw(route_database(cls, op, shard))
 
-        resolved_dsn = route_database(cls, op, shard)
-        return get_engine_raw(resolved_dsn)
+    @classmethod
+    def _primary_engine_in_txn(cls, shard) -> bool:
+        # If the primary engine has an open txn, force writes through it.
+        from .engines import _ENGINES_CACHE
+        from .router import resolve_primary_dsn
+
+        primary_engine = _ENGINES_CACHE.get(resolve_primary_dsn(cls, shard))
+        if not primary_engine or not hasattr(primary_engine, "_local"):
+            return False
+        return getattr(primary_engine._local, "txn_level", 0) > 0
 
     @classmethod
     def _get_encryption_key(cls) -> bytes:
-        secret = os.getenv("SECRET_KEY")
-        if not secret:
-            from ..context import current_request
-
-            app_ref = (
-                current_request.environ.get("asok.app")
-                if current_request and hasattr(current_request, "environ")
-                else None
-            )
-            if app_ref:
-                secret = app_ref.config.get("SECRET_KEY")
-
-        if not secret:
-            secret = "change-me-in-production-default-secret-key-for-test"
-
-        # Return cached derived key if already computed for this secret.
+        secret = cls._resolve_secret_key()
         cached = _ENCRYPTION_KEY_CACHE.get(secret)
         if cached is not None:
             return cached
-
         import base64
-        import hashlib
 
         derived = hashlib.sha256(secret.encode()).digest()
         key = base64.urlsafe_b64encode(derived)
         _ENCRYPTION_KEY_CACHE[secret] = key
         return key
+
+    @classmethod
+    def _resolve_secret_key(cls) -> str:
+        secret = os.getenv("SECRET_KEY") or cls._secret_from_request_app()
+        if not secret:
+            raise RuntimeError("SECRET_KEY is not configured")
+        return secret
+
+    @staticmethod
+    def _secret_from_request_app() -> Optional[str]:
+        from ..context import current_request
+
+        if not current_request or not hasattr(current_request, "environ"):
+            return None
+        app_ref = current_request.environ.get("asok.app")
+        return app_ref.config.get("SECRET_KEY") if app_ref else None
 
     def _encrypt_value(self, val: Any) -> Optional[str]:
         if val is None:
@@ -499,79 +495,63 @@ class Model(metaclass=ModelMeta):
     def __init__(self, _trust: bool = False, **kwargs: Any):
         self._shard: Optional[str] = kwargs.get("_shard")
         self.id: Optional[int] = kwargs.get("id")
-        is_new = not self.id  # New instance being created
+        is_new = not self.id
         for name in self._fields:
-            field = self._fields[name]
-            if name in kwargs:
-                # Security: prevent mass assignment for protected fields unless trusted
-                # Exception: allow password fields during creation (new instances)
-                if not _trust and getattr(field, "protected", False):
-                    # Allow password assignment during creation, block during updates
-                    if getattr(field, "is_password", False) and is_new:
-                        val = kwargs[name]
-                    else:
-                        val = field.default
-                else:
-                    val = kwargs[name]
-            else:
-                val = getattr(self, name, field.default)
-
-            if val is not None:
-                # Use pre-computed type map (built once in ModelMeta) instead of
-                # repeated hasattr() calls — major performance win for large result sets.
-                _ftype = self._field_type_map.get(name)
-                if _ftype == "file" and not isinstance(val, FileRef):
-                    val = FileRef(val, field.upload_to)
-                elif _ftype == "boolean":
-                    # Convert string/bool to int (0 or 1)
-                    if isinstance(val, str):
-                        val = 1 if val and val != "0" else 0
-                    elif isinstance(val, bool):
-                        val = 1 if val else 0
-                    elif val:
-                        val = int(bool(val))
-                elif _ftype == "json" and isinstance(val, str):
-                    try:
-                        val = json.loads(val)
-                    except Exception as e:
-                        # Log JSON parsing errors for debugging
-                        logger.debug("Failed to parse JSON field '%s': %s", name, e)
-                elif _ftype == "decimal" and not isinstance(val, decimal.Decimal):
-                    try:
-                        val = decimal.Decimal(str(val))
-                    except Exception as e:
-                        # Log Decimal conversion errors for debugging
-                        logger.debug(
-                            "Failed to convert Decimal field '%s': %s", name, e
-                        )
-                elif _ftype == "enum" and not isinstance(val, enum.Enum):
-                    try:
-                        val = field.enum_class(val)
-                    except Exception as e:
-                        # Log enum conversion errors for debugging
-                        logger.debug("Failed to convert Enum field '%s': %s", name, e)
-                elif _ftype == "vector":
-                    val = self.get_engine().deserialize_value(field, val)
-                elif _ftype == "encrypted":
-                    if _trust:
-                        val = self._decrypt_value(val)
-
-                # Automatic SafeString for WYSIWYG content
-                if getattr(field, "wysiwyg", False) and isinstance(val, str):
-                    from ..templates import SafeString
-
-                    val = SafeString(val)
-
-            if _trust:
-                self.__dict__[name] = val
-            else:
-                setattr(self, name, val)
-
-        # Handle extra fields (e.g. aggregates from GROUP BY)
+            self._assign_field(name, kwargs, _trust, is_new)
         if _trust:
-            for k, v in kwargs.items():
-                if k not in self._fields and k != "id":
-                    self.__dict__[k] = v
+            self._absorb_extra_kwargs(kwargs)
+
+    def _assign_field(self, name: str, kwargs: dict, _trust: bool, is_new: bool) -> None:
+        field = self._fields[name]
+        val = self._resolve_field_value(name, field, kwargs, _trust, is_new)
+        if val is not None:
+            val = self._coerce_field_value(name, field, val, _trust)
+            val = self._maybe_wrap_safestring(field, val)
+        if _trust:
+            self.__dict__[name] = val
+        else:
+            setattr(self, name, val)
+
+    def _resolve_field_value(
+        self, name: str, field: Any, kwargs: dict, _trust: bool, is_new: bool
+    ) -> Any:
+        if name not in kwargs:
+            return getattr(self, name, field.default)
+        if self._field_blocked_by_protection(field, _trust, is_new):
+            return field.default
+        return kwargs[name]
+
+    @staticmethod
+    def _field_blocked_by_protection(field: Any, _trust: bool, is_new: bool) -> bool:
+        # SECURITY: forbid mass-assignment on protected fields unless trusted.
+        if _trust or not getattr(field, "protected", False):
+            return False
+        if getattr(field, "is_password", False) and is_new:
+            return False
+        return True
+
+    def _coerce_field_value(self, name: str, field: Any, val: Any, _trust: bool) -> Any:
+        ftype = self._field_type_map.get(name)
+        if ftype is None:
+            return val
+        coercer = _FIELD_COERCERS.get(ftype)
+        if coercer is None:
+            return val
+        return coercer(self, name, field, val, _trust)
+
+    @staticmethod
+    def _maybe_wrap_safestring(field: Any, val: Any) -> Any:
+        if not getattr(field, "wysiwyg", False) or not isinstance(val, str):
+            return val
+        from ..templates import SafeString
+
+        return SafeString(val)
+
+    def _absorb_extra_kwargs(self, kwargs: dict) -> None:
+        # Allow aggregates from GROUP BY / raw SELECT to land on the instance.
+        for k, v in kwargs.items():
+            if k not in self._fields and k != "id":
+                self.__dict__[k] = v
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} id={self.id}>"
@@ -636,155 +616,65 @@ class Model(metaclass=ModelMeta):
     @classmethod
     def create_table(cls):
         """Create the table if it doesn't exist, or migrate it by adding missing columns."""
-        # SECURITY: Validate table name to prevent SQL injection
+        # SECURITY: validate identifiers to prevent SQL injection.
         validate_sql_identifier(cls._table, "table name")
-
         engine = cls.get_engine(op="write")
+        cls._execute_create_table(engine)
+        cls._migrate_missing_columns(engine)
+        cls._create_pivot_tables(engine)
+        cls._create_field_indexes(engine)
+        engine.post_create_table(cls)
 
-        # Use engine-specific primary key definition
+    @classmethod
+    def _execute_create_table(cls, engine: Any) -> None:
         pk_def = getattr(
             engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
         )
-        if hasattr(engine, "primary_key_def"):
-            pk_def = engine.primary_key_def
         f_defs = [pk_def]
-
         for name, f in cls._fields.items():
-            # SECURITY: Validate column name to prevent SQL injection
             validate_sql_identifier(name, "column name")
-            col_type = engine.get_column_type(f)
-            def_str = f"{name} {col_type}"
-            if f.unique:
-                def_str += " UNIQUE"
-            if not f.nullable:
-                def_str += " NOT NULL"
-            if f.default is not None:
-                if isinstance(f.default, bool):
-                    d = str(f.default).lower()
-                elif isinstance(f.default, (int, float)):
-                    d = str(f.default)
-                else:
-                    d = "'" + str(f.default).replace("'", "''") + "'"
-                def_str += f" DEFAULT {d}"
-            f_defs.append(def_str)
-
-        sql = f"CREATE TABLE IF NOT EXISTS {engine.quote_identifier(cls._table)} ({', '.join(f_defs)})"
+            f_defs.append(_build_column_def(engine, name, f))
+        sql = (
+            f"CREATE TABLE IF NOT EXISTS {engine.quote_identifier(cls._table)} "
+            f"({', '.join(f_defs)})"
+        )
         engine.execute(sql)
 
-        # ── AUTO-MIGRATION: Add missing columns ──
+    @classmethod
+    def _migrate_missing_columns(cls, engine: Any) -> None:
         existing_cols = engine.get_table_columns(cls._table)
         for name, f in cls._fields.items():
-            if name not in existing_cols:
-                # SECURITY: Validate column name
-                validate_sql_identifier(name, "column name")
-                col_type = engine.get_column_type(f)
-                def_str = f"{name} {col_type}"
-                if f.unique:
-                    def_str += " UNIQUE"
-                if not f.nullable:
-                    def_str += " NOT NULL"
-                if f.default is not None:
-                    if isinstance(f.default, bool):
-                        d = str(f.default).lower()
-                    elif isinstance(f.default, (int, float)):
-                        d = str(f.default)
-                    else:
-                        d = "'" + str(f.default).replace("'", "''") + "'"
-                    def_str += f" DEFAULT {d}"
+            if name in existing_cols:
+                continue
+            cls._add_missing_column(engine, name, f)
 
-                logger.info("Migrating %s: Adding column %s", cls._table, name)
-                try:
-                    engine.execute(
-                        f"ALTER TABLE {engine.quote_identifier(cls._table)} ADD COLUMN {def_str}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to migrate %s (adding %s): %s", cls._table, name, e
-                    )
+    @classmethod
+    def _add_missing_column(cls, engine: Any, name: str, f: Any) -> None:
+        validate_sql_identifier(name, "column name")
+        def_str = _build_column_def(engine, name, f)
+        logger.info("Migrating %s: Adding column %s", cls._table, name)
+        try:
+            engine.execute(
+                f"ALTER TABLE {engine.quote_identifier(cls._table)} ADD COLUMN {def_str}"
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to migrate %s (adding %s): %s", cls._table, name, e
+            )
 
-        # Create pivot tables for BelongsToMany relationships
-        if hasattr(cls, "_relations"):
-            for rel_name, rel in cls._relations.items():
-                if rel.type == "BelongsToMany":
-                    # Compute pivot table name and foreign keys
-                    a = cls.__name__.lower()
-                    b = rel.target_model_name.lower()
-                    pivot_table = rel.pivot_table or "_".join(sorted([a, b]))
-                    pivot_fk = rel.pivot_fk or f"{a}_id"
-                    pivot_other_fk = rel.pivot_other_fk or f"{b}_id"
+    @classmethod
+    def _create_pivot_tables(cls, engine: Any) -> None:
+        if not hasattr(cls, "_relations"):
+            return
+        for _, rel in cls._relations.items():
+            if rel.type == "BelongsToMany":
+                _create_pivot_table(cls, engine, rel)
 
-                    # SECURITY: Validate all identifiers to prevent SQL injection
-                    validate_sql_identifier(pivot_table, "pivot table name")
-                    validate_sql_identifier(pivot_fk, "pivot foreign key")
-                    validate_sql_identifier(pivot_other_fk, "pivot foreign key")
-
-                    q_pivot = engine.quote_identifier(pivot_table)
-                    q_pfk = engine.quote_identifier(pivot_fk)
-                    q_pofk = engine.quote_identifier(pivot_other_fk)
-                    q_table = engine.quote_identifier(cls._table)
-                    q_other_table = engine.quote_identifier(_pluralize(b))
-
-                    # Create the pivot table
-                    pivot_sql = f"""
-                    CREATE TABLE IF NOT EXISTS {q_pivot} (
-                        {q_pfk} INTEGER NOT NULL,
-                        {q_pofk} INTEGER NOT NULL,
-                        PRIMARY KEY ({q_pfk}, {q_pofk}),
-                        FOREIGN KEY ({q_pfk}) REFERENCES {q_table}(id) ON DELETE CASCADE,
-                        FOREIGN KEY ({q_pofk}) REFERENCES {q_other_table}(id) ON DELETE CASCADE
-                    )
-                    """
-                    engine.execute(pivot_sql)
-
-        # Create indexes for fields marked with index=True
+    @classmethod
+    def _create_field_indexes(cls, engine: Any) -> None:
         for field_name, field in cls._fields.items():
             if getattr(field, "index", False) and not field.unique:
-                # SECURITY: Validate identifiers (field_name already validated above)
-                index_name = f"idx_{cls._table}_{field_name}"
-                validate_sql_identifier(index_name, "index name")
-
-                q_index = engine.quote_identifier(index_name)
-                q_table = engine.quote_identifier(cls._table)
-                q_field = engine.quote_identifier(field_name)
-
-                index_sql = f"CREATE INDEX {q_index} ON {q_table}({q_field})"
-
-                # Check index existence or try-catch for dialect differences (like MySQL lack of IF NOT EXISTS)
-                # In sqlite/postgres, we can prefix CREATE INDEX with IF NOT EXISTS.
-                from .engines import MySQLEngine
-
-                if not isinstance(engine, MySQLEngine):
-                    index_sql = (
-                        f"CREATE INDEX IF NOT EXISTS {q_index} ON {q_table}({q_field})"
-                    )
-
-                try:
-                    engine.execute(index_sql)
-                    logger.info(
-                        "Created index %s on %s.%s",
-                        index_name,
-                        cls._table,
-                        field_name,
-                    )
-                except Exception as e:
-                    # Ignore duplicate key error for MySQL (1061) or general issues if already exists
-                    if (
-                        "Duplicate key name" in str(e)
-                        or "already exists" in str(e)
-                        or "1061" in str(e)
-                    ):
-                        pass
-                    else:
-                        logger.error(
-                            "Failed to create index %s on %s.%s: %s",
-                            index_name,
-                            cls._table,
-                            field_name,
-                            e,
-                        )
-
-        # Delegate FTS and engine-specific setups
-        engine.post_create_table(cls)
+                _create_index_for_field(cls, engine, field_name)
 
     @classmethod
     def create(cls: type[T], _trust: bool = False, **kwargs: Any) -> T:
@@ -880,115 +770,31 @@ class Model(metaclass=ModelMeta):
     def save(self) -> None:
         """Persist the model instance to the database (INSERT or UPDATE)."""
         is_new = not self.id
-        self.before_save()
-        if is_new:
-            self.before_create()
-        else:
-            self.before_update()
-
-        for name in self._email_fields:
-            val = getattr(self, name, None)
-            if val in (None, ""):
-                continue
-            if not _RE_EMAIL.match(str(val)):
-                raise ModelError(
-                    f"{name.replace('_', ' ').capitalize()} is not a valid email address.",
-                    field=name,
-                )
-
-        for name in self._tel_fields:
-            val = getattr(self, name, None)
-            if val in (None, ""):
-                continue
-            if not _RE_TEL.match(str(val)):
-                raise ModelError(
-                    f"{name.replace('_', ' ').capitalize()} is not a valid phone number.",
-                    field=name,
-                )
-
-        for name in self._password_fields:
-            val = getattr(self, name)
-            if val and not str(val).startswith("pbkdf2:"):
-                setattr(self, name, self._hash_value(str(val)))
-
-        for name in self._uuid_fields:
-            if not getattr(self, name):
-                setattr(self, name, str(uuid.uuid4()))
-
-        for name in self._slug_fields:
-            field = self._fields[name]
-            populate = getattr(field, "populate_from", None)
-            always_update = getattr(field, "always_update", False)
-            if populate and (not getattr(self, name) or always_update):
-                source_val = getattr(self, populate, None)
-                if source_val:
-                    setattr(self, name, slugify(source_val))
-
-        if self._timestamp_fields:
-            now = datetime.datetime.now().isoformat()
-            for name in self._timestamp_fields:
-                field = self._fields[name]
-                if field.on == "create" and not self.id and not getattr(self, name):
-                    setattr(self, name, now)
-                elif field.on == "update":
-                    setattr(self, name, now)
-
+        self._fire_pre_save_hooks()
+        self._validate_email_fields()
+        self._validate_tel_fields()
+        self._hash_password_fields()
+        self._assign_uuid_fields()
+        self._populate_slug_fields()
+        self._apply_timestamp_fields()
         engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
-        fields = self._fields_list
-        values = []
-        for f in fields:
-            field = self._fields[f]
-            val = getattr(self, f)
-            if val is None:
-                values.append(None)
-            elif isinstance(val, FileRef):
-                values.append(val.name)
-            elif hasattr(field, "is_json"):
-                values.append(json.dumps(val))
-            elif hasattr(field, "is_decimal"):
-                values.append(str(val))
-            elif hasattr(field, "is_enum"):
-                import enum
-
-                # Handle both Enum objects and raw strings
-                if isinstance(val, enum.Enum):
-                    values.append(val.value)
-                else:
-                    values.append(val)
-            elif hasattr(field, "is_vector"):
-                if val is None:
-                    values.append(None)
-                else:
-                    # Validate dimensions
-                    if len(val) != field.dimensions:
-                        raise ModelError(
-                            f"Vector field '{f}' expects {field.dimensions} dims, got {len(val)}"
-                        )
-                    values.append(engine.prepare_value(field, val))
-            elif hasattr(field, "is_encrypted"):
-                values.append(self._encrypt_value(val))
-            else:
-                values.append(engine.prepare_value(field, val))
-
-        if self.id:
-            set_str = ", ".join([f"{f} = ?" for f in fields])
-            sql = f"UPDATE {self._table} SET {set_str} WHERE id = ?"
-            args = values + [self.id]
-        else:
-            placeholders = ", ".join(["?" for _ in fields])
-            sql = f"INSERT INTO {self._table} ({', '.join(fields)}) VALUES ({placeholders})"
-            args = values
-
+        values = self._serialize_fields(engine)
+        sql, args = self._build_persist_sql(engine, values)
         try:
             engine.execute(sql, args)
         except Exception as e:
             raise engine.handle_exception(e)
+        if is_new:
+            self._populate_lastrowid(engine)
+        self._fire_post_save_hooks(is_new)
 
-        if not self.id:
-            if engine.lastrowid_query:
-                res_id = engine.execute(engine.lastrowid_query)
-                self.id = list(res_id[0].values())[0] if res_id else None
+    def _populate_lastrowid(self, engine: Any) -> None:
+        if not engine.lastrowid_query:
+            return
+        res_id = engine.execute(engine.lastrowid_query)
+        self.id = list(res_id[0].values())[0] if res_id else None
 
+    def _fire_post_save_hooks(self, is_new: bool) -> None:
         if is_new:
             self.after_create()
             events.emit(f"model:{self.__class__.__name__}:created", self)
@@ -1000,6 +806,113 @@ class Model(metaclass=ModelMeta):
             events.emit("model:updated", self)
         self.after_save()
         events.emit("model:saved", self)
+
+    def _fire_pre_save_hooks(self) -> None:
+        self.before_save()
+        if not self.id:
+            self.before_create()
+        else:
+            self.before_update()
+
+    def _validate_email_fields(self) -> None:
+        for name in self._email_fields:
+            val = getattr(self, name, None)
+            if val in (None, ""):
+                continue
+            if not _RE_EMAIL.match(str(val)):
+                raise ModelError(
+                    f"{name.replace('_', ' ').capitalize()} is not a valid email address.",
+                    field=name,
+                )
+
+    def _validate_tel_fields(self) -> None:
+        for name in self._tel_fields:
+            val = getattr(self, name, None)
+            if val in (None, ""):
+                continue
+            if not _RE_TEL.match(str(val)):
+                raise ModelError(
+                    f"{name.replace('_', ' ').capitalize()} is not a valid phone number.",
+                    field=name,
+                )
+
+    def _hash_password_fields(self) -> None:
+        for name in self._password_fields:
+            val = getattr(self, name)
+            if val and not str(val).startswith("pbkdf2:"):
+                setattr(self, name, self._hash_value(str(val)))
+
+    def _assign_uuid_fields(self) -> None:
+        for name in self._uuid_fields:
+            if not getattr(self, name):
+                setattr(self, name, str(uuid.uuid4()))
+
+    def _populate_slug_fields(self) -> None:
+        for name in self._slug_fields:
+            self._populate_single_slug(name)
+
+    def _populate_single_slug(self, name: str) -> None:
+        field = self._fields[name]
+        populate = getattr(field, "populate_from", None)
+        if not populate:
+            return
+        always_update = getattr(field, "always_update", False)
+        if getattr(self, name) and not always_update:
+            return
+        source_val = getattr(self, populate, None)
+        if source_val:
+            setattr(self, name, slugify(source_val))
+
+    def _apply_timestamp_fields(self) -> None:
+        if not self._timestamp_fields:
+            return
+        now = datetime.datetime.now().isoformat()
+        for name in self._timestamp_fields:
+            self._apply_single_timestamp(name, now)
+
+    def _apply_single_timestamp(self, name: str, now: str) -> None:
+        field = self._fields[name]
+        if field.on == "create" and not self.id and not getattr(self, name):
+            setattr(self, name, now)
+        elif field.on == "update":
+            setattr(self, name, now)
+
+    def _serialize_fields(self, engine: Any) -> list[Any]:
+        return [self._serialize_field(engine, f) for f in self._fields_list]
+
+    def _serialize_field(self, engine: Any, f: str) -> Any:
+        field = self._fields[f]
+        val = getattr(self, f)
+        if val is None:
+            return None
+        if isinstance(val, FileRef):
+            return val.name
+        label = self._field_type_map.get(f)
+        serializer = _SERIALIZERS_BY_LABEL.get(label) if label else None
+        if serializer is not None:
+            return serializer(self, engine, field, val, f)
+        return engine.prepare_value(field, val)
+
+    def _build_persist_sql(self, engine: Any, values: list[Any]) -> tuple[str, list[Any]]:
+        cache_key = (self.__class__, engine.__class__)
+        cached = _PERSIST_SQL_CACHE.get(cache_key)
+        if cached is None:
+            cached = self._generate_persist_sql(engine)
+            _PERSIST_SQL_CACHE[cache_key] = cached
+
+        insert_sql, update_sql = cached
+        if self.id:
+            return update_sql, values + [self.id]
+        return insert_sql, values
+
+    def _generate_persist_sql(self, engine: Any) -> tuple[str, str]:
+        fields = self._fields_list
+        placeholders = ", ".join("?" for _ in fields)
+        quoted_fields = ", ".join(engine.quote_identifier(f) for f in fields)
+        insert_sql = f"INSERT INTO {self._table} ({quoted_fields}) VALUES ({placeholders})"
+        set_str = ", ".join(f"{engine.quote_identifier(f)} = ?" for f in fields)
+        update_sql = f"UPDATE {self._table} SET {set_str} WHERE id = ?"
+        return insert_sql, update_sql
 
     @classmethod
     def transaction(cls):
@@ -1054,32 +967,49 @@ class Model(metaclass=ModelMeta):
         **kwargs: Any,
     ) -> ModelList[T]:
         """Fetch all records matching simple field criteria."""
+        cls._validate_columns(kwargs)
+        sql, args = cls._build_select_all_sql(kwargs, order_by, limit)
+        engine = cls.get_engine(op="read")
+        rows = engine.execute(sql, args)
+        return cls._instantiate_rows(rows, sql, args)
+
+    @classmethod
+    def _validate_columns(cls, kwargs: dict) -> None:
         for k in kwargs:
             if not cls._valid_column(k):
                 raise ValueError(f"Invalid column: {k}")
+
+    @classmethod
+    def _build_select_all_sql(
+        cls, kwargs: dict, order_by: Optional[str], limit: Optional[int]
+    ) -> tuple[str, list[Any]]:
         wheres = [f"{k} = ?" for k in kwargs]
         args = list(kwargs.values())
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
-        if wheres:
-            sql = f"SELECT * FROM {cls._table} WHERE {' AND '.join(wheres)}"
-        else:
-            sql = f"SELECT * FROM {cls._table}"
-
-        if order_by:
-            col = order_by.lstrip("-")
-            if not cls._valid_column(col):
-                raise ValueError(f"Invalid column for order_by: {col}")
-            direction = "DESC" if order_by.startswith("-") else "ASC"
-            sql += f" ORDER BY {col} {direction}"
-
+        sql = (
+            f"SELECT * FROM {cls._table} WHERE {' AND '.join(wheres)}"
+            if wheres else f"SELECT * FROM {cls._table}"
+        )
+        sql += cls._order_by_clause(order_by)
         if limit:
             sql += " LIMIT ?"
             args.append(limit)
+        return sql, args
 
-        engine = cls.get_engine(op="read")
-        rows = engine.execute(sql, args)
+    @classmethod
+    def _order_by_clause(cls, order_by: Optional[str]) -> str:
+        if not order_by:
+            return ""
+        col = order_by.lstrip("-")
+        if not cls._valid_column(col):
+            raise ValueError(f"Invalid column for order_by: {col}")
+        direction = "DESC" if order_by.startswith("-") else "ASC"
+        return f" ORDER BY {col} {direction}"
+
+    @classmethod
+    def _instantiate_rows(cls, rows, sql: str, args: list[Any]) -> ModelList[T]:
         from .router import _routing_state
 
         active_shard = getattr(_routing_state, "shard", None)
@@ -1094,41 +1024,37 @@ class Model(metaclass=ModelMeta):
     @classmethod
     def count(cls, **kwargs):
         """Return the total number of records matching the given criteria."""
-        for k in kwargs:
-            if not cls._valid_column(k):
-                raise ValueError(f"Invalid column: {k}")
-        wheres = [f"{k} = ?" for k in kwargs]
+        cls._validate_columns(kwargs)
         engine = cls.get_engine(op="read")
-        args = []
-        for k, v in kwargs.items():
-            field = cls._fields.get(k)
-            if field:
-                v = engine.prepare_value(field, v)
-            args.append(v)
+        args = cls._prepare_kwarg_values(engine, kwargs)
+        wheres = [f"{k} = ?" for k in kwargs]
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
-        if wheres:
-            sql = f"SELECT COUNT(*) FROM {cls._table} WHERE {' AND '.join(wheres)}"
-        else:
-            sql = f"SELECT COUNT(*) FROM {cls._table}"
+        sql = (
+            f"SELECT COUNT(*) FROM {cls._table} WHERE {' AND '.join(wheres)}"
+            if wheres else f"SELECT COUNT(*) FROM {cls._table}"
+        )
         rows = engine.execute(sql, args)
         return list(rows[0].values())[0] if rows else 0
 
     @classmethod
-    def exists(cls, **kwargs):
-        """Return True if at least one record exists matching the given criteria."""
-        for k in kwargs:
-            if not cls._valid_column(k):
-                raise ValueError(f"Invalid column: {k}")
-        wheres = [f"{k} = ?" for k in kwargs]
-        engine = cls.get_engine(op="read")
-        args = []
+    def _prepare_kwarg_values(cls, engine: Any, kwargs: dict) -> list[Any]:
+        args: list[Any] = []
         for k, v in kwargs.items():
             field = cls._fields.get(k)
             if field:
                 v = engine.prepare_value(field, v)
             args.append(v)
+        return args
+
+    @classmethod
+    def exists(cls, **kwargs):
+        """Return True if at least one record exists matching the given criteria."""
+        cls._validate_columns(kwargs)
+        engine = cls.get_engine(op="read")
+        args = cls._prepare_kwarg_values(engine, kwargs)
+        wheres = [f"{k} = ?" for k in kwargs]
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
@@ -1143,50 +1069,49 @@ class Model(metaclass=ModelMeta):
         """Perform a full-text search against indexed fields."""
         if not cls._search_fields:
             return ModelList()
-
         engine = cls.get_engine(op="read")
-        from .engines import SQLiteEngine
-
-        is_sqlite = isinstance(engine, SQLiteEngine)
-
-        # SECURITY: Validate and quote soft delete field name
-        sd_where = ""
-        if cls._soft_delete_field:
-            cls._valid_column(cls._soft_delete_field)
-            q_sd = engine.quote_identifier(cls._soft_delete_field)
-            sd_where = f" AND t.{q_sd} IS NULL"
-
-        # SQLite FTS5 uses prefix wildcards (term*); MySQL FULLTEXT handles this natively
-        if is_sqlite and term and "*" not in term:
-            term = " ".join([f"{t}*" for t in term.split() if t])
-
-        q_table = engine.quote_identifier(cls._table)
-        where_clause, search_args = engine.search_sql(
-            cls._table, cls._search_fields, term
-        )
-        sql = f"SELECT * FROM {q_table} WHERE {where_clause}{sd_where} LIMIT ? OFFSET ?"
-        all_args = search_args + [limit, offset]
-
+        term = cls._maybe_prefix_search_term(engine, term)
+        sql, all_args = cls._build_search_sql(engine, term, limit, offset)
         try:
             rows = engine.execute(sql, all_args)
         except Exception as e:
             logger.error("FTS search failed for %s: %s", cls._table, e)
             return ModelList()
+        return cls._instantiate_rows(rows, sql, all_args)
 
-        from .router import _routing_state
+    @classmethod
+    def _maybe_prefix_search_term(cls, engine: Any, term: str) -> str:
+        # SQLite FTS5 needs explicit prefix wildcards; MySQL FULLTEXT handles them itself.
+        if not cls._needs_sqlite_prefix(engine, term):
+            return term
+        return " ".join(f"{t}*" for t in term.split() if t)
 
-        active_shard = getattr(_routing_state, "shard", None)
+    @staticmethod
+    def _needs_sqlite_prefix(engine: Any, term: str) -> bool:
+        from .engines import SQLiteEngine
 
-        def _instantiate(row):
-            obj = cls(_trust=True, **row)
-            obj._shard = active_shard
-            return obj
+        return isinstance(engine, SQLiteEngine) and bool(term) and "*" not in term
 
-        return ModelList(
-            (_instantiate(row) for row in rows),
-            sql=sql,
-            args=all_args,
+    @classmethod
+    def _build_search_sql(
+        cls, engine: Any, term: str, limit: int, offset: int
+    ) -> tuple[str, list[Any]]:
+        sd_where = cls._search_soft_delete_clause(engine)
+        q_table = engine.quote_identifier(cls._table)
+        where_clause, search_args = engine.search_sql(
+            cls._table, cls._search_fields, term
         )
+        sql = f"SELECT * FROM {q_table} WHERE {where_clause}{sd_where} LIMIT ? OFFSET ?"
+        return sql, search_args + [limit, offset]
+
+    @classmethod
+    def _search_soft_delete_clause(cls, engine: Any) -> str:
+        # SECURITY: validate then quote the soft-delete column.
+        if not cls._soft_delete_field:
+            return ""
+        cls._valid_column(cls._soft_delete_field)
+        q_sd = engine.quote_identifier(cls._soft_delete_field)
+        return f" AND {q_sd} IS NULL"
 
     @classmethod
     def first_or_create(cls, defaults=None, **kwargs):
@@ -1220,79 +1145,62 @@ class Model(metaclass=ModelMeta):
 
         Column names in the result must match model field names.
 
-        Security: Always use parameterised queries with ``?`` placeholders
-        and pass user-supplied values via the ``args`` list.  **Never**
-        interpolate user input directly into the ``sql`` string — doing so
-        opens the door to SQL injection.
+        SECURITY: always use parameterised queries with ``?`` placeholders and
+        pass user-supplied values via ``args``. Never interpolate user input
+        directly into ``sql`` — that's a SQL-injection invitation.
 
         Good:  ``User.raw("SELECT * FROM users WHERE email = ?", [email])``
         Bad:   ``User.raw(f"SELECT * FROM users WHERE email = '{email}'")``
         """
-        import re
-
-        # SECURITY: Warn if SQL contains suspicious patterns that might indicate
-        # direct user input interpolation instead of parameterized queries
-
-        # Check for common SQL injection patterns
-        suspicious_patterns = [
-            r"=\s*['\"].*?['\"]",  # = 'value' or = "value"
-            r"(?:WHERE|AND|OR)\s+.*?=\s*f['\"]",  # f-string interpolation
-            r"\{.*?\}",  # Python f-string placeholders
-            r"%\(.*?\)",  # Python % formatting
-        ]
-
-        for pattern in suspicious_patterns:
-            if re.search(pattern, sql, re.IGNORECASE):
-                warnings.warn(
-                    f"SECURITY WARNING: Raw SQL query may contain interpolated values. "
-                    f"Use parameterized queries with '?' placeholders and pass values via args parameter. "
-                    f"Query: {sql[:100]}...",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                break
-
+        cls._warn_if_raw_sql_looks_interpolated(sql)
         from .router import _routing_state
 
         op = getattr(_routing_state, "op", "write")
         shard = getattr(_routing_state, "shard", None)
         engine = cls.get_engine(op=op, shard=shard)
         rows = engine.execute(sql, args or [])
+        return cls._instantiate_rows(rows, sql, args or [])
 
-        def _instantiate(row):
-            obj = cls(_trust=True, **row)
-            obj._shard = shard
-            return obj
+    _RAW_SUSPICIOUS_PATTERNS = (
+        r"=\s*['\"].*?['\"]",
+        r"(?:WHERE|AND|OR)\s+.*?=\s*f['\"]",
+        r"\{.*?\}",
+        r"%\(.*?\)",
+    )
 
-        return ModelList((_instantiate(row) for row in rows), sql=sql, args=args or [])
+    @classmethod
+    def _warn_if_raw_sql_looks_interpolated(cls, sql: str) -> None:
+        import re
+
+        for pattern in cls._RAW_SUSPICIOUS_PATTERNS:
+            if re.search(pattern, sql, re.IGNORECASE):
+                warnings.warn(
+                    "SECURITY WARNING: Raw SQL query may contain interpolated values. "
+                    "Use parameterized queries with '?' placeholders and pass values via args parameter. "
+                    f"Query: {sql[:100]}...",
+                    UserWarning, stacklevel=3,
+                )
+                return
 
     @classmethod
     def find(cls: type[T], **kwargs: Any) -> Optional[T]:
         """Find the first record matching simple field criteria."""
-        for k in kwargs:
-            if not cls._valid_column(k):
-                raise ValueError(f"Invalid column: {k}")
-        wheres = [f"{k} = ?" for k in kwargs]
+        cls._validate_columns(kwargs)
         engine = cls.get_engine(op="read")
-        args = []
-        for k, v in kwargs.items():
-            field = cls._fields.get(k)
-            if field:
-                v = engine.prepare_value(field, v)
-            args.append(v)
+        args = cls._prepare_kwarg_values(engine, kwargs)
+        wheres = [f"{k} = ?" for k in kwargs]
         sd = cls._soft_delete_where()
         if sd:
             wheres.append(sd)
         sql = f"SELECT * FROM {cls._table} WHERE {' AND '.join(wheres)} LIMIT 1"
         rows = engine.execute(sql, args)
-        if rows:
-            from .router import _routing_state
+        if not rows:
+            return None
+        from .router import _routing_state
 
-            active_shard = getattr(_routing_state, "shard", None)
-            obj = cls(_trust=True, **rows[0])
-            obj._shard = active_shard
-            return obj
-        return None
+        obj = cls(_trust=True, **rows[0])
+        obj._shard = getattr(_routing_state, "shard", None)
+        return obj
 
     @classmethod
     def destroy(cls, **kwargs: Any) -> int:
@@ -1333,6 +1241,8 @@ class Model(metaclass=ModelMeta):
                 sql, (self.id,)
             )
         self.after_delete()
+        events.emit(f"model:{self.__class__.__name__}:deleted", self)
+        events.emit("model:deleted", self)
 
     def force_delete(self):
         """Permanently delete, bypassing soft delete."""
@@ -1344,6 +1254,8 @@ class Model(metaclass=ModelMeta):
             sql, (self.id,)
         )
         self.after_delete()
+        events.emit(f"model:{self.__class__.__name__}:deleted", self)
+        events.emit("model:deleted", self)
 
     def restore(self):
         """Un-delete a soft-deleted row."""
@@ -1379,34 +1291,53 @@ class Model(metaclass=ModelMeta):
 
     def attach(self, relation_name, ids):
         """Insert pivot rows linking self to target ids (idempotent — skips existing)."""
-        rel = self._relations.get(relation_name)
-        if not rel or rel.type != "BelongsToMany":
-            raise ValueError(f"No BelongsToMany relation: {relation_name}")
-        pivot, pfk, pofk = self._pivot_info(rel)
-        if not isinstance(ids, (list, tuple, set)):
-            ids = [ids]
+        ids = self._normalize_attach_ids(ids)
         if not ids:
             return
-        ids = list(ids)
+        pivot, pfk, pofk = self._resolve_belongs_to_many(relation_name)
         engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
-        q_pivot = engine.quote_identifier(pivot)
-        q_pfk = engine.quote_identifier(pfk)
-        q_pofk = engine.quote_identifier(pofk)
-
-        # Fetch all already-existing pivot rows in a single batch query instead of
-        # issuing one SELECT per id (N+1 → 1 query).
-        placeholders_in = ", ".join(["?"] * len(ids))
-        existing_rows = engine.execute(
-            f"SELECT {q_pofk} FROM {q_pivot} WHERE {q_pfk} = ? AND {q_pofk} IN ({placeholders_in})",
-            [self.id] + ids,
+        q_pivot, q_pfk, q_pofk = self._quote_pivot_idents(engine, pivot, pfk, pofk)
+        existing_ids = self._fetch_existing_pivot_ids(
+            engine, q_pivot, q_pfk, q_pofk, pofk, ids
         )
-        existing_ids = {row[pofk] for row in existing_rows}
-
         to_insert = [tid for tid in ids if tid not in existing_ids]
         if not to_insert:
             return
+        self._insert_pivot_rows(engine, q_pivot, q_pfk, q_pofk, to_insert)
 
-        # Batch INSERT all missing rows in a single statement.
+    @staticmethod
+    def _normalize_attach_ids(ids: Any) -> list:
+        if not isinstance(ids, (list, tuple, set)):
+            ids = [ids]
+        return list(ids) if ids else []
+
+    def _resolve_belongs_to_many(self, relation_name: str) -> tuple[str, str, str]:
+        rel = self._relations.get(relation_name)
+        if not rel or rel.type != "BelongsToMany":
+            raise ValueError(f"No BelongsToMany relation: {relation_name}")
+        return self._pivot_info(rel)
+
+    @staticmethod
+    def _quote_pivot_idents(engine: Any, pivot, pfk, pofk):
+        return (
+            engine.quote_identifier(pivot),
+            engine.quote_identifier(pfk),
+            engine.quote_identifier(pofk),
+        )
+
+    def _fetch_existing_pivot_ids(
+        self, engine, q_pivot, q_pfk, q_pofk, pofk, ids
+    ) -> set:
+        # Batch SELECT instead of N+1 round trips.
+        placeholders_in = ", ".join(["?"] * len(ids))
+        rows = engine.execute(
+            f"SELECT {q_pofk} FROM {q_pivot} "
+            f"WHERE {q_pfk} = ? AND {q_pofk} IN ({placeholders_in})",
+            [self.id] + ids,
+        )
+        return {row[pofk] for row in rows}
+
+    def _insert_pivot_rows(self, engine, q_pivot, q_pfk, q_pofk, to_insert) -> None:
         row_placeholders = ", ".join(["(?, ?)"] * len(to_insert))
         args = [v for tid in to_insert for v in (self.id, tid)]
         engine.execute(
@@ -1438,22 +1369,22 @@ class Model(metaclass=ModelMeta):
 
     def sync(self, relation_name, ids):
         """Replace all pivot rows for this relation with the given ids."""
-        rel = self._relations.get(relation_name)
-        if not rel or rel.type != "BelongsToMany":
-            raise ValueError(f"No BelongsToMany relation: {relation_name}")
-        pivot, pfk, pofk = self._pivot_info(rel)
+        pivot, pfk, pofk = self._resolve_belongs_to_many(relation_name)
         engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
-        q_pivot = engine.quote_identifier(pivot)
-        q_pfk = engine.quote_identifier(pfk)
-        q_pofk = engine.quote_identifier(pofk)
-
+        q_pivot, q_pfk, q_pofk = self._quote_pivot_idents(engine, pivot, pfk, pofk)
         engine.execute(f"DELETE FROM {q_pivot} WHERE {q_pfk} = ?", (self.id,))
-        if ids:
-            if not isinstance(ids, (list, tuple, set)):
-                ids = [ids]
-            insert_sql = f"INSERT INTO {q_pivot} ({q_pfk}, {q_pofk}) VALUES (?, ?)"
-            for tid in set(ids):
-                engine.execute(insert_sql, (self.id, tid))
+        self._insert_synced_pivot_rows(engine, q_pivot, q_pfk, q_pofk, ids)
+
+    def _insert_synced_pivot_rows(
+        self, engine, q_pivot, q_pfk, q_pofk, ids
+    ) -> None:
+        if not ids:
+            return
+        if not isinstance(ids, (list, tuple, set)):
+            ids = [ids]
+        insert_sql = f"INSERT INTO {q_pivot} ({q_pfk}, {q_pofk}) VALUES (?, ?)"
+        for tid in set(ids):
+            engine.execute(insert_sql, (self.id, tid))
 
     @classmethod
     def with_trashed(cls):

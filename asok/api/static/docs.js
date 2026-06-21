@@ -46,7 +46,9 @@ function showToast(message, type = 'success') {
     const zone = document.getElementById('flash-zone');
     const toast = document.createElement('div');
     toast.className = `flash-msg ${type}`;
-    toast.innerHTML = `<span>${message}</span>`;
+    const span = document.createElement('span');
+    span.textContent = message;
+    toast.appendChild(span);
     zone.appendChild(toast);
 
     setTimeout(() => {
@@ -279,5 +281,39 @@ function initNavigation() {
             const firstCard = document.querySelector('.operation-card');
             if (firstCard) firstCard.classList.add('is-open');
         }
+
+        // --- Scrollspy Implementation ---
+        const observerOptions = {
+            root: null,
+            rootMargin: '-10% 0px -75% 0px',
+            threshold: 0
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const id = entry.target.getAttribute('id');
+                    if (!id) return;
+
+                    document.querySelectorAll('#sidebar-nav .nav-item').forEach(item => {
+                        const href = item.getAttribute('href');
+                        if (href === `#${id}`) {
+                            item.classList.add('active');
+                            // Smooth scroll into view inside the sidebar
+                            item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        } else {
+                            item.classList.remove('active');
+                        }
+                    });
+                }
+            });
+        }, observerOptions);
+
+        const intro = document.getElementById('introduction');
+        if (intro) observer.observe(intro);
+
+        document.querySelectorAll('.operation-card').forEach(card => {
+            observer.observe(card);
+        });
     });
 }

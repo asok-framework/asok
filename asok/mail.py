@@ -22,6 +22,22 @@ class Mail:
         return os.environ.get(key, default)
 
     @staticmethod
+    def _connect_and_send(
+        server: smtplib.SMTP,
+        sender: str,
+        recipients: list[str],
+        msg: str,
+        username: Optional[str],
+        password: Optional[str],
+        use_tls: bool,
+    ) -> None:
+        if use_tls:
+            server.starttls()
+        if username and password:
+            server.login(username, password)
+        server.sendmail(sender, recipients, msg)
+
+    @staticmethod
     def _do_send(
         sender: str,
         all_recipients: list[str],
@@ -35,11 +51,9 @@ class Mail:
     ) -> None:
         try:
             with smtplib.SMTP(host, port) as server:
-                if use_tls:
-                    server.starttls()
-                if username and password:
-                    server.login(username, password)
-                server.sendmail(sender, all_recipients, msg_string)
+                Mail._connect_and_send(
+                    server, sender, all_recipients, msg_string, username, password, use_tls
+                )
         except Exception as e:
             logger.error("Failed to send email: %s", e)
             if raise_on_error:
@@ -81,6 +95,119 @@ class Mail:
         return val
 
     @staticmethod
+    def _to_validated_list(val: Optional[Union[str, list[str]]]) -> list[str]:
+        if not val:
+            return []
+        items = [val] if isinstance(val, str) else val
+        return [Mail._validate_email(e) for e in items]
+
+    @staticmethod
+    def _prepare_recipients(
+        to: Union[str, list[str]],
+        cc: Optional[Union[str, list[str]]],
+        bcc: Optional[Union[str, list[str]]],
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        to_list = Mail._to_validated_list(to)[:100]
+        cc_list = Mail._to_validated_list(cc)
+        bcc_list = Mail._to_validated_list(bcc)
+        all_recipients = (to_list + cc_list + bcc_list)[:100]
+        return to_list, cc_list, bcc_list, all_recipients
+
+    @staticmethod
+    def _prepare_content(body: str, html: Optional[str]) -> tuple[str, Optional[str]]:
+        if len(body) > 1_000_000:
+            logger.warning("Email body too large (%d bytes), truncating", len(body))
+            body = body[:1_000_000] + "\n\n[Content truncated]"
+
+        if html and len(html) > 1_000_000:
+            logger.warning("Email HTML too large (%d bytes), truncating", len(html))
+            html = html[:1_000_000] + "\n\n<!-- Content truncated -->"
+
+        return body, html
+
+    @staticmethod
+    def _create_message(
+        sender: str,
+        to: list[str],
+        cc_list: list[str],
+        subject: str,
+        body: str,
+        html: Optional[str],
+    ) -> str:
+        msg = MIMEMultipart("alternative") if html else MIMEMultipart()
+        msg["From"] = sender
+        msg["To"] = ", ".join(to)
+        msg["Subject"] = subject
+        if cc_list:
+            msg["Cc"] = ", ".join(cc_list)
+
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        if html:
+            msg.attach(MIMEText(html, "html", "utf-8"))
+
+        return msg.as_string()
+
+    @staticmethod
+    def _dispatch_send(
+        sender: str,
+        all_recipients: list[str],
+        msg_string: str,
+        host: str,
+        port: int,
+        username: Optional[str],
+        password: Optional[str],
+        use_tls: bool,
+        sync: bool,
+    ) -> threading.Thread | None:
+        if sync:
+            Mail._do_send(
+                sender,
+                all_recipients,
+                msg_string,
+                host,
+                port,
+                username,
+                password,
+                use_tls,
+                raise_on_error=True,
+            )
+            return None
+
+        backend = os.environ.get("ASOK_QUEUE_BACKEND", "local").lower()
+        if backend == "redis":
+            from .background import background
+
+            background(
+                _send_mail_task,
+                sender,
+                all_recipients,
+                msg_string,
+                host,
+                port,
+                username,
+                password,
+                use_tls,
+            )
+            return None
+
+        t = threading.Thread(
+            target=Mail._do_send,
+            args=(
+                sender,
+                all_recipients,
+                msg_string,
+                host,
+                port,
+                username,
+                password,
+                use_tls,
+            ),
+            daemon=True,
+        )
+        t.start()
+        return t
+
+    @staticmethod
     def send(
         to: Union[str, list[str]],
         subject: str,
@@ -104,102 +231,24 @@ class Mail:
         sender = from_addr or Mail._cfg("MAIL_FROM", username or "noreply@localhost")
         use_tls = Mail._cfg("MAIL_TLS", "true").lower() != "false"
 
-        # SECURITY: Validate and sanitize all email addresses
-        if isinstance(to, str):
-            to = [to]
-
-        # SECURITY: Limit number of recipients to prevent abuse (max 100 total)
-        if len(to) > 100:
-            to = to[:100]
-
-        # Validate all recipient emails
-        to = [Mail._validate_email(e) for e in to]
-        cc_list = [
-            Mail._validate_email(e)
-            for e in ([cc] if isinstance(cc, str) else (cc or []))
-        ]
-        bcc_list = [
-            Mail._validate_email(e)
-            for e in ([bcc] if isinstance(bcc, str) else (bcc or []))
-        ]
-
-        # SECURITY: Limit total recipients across to/cc/bcc (max 100)
-        all_recipients = (to + cc_list + bcc_list)[:100]
-
-        # Validate sender email
+        to_list, cc_list, bcc_list, all_recipients = Mail._prepare_recipients(to, cc, bcc)
         sender = Mail._validate_email(sender)
-
-        # SECURITY: Limit body and HTML content size (max 1MB each)
-        if len(body) > 1_000_000:
-            logger.warning("Email body too large (%d bytes), truncating", len(body))
-            body = body[:1_000_000] + "\n\n[Content truncated]"
-
-        if html and len(html) > 1_000_000:
-            logger.warning("Email HTML too large (%d bytes), truncating", len(html))
-            html = html[:1_000_000] + "\n\n<!-- Content truncated -->"
-
-        # Sanitize subject and other headers
+        body, html = Mail._prepare_content(body, html)
         subject = Mail._sanitize(subject)
 
-        msg = MIMEMultipart("alternative") if html else MIMEMultipart()
-        msg["From"] = sender
-        msg["To"] = ", ".join(to)
-        msg["Subject"] = subject
-        if cc_list:
-            msg["Cc"] = ", ".join(cc_list)
+        msg_string = Mail._create_message(sender, to_list, cc_list, subject, body, html)
 
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-        if html:
-            msg.attach(MIMEText(html, "html", "utf-8"))
-
-        msg_string = msg.as_string()
-
-        if sync:
-            Mail._do_send(
-                sender,
-                all_recipients,
-                msg_string,
-                host,
-                port,
-                username,
-                password,
-                use_tls,
-                raise_on_error=True,
-            )
-        else:
-            backend = os.environ.get("ASOK_QUEUE_BACKEND", "local").lower()
-            if backend == "redis":
-                from .background import background
-
-                background(
-                    _send_mail_task,
-                    sender,
-                    all_recipients,
-                    msg_string,
-                    host,
-                    port,
-                    username,
-                    password,
-                    use_tls,
-                )
-                return None
-            else:
-                t = threading.Thread(
-                    target=Mail._do_send,
-                    args=(
-                        sender,
-                        all_recipients,
-                        msg_string,
-                        host,
-                        port,
-                        username,
-                        password,
-                        use_tls,
-                    ),
-                    daemon=True,
-                )
-                t.start()
-                return t
+        return Mail._dispatch_send(
+            sender,
+            all_recipients,
+            msg_string,
+            host,
+            port,
+            username,
+            password,
+            use_tls,
+            sync,
+        )
 
 
 def _send_mail_task(

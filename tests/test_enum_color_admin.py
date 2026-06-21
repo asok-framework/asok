@@ -183,5 +183,62 @@ def test_enum_create_with_string_via_create():
     Category.close_connections()
 
 
+def test_enum_display_and_formatting():
+    """Verify that Enum values display their value rather than class reference in admin helpers."""
+    from asok.admin.utils import _display
+    from asok.admin.views.helpers import HelperViewsMixin
+
+    # 1. Test _display helper directly
+    assert _display(Language.FR) == "fr"
+    assert _display(Language.EN) == "en"
+
+    # 2. Test HelperViewsMixin._col_value formatting
+    class MockModel:
+        _fields = {"locale": Category._fields["locale"]}
+
+    class MockItem:
+        locale = Language.DE
+
+    helper = HelperViewsMixin()
+    formatted = helper._col_value(MockItem(), "locale", MockModel())
+    assert formatted == "de"
+
+
+def test_admin_dropdown_mapping():
+    """Verify that Field.Dropdown() is correctly mapped to Form.dropdown in Admin forms."""
+    class CustomItem(Model):
+        _db_path = ":memory:"
+        __tablename__ = "custom_items"
+        subject = Field.Dropdown(choices=[("bug", "Bug"), ("question", "Question")])
+
+    from asok.admin.forms import FormMixin
+
+    # Simulate the Admin class and build the form
+    class DummyAdmin(FormMixin):
+        def _slug_for_model(self, model):
+            return "custom-item"
+
+    admin_instance = DummyAdmin()
+    entry = {
+        "model": CustomItem,
+        "readonly_fields": [],
+        "form_exclude": [],
+    }
+
+    form, meta = admin_instance._build_form(None, entry, CustomItem(subject="bug"))
+
+    # Assert form subject is dropdown
+    assert form.subject.type == "dropdown"
+
+    # Assert choices and items
+    assert form.subject.choices == [("bug", "Bug"), ("question", "Question")]
+
+    # Render and check that it contains the dropdown indicator classes
+    html = form.subject.render()
+    assert "asok-dropdown" in html
+    assert 'asok-ref="input_subject"' in html
+    assert 'value="bug"' in html
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -13,38 +13,64 @@ _RE_FILTER_CHAIN = re.compile(
 )
 
 
+_UNARY_OPS = {ast.USub: "-", ast.UAdd: "+", ast.Not: "not "}
+
+
 def _unparse(node: Optional[ast.AST]) -> str:
     """Unparse an AST node back to a string, with fallback for Python < 3.9."""
     if node is None:
         return "None"
     if hasattr(ast, "unparse"):
         return ast.unparse(node)
+    return _unparse_fallback(node)
 
-    # Lightweight fallback for older Python versions
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, (ast.Constant, getattr(ast, "NameConstant", type(None)))):
-        return repr(getattr(node, "value", node))
-    if hasattr(ast, "Str") and isinstance(node, ast.Str):
-        return repr(node.s)
-    if hasattr(ast, "Num") and isinstance(node, ast.Num):
-        return repr(node.n)
-    if isinstance(node, ast.Attribute):
-        return f"{_unparse(node.value)}.{node.attr}"
-    if isinstance(node, ast.UnaryOp):
-        op_map = {ast.USub: "-", ast.UAdd: "+", ast.Not: "not "}
-        op = op_map.get(type(node.op), "")
-        return f"{op}{_unparse(node.operand)}"
-    if isinstance(node, ast.BinOp):
-        return (
-            f"({_unparse(node.left)} {type(node.op).__name__} {_unparse(node.right)})"
-        )
-    if isinstance(node, ast.Subscript):
-        return f"{_unparse(node.value)}[{_unparse(node.slice)}]"
-    if hasattr(ast, "Index") and isinstance(node, ast.Index):
+
+def _unparse_fallback(node: ast.AST) -> str:
+    handler = _UNPARSE_HANDLERS.get(type(node))
+    if handler is not None:
+        return handler(node)
+    return _unparse_legacy(node)
+
+
+def _unparse_legacy(node: ast.AST) -> str:
+    # Pre-3.9 nodes (Index/Str/Num); kept so the fallback handles them too.
+    Index = getattr(ast, "Index", None)
+    if Index is not None and isinstance(node, Index):
         return _unparse(node.value)
+    return _unparse_str_or_num(node)
 
+
+def _unparse_str_or_num(node: ast.AST) -> str:
+    Str = getattr(ast, "Str", None)
+    if Str is not None and isinstance(node, Str):
+        return repr(node.s)
+    Num = getattr(ast, "Num", None)
+    if Num is not None and isinstance(node, Num):
+        return repr(node.n)
     return ""
+
+
+def _unparse_constant(node) -> str:
+    return repr(getattr(node, "value", node))
+
+
+def _unparse_unary(node) -> str:
+    op = _UNARY_OPS.get(type(node.op), "")
+    return f"{op}{_unparse(node.operand)}"
+
+
+def _unparse_binop(node) -> str:
+    return f"({_unparse(node.left)} {type(node.op).__name__} {_unparse(node.right)})"
+
+
+_UNPARSE_HANDLERS = {
+    ast.Name: lambda n: n.id,
+    ast.Constant: _unparse_constant,
+    ast.Attribute: lambda n: f"{_unparse(n.value)}.{n.attr}",
+    ast.UnaryOp: _unparse_unary,
+    ast.BinOp: _unparse_binop,
+    ast.Subscript: lambda n: f"{_unparse(n.value)}[{_unparse(n.slice)}]",
+}
 
 
 def _resolve_dotted(
@@ -186,53 +212,49 @@ def _apply_filters(
 ) -> str:
     """Given 'name' and '|upper|truncate(10)', build filter call chain.
 
-    SECURITY: Limits filter count and argument size to prevent DoS.
+    SECURITY: caps filter count and argument size to prevent DoS.
     """
-    # SECURITY: Limit number of filters to prevent DoS (max 20 filters)
-    filter_parts = filters_str.split("|")[1:]
-    if len(filter_parts) > 20:
-        filter_parts = filter_parts[:20]
-
-    for filter_part in filter_parts:
-        filter_part = filter_part.strip()
-        if not filter_part:
-            continue
-
-        # SECURITY: Limit filter expression length to prevent ReDoS (max 1000 chars)
-        if len(filter_part) > 1_000:
-            continue
-
-        if "(" in filter_part:
-            fname, fargs = filter_part.split("(", 1)
-            fargs = fargs.rstrip(")")
-
-            # SECURITY: Limit filter arguments length to prevent ReDoS (max 500 chars)
-            if len(fargs) > 500:
-                fargs = fargs[:500]
-
-            # Note: naive argument split, doesn't handle nested parens perfectly
-            # but better than nothing for security resolution
-            # Smart argument split that respects quotes
-            resolved_args = []
-            if fargs:
-                # Regex to match: quoted strings OR non-comma sequences
-                arg_matches = re.finditer(
-                    r"(\"(?:\\.|[^\"\\])*\"|\'(?:\\.|[^\'\\])*\'|[^,]+)", fargs
-                )
-                # SECURITY: Limit number of arguments to prevent DoS (max 10 args)
-                arg_count = 0
-                for am in arg_matches:
-                    if arg_count >= 10:
-                        break
-                    arg_val = am.group(0).strip()
-                    if arg_val:
-                        resolved_args.append(_resolve_expr(arg_val, locals_set, _debug))
-                    arg_count += 1
-            args_str = ", ".join(resolved_args)
-            val_expr = f"__filters['{fname.strip()}']({val_expr}, {args_str})"
-        else:
-            val_expr = f"__filters['{filter_part}']({val_expr})"
+    for filter_part in _normalize_filter_parts(filters_str):
+        val_expr = _apply_one_filter(val_expr, filter_part, locals_set, _debug)
     return val_expr
+
+
+def _normalize_filter_parts(filters_str: str) -> list[str]:
+    parts = filters_str.split("|")[1:]
+    parts = parts[:20]
+    out: list[str] = []
+    for p in parts:
+        stripped = p.strip()
+        if stripped and len(stripped) <= 1_000:
+            out.append(stripped)
+    return out
+
+
+def _apply_one_filter(
+    val_expr: str, filter_part: str, locals_set, _debug: bool
+) -> str:
+    if "(" not in filter_part:
+        return f"__filters['{filter_part}']({val_expr})"
+    fname, fargs = filter_part.split("(", 1)
+    fargs = fargs.rstrip(")")[:500]
+    args_str = ", ".join(_split_filter_args(fargs, locals_set, _debug))
+    return f"__filters['{fname.strip()}']({val_expr}, {args_str})"
+
+
+_FILTER_ARG_RE = re.compile(r"(\"(?:\\.|[^\"\\])*\"|\'(?:\\.|[^\'\\])*\'|[^,]+)")
+
+
+def _split_filter_args(fargs: str, locals_set, _debug: bool) -> list[str]:
+    if not fargs:
+        return []
+    resolved: list[str] = []
+    for am in _FILTER_ARG_RE.finditer(fargs):
+        if len(resolved) >= 10:
+            break
+        arg_val = am.group(0).strip()
+        if arg_val:
+            resolved.append(_resolve_expr(arg_val, locals_set, _debug))
+    return resolved
 
 
 def _resolve_expr(
@@ -327,21 +349,39 @@ def _split_expr_and_filters(expr: str) -> tuple[str, str]:
     '(u.email or "A")[:1] | upper' → ('(u.email or "A")[:1]', '|upper').
     Returns (full_expr, '') when no pipe filter is found outside parens/brackets.
     """
-    depth = 0  # paren/bracket nesting depth
-    in_str = None  # current string delimiter
+    state = _SplitState()
     for i, ch in enumerate(expr):
-        if in_str:
-            if ch == in_str and (i == 0 or expr[i - 1] != "\\"):
-                in_str = None
-        elif ch in ('"', "'"):
-            in_str = ch
-        elif ch in ("(", "[", "{"):
-            depth += 1
-        elif ch in (")", "]", "}"):
-            depth -= 1
-        elif ch == "|" and depth == 0:
+        if state.advance(expr, i, ch):
             return expr[:i].rstrip(), expr[i:]
     return expr, ""
+
+
+class _SplitState:
+    __slots__ = ("depth", "in_str")
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.in_str: Optional[str] = None
+
+    def advance(self, expr: str, i: int, ch: str) -> bool:
+        if self.in_str:
+            self._handle_in_string(expr, i, ch)
+            return False
+        if ch in ('"', "'"):
+            self.in_str = ch
+            return False
+        self._adjust_depth(ch)
+        return ch == "|" and self.depth == 0
+
+    def _adjust_depth(self, ch: str) -> None:
+        if ch in ("(", "[", "{"):
+            self.depth += 1
+        elif ch in (")", "]", "}"):
+            self.depth -= 1
+
+    def _handle_in_string(self, expr: str, i: int, ch: str) -> None:
+        if ch == self.in_str and (i == 0 or expr[i - 1] != "\\"):
+            self.in_str = None
 
 
 def _resolve_expr_full(

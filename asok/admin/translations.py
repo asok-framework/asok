@@ -3,6 +3,7 @@
 Add a new locale by adding an entry to MESSAGES. Missing keys fall back
 to the English source string (which is used as the lookup key).
 """
+from typing import Optional
 
 LOCALES = {
     "en": "English",
@@ -557,16 +558,18 @@ MESSAGES = {
 }
 
 
+def _lookup_message(locale: Optional[str], key: str) -> str:
+    if not locale or locale == "en":
+        return key
+    cat = MESSAGES.get(locale)
+    if not cat:
+        return key
+    return cat.get(key, key)
+
+
 def translate(locale, key, **kwargs):
     """Look up `key` in `locale`; fall back to English (= key)."""
-    if not locale or locale == "en":
-        res = key
-    else:
-        cat = MESSAGES.get(locale)
-        if not cat:
-            res = key
-        else:
-            res = cat.get(key, key)
+    res = _lookup_message(locale, key)
 
     if kwargs:
         try:

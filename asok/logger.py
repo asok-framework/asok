@@ -20,14 +20,69 @@ class _JSONFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
+        self._add_exc_info(record, entry)
+        self._add_extra_fields(record, entry)
+        return _json.dumps(entry)
+
+    def _add_exc_info(self, record: logging.LogRecord, entry: dict[str, Any]) -> None:
         if record.exc_info and record.exc_info[1]:
             entry["exception"] = str(record.exc_info[1])
-        # Merge any extra structured fields
+
+    def _add_extra_fields(self, record: logging.LogRecord, entry: dict[str, Any]) -> None:
         for key in ("method", "path", "status", "duration_ms", "ip"):
             val = getattr(record, key, None)
             if val is not None:
                 entry[key] = val
-        return _json.dumps(entry)
+
+
+def _resolve_level(level: Optional[str], cfg: dict, env: Any) -> str:
+    if level is not None:
+        return level
+    return cfg.get("LOG_LEVEL") or env.get("LOG_LEVEL", "DEBUG")
+
+
+def _resolve_log_file(log_file: Optional[str], cfg: dict, env: Any) -> Optional[str]:
+    if log_file is not None:
+        return log_file
+    return cfg.get("LOG_FILE") or env.get("LOG_FILE")
+
+
+def _resolve_json_format(json_format: Optional[bool], cfg: dict, env: Any) -> bool:
+    if json_format is not None:
+        return json_format
+    fmt = cfg.get("LOG_FORMAT") or env.get("LOG_FORMAT", "")
+    return fmt.lower() == "json"
+
+
+def _resolve_log_config(
+    level: Optional[str],
+    log_file: Optional[str],
+    json_format: Optional[bool],
+    config: Optional[dict[str, Any]],
+) -> tuple[str, Optional[str], bool]:
+    cfg = config or {}
+    env = os.environ
+    return (
+        _resolve_level(level, cfg, env),
+        _resolve_log_file(log_file, cfg, env),
+        _resolve_json_format(json_format, cfg, env),
+    )
+
+
+def _add_rotating_file_handler(
+    logger: logging.Logger, log_file: str, fmt: logging.Formatter
+) -> None:
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            encoding="utf-8",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+        )
+        file_handler.setFormatter(fmt)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        logger.error(f"Could not initialize log file {log_file}: {e}")
 
 
 def get_logger(
@@ -50,21 +105,12 @@ def get_logger(
     if logger.handlers:
         return logger
 
-    # Resolve configuration (Priority: Argument > App Config > Environment > Default)
-    if config:
-        level = level or config.get("LOG_LEVEL")
-        log_file = log_file or config.get("LOG_FILE")
-        if json_format is None:
-            json_format = config.get("LOG_FORMAT", "").lower() == "json"
+    level_str, file_path, is_json = _resolve_log_config(
+        level, log_file, json_format, config
+    )
+    logger.setLevel(getattr(logging, level_str.upper(), logging.DEBUG))
 
-    level = level or os.environ.get("LOG_LEVEL", "DEBUG")
-    log_file = log_file or os.environ.get("LOG_FILE")
-    if json_format is None:
-        json_format = os.environ.get("LOG_FORMAT", "").lower() == "json"
-
-    logger.setLevel(getattr(logging, level.upper(), logging.DEBUG))
-
-    if json_format:
+    if is_json:
         fmt = _JSONFormatter()
     else:
         fmt = logging.Formatter(
@@ -76,19 +122,8 @@ def get_logger(
     console.setFormatter(fmt)
     logger.addHandler(console)
 
-    if log_file:
-        try:
-            file_handler = logging.handlers.RotatingFileHandler(
-                log_file,
-                encoding="utf-8",
-                maxBytes=10 * 1024 * 1024,
-                backupCount=5,
-            )
-            file_handler.setFormatter(fmt)
-            logger.addHandler(file_handler)
-        except Exception as e:
-            # Fallback to console-only if file is not writable
-            logger.error(f"Could not initialize log file {log_file}: {e}")
+    if file_path:
+        _add_rotating_file_handler(logger, file_path, fmt)
 
     return logger
 

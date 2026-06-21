@@ -18,12 +18,13 @@ def tokenize(source: str) -> list[str]:
     """Tokenize a GraphQL query string."""
     source = re.sub(r"#.*", "", source)
     token_specification = [
+        ("SPREAD", r"\.\.\."),          # fragment spread '...' – must be before NUMBER
         ("NUMBER", r"-?\d+(?:\.\d+)?"),
         ("STRING", r'"[^"\\]*(?:\\.[^"\\]*)*"'),
-        ("NAME", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("PUNCT", r"[{}():,!]"),
-        ("VAR", r"\$[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("SKIP", r"[ \t\r\n]+"),
+        ("NAME",   r"[a-zA-Z_][a-zA-Z0-9_]*"),
+        ("PUNCT",  r"[{}():,!]"),
+        ("VAR",    r"\$[a-zA-Z_][a-zA-Z0-9_]*"),
+        ("SKIP",   r"[ \t\r\n]+"),
     ]
     tok_regex = "|".join(f"(?P<{p[0]}>{p[1]})" for p in token_specification)
     tokens = []
@@ -50,12 +51,21 @@ class GraphQLField:
 
 
 class GraphQLParser:
-    """Recursive-descent parser for GraphQL query syntax."""
+    """Recursive-descent parser for GraphQL query syntax with full fragment support."""
 
-    def __init__(self, tokens: list[str], variables: Optional[dict[str, Any]] = None):
+    def __init__(
+        self,
+        tokens: list[str],
+        variables: Optional[dict[str, Any]] = None,
+        max_depth: int = 20,
+    ):
         self.tokens = tokens
         self.variables = variables or {}
         self.pos = 0
+        self.max_depth = max_depth
+        self.current_depth = 0
+        # Named fragment definitions collected during pre-scan
+        self.fragments: dict[str, list[GraphQLField]] = {}
 
     def peek(self) -> Optional[str]:
         if self.pos < len(self.tokens):
@@ -71,28 +81,40 @@ class GraphQLParser:
         self.pos += 1
         return token
 
+    def _parse_variable_or_string(self, token: str) -> tuple[bool, Any]:
+        if token.startswith("$"):
+            self.consume()
+            return True, self.variables.get(token[1:])
+        if token.startswith('"') and token.endswith('"'):
+            self.consume()
+            return True, token[1:-1]
+        return False, None
+
+    def _parse_scalar_fallback(self, token: str) -> Any:
+        if token == "true":
+            return True
+        if token == "false":
+            return False
+        if token == "null":
+            return None
+        return token
+
     def parse_value(self) -> Any:
         token = self.peek()
-        if token and token.startswith("$"):
-            self.consume()
-            var_name = token[1:]
-            return self.variables.get(var_name)
+        if not token:
+            raise SyntaxError("Unexpected end of input")
+
+        is_parsed, val = self._parse_variable_or_string(token)
+        if is_parsed:
+            return val
 
         token = self.consume()
-        if token.startswith('"') and token.endswith('"'):
-            return token[1:-1]
         try:
             if "." in token:
                 return float(token)
             return int(token)
         except ValueError:
-            if token == "true":
-                return True
-            if token == "false":
-                return False
-            if token == "null":
-                return None
-            return token
+            return self._parse_scalar_fallback(token)
 
     def parse_arguments(self) -> dict[str, Any]:
         args = {}
@@ -108,14 +130,33 @@ class GraphQLParser:
         return args
 
     def parse_selection_set(self) -> list[GraphQLField]:
+        self.current_depth += 1
+        if self.current_depth > self.max_depth:
+            raise ValueError(f"Max GraphQL query depth exceeded (limit: {self.max_depth})")
         selections = []
         self.consume("{")
-        while self.peek() != "}":
+        while self.peek() not in ("}", None):
             selections.append(self.parse_field())
         self.consume("}")
+        self.current_depth -= 1
         return selections
 
+    def _parse_fragment_field(self) -> GraphQLField:
+        self.consume()  # consume '...'
+        if self.peek() == "on":
+            self.consume()          # consume 'on'
+            self.consume()          # consume type condition name (e.g. __Type)
+            inline_fields = self.parse_selection_set()
+            placeholder = GraphQLField("__inline_fragment__")
+            placeholder.selections = inline_fields
+            return placeholder
+        frag_name = self.consume()
+        return GraphQLField(f"...{frag_name}")
+
     def parse_field(self) -> GraphQLField:
+        if self.peek() == "...":
+            return self._parse_fragment_field()
+
         name_or_alias = self.consume()
         name = name_or_alias
         alias = None
@@ -135,18 +176,113 @@ class GraphQLParser:
 
         return field
 
-    def parse(self) -> list[GraphQLField]:
-        if self.peek() in ("query", "mutation", "subscription"):
-            self.consume()
-            if self.peek() != "{" and self.peek() not in ("(",):
-                self.consume()  # name
-            if self.peek() == "(":
-                self.consume("(")
-                while self.peek() != ")":
-                    self.consume()
-                self.consume(")")
+    def _skip_variable_definitions_loop(self) -> None:
+        depth = 1
+        while depth > 0 and self.peek() is not None:
+            tok = self.consume()
+            if tok == "(":
+                depth += 1
+            elif tok == ")":
+                depth -= 1
 
-        return self.parse_selection_set()
+    def _skip_variable_definitions(self) -> None:
+        if self.peek() == "(":
+            self.consume("(")
+            self._skip_variable_definitions_loop()
+
+    def _skip_definition_header(self) -> None:
+        if self.peek() not in ("query", "mutation", "subscription"):
+            return
+        self.consume()
+        if self.peek() not in (None, "{", "("):
+            self.consume()  # operation name
+        self._skip_variable_definitions()
+
+    # ── Fragment support ─────────────────────────────────
+
+    def _skip_tokens_before_body(self, i: int) -> int:
+        if i < len(self.tokens) and self.tokens[i] == "on":
+            i += 1
+        if i < len(self.tokens) and self.tokens[i] not in ("{", "}", "..."):
+            i += 1
+        return i
+
+    def _run_fragment_parser(self, frag_name: str, i: int) -> int:
+        saved_pos = self.pos
+        saved_depth = self.current_depth
+        self.pos = i
+        self.current_depth = 0
+        try:
+            self.fragments[frag_name] = self.parse_selection_set()
+            return self.pos
+        except Exception:
+            return i + 1
+        finally:
+            self.pos = saved_pos
+            self.current_depth = saved_depth
+
+    def _parse_single_collected_fragment(self, i: int) -> int:
+        i += 1  # skip 'fragment'
+        if i >= len(self.tokens):
+            return i
+        frag_name = self.tokens[i]
+        i = self._skip_tokens_before_body(i + 1)
+        if i < len(self.tokens) and self.tokens[i] == "{":
+            return self._run_fragment_parser(frag_name, i)
+        return i + 1
+
+    def _collect_fragments(self) -> None:
+        """Pre-scan the full token list to collect all named fragment definitions.
+
+        Fragment definitions appear after the main operation in the query string.
+        We collect them first so that fragment spreads inside selections can be
+        expanded after the main parse pass.
+        """
+        i = 0
+        while i < len(self.tokens):
+            if self.tokens[i] != "fragment":
+                i += 1
+            else:
+                i = self._parse_single_collected_fragment(i)
+
+    def _expand_single_field(self, f: GraphQLField, visited: frozenset, result: list[GraphQLField]) -> None:
+        if f.name == "__inline_fragment__":
+            result.extend(self._expand_fragments(f.selections, visited))
+        elif f.name.startswith("..."):
+            frag_name = f.name[3:]
+            if frag_name not in visited:
+                frag_fields = self.fragments.get(frag_name, [])
+                result.extend(
+                    self._expand_fragments(frag_fields, visited | {frag_name})
+                )
+        else:
+            f.selections = self._expand_fragments(f.selections, visited)
+            result.append(f)
+
+    def _expand_fragments(
+        self,
+        fields: list[GraphQLField],
+        _visited: Optional[frozenset] = None,
+    ) -> list[GraphQLField]:
+        """Recursively inline named fragment spreads and inline fragment placeholders.
+
+        A cycle-detection set (_visited) prevents infinite recursion if two
+        fragments reference each other.
+        """
+        visited = frozenset() if _visited is None else _visited
+        result: list[GraphQLField] = []
+        for f in fields:
+            self._expand_single_field(f, visited, result)
+        return result
+
+    def parse(self) -> list[GraphQLField]:
+        # 1. Pre-collect all fragment definitions from the full token stream.
+        self._collect_fragments()
+        # 2. Parse the main operation.
+        self._skip_definition_header()
+        fields = self.parse_selection_set()
+        # 3. Inline all fragment spreads.
+        return self._expand_fragments(fields)
 
 
 # ── Query Complexity Analysis ──────────────────────────
@@ -216,8 +352,257 @@ def check_complexity(fields: list[GraphQLField], max_complexity: int = 100) -> i
     return score
 
 
+# ── GraphQL Introspection ─────────────────────────────────
+
+# Map ORM field class names → GraphQL scalar type names
+_ORM_TO_GQL: dict[str, str] = {
+    "IntField": "Int",
+    "FloatField": "Float",
+    "BooleanField": "Boolean",
+    "CharField": "String",
+    "TextField": "String",
+    "DateField": "String",
+    "DateTimeField": "String",
+    "EmailField": "String",
+    "SlugField": "String",
+    "URLField": "String",
+    "JSONField": "String",
+    "FileField": "String",
+    "ImageField": "String",
+    "UUIDField": "String",
+    "ColorField": "String",
+    "MonthField": "String",
+    "Base64Field": "String",
+    "ForeignKey": "ID",
+}
+
+
+def _type_ref(kind: str, name: Optional[str] = None, of_type: Any = None) -> dict:
+    return {"kind": kind, "name": name, "ofType": of_type}
+
+
+def _scalar_ref(name: str) -> dict:
+    return _type_ref("SCALAR", name)
+
+
+def _object_ref(name: str) -> dict:
+    return _type_ref("OBJECT", name)
+
+
+def _list_ref(inner: dict) -> dict:
+    return _type_ref("LIST", of_type=inner)
+
+
+def _non_null_ref(inner: dict) -> dict:
+    return _type_ref("NON_NULL", of_type=inner)
+
+
+def _orm_field_to_type_ref(field_obj: Any) -> dict:
+    scalar = _ORM_TO_GQL.get(field_obj.__class__.__name__, "String")
+    return _scalar_ref(scalar)
+
+
+def _full_type(
+    kind: str,
+    name: str,
+    description: Optional[str] = None,
+    fields: Any = None,
+    input_fields: Any = None,
+    interfaces: Any = None,
+    enum_values: Any = None,
+    possible_types: Any = None,
+) -> dict:
+    return {
+        "kind": kind,
+        "name": name,
+        "description": description,
+        "fields": fields,
+        "inputFields": input_fields,
+        "interfaces": interfaces if interfaces is not None else [],
+        "enumValues": enum_values,
+        "possibleTypes": possible_types,
+    }
+
+
+def _field_def(
+    name: str,
+    type_ref: dict,
+    description: Optional[str] = None,
+    args: Optional[list] = None,
+) -> dict:
+    return {
+        "name": name,
+        "description": description,
+        "type": type_ref,
+        "args": args or [],
+        "isDeprecated": False,
+        "deprecationReason": None,
+    }
+
+
+def _input_value(name: str, type_ref: dict, default: Any = None) -> dict:
+    return {"name": name, "description": None, "type": type_ref, "defaultValue": default}
+
+
+def _add_model_type_fields(model_cls: Any, fields: list) -> None:
+    if hasattr(model_cls, "_fields"):
+        for fname, fobj in model_cls._fields.items():
+            if not (getattr(fobj, "is_password", False) or getattr(fobj, "hidden", False)):
+                fields.append(_field_def(fname, _orm_field_to_type_ref(fobj)))
+
+
+def _add_model_type_relations(model_cls: Any, fields: list) -> None:
+    if hasattr(model_cls, "_relations"):
+        for rname, robj in model_cls._relations.items():
+            target = robj.target_model_name
+            is_list = robj.type in ("HasMany", "BelongsToMany", "MorphMany")
+            ref = _list_ref(_object_ref(target)) if is_list else _object_ref(target)
+            fields.append(_field_def(rname, ref))
+
+
+def _build_model_type(model_name: str, model_cls: Any) -> dict:
+    """Build a GraphQL OBJECT type definition for an ORM model."""
+    fields = [_field_def("id", _scalar_ref("ID"), "Primary key")]
+    _add_model_type_fields(model_cls, fields)
+    _add_model_type_relations(model_cls, fields)
+    return _full_type("OBJECT", model_name, fields=fields)
+
+
+def _build_schema_types() -> list:
+    """Build the full list of GraphQL types for the introspection __schema.types field."""
+    types: list[dict] = []
+    # Built-in scalars
+    for sname in ("String", "Boolean", "Int", "Float", "ID"):
+        types.append(_full_type("SCALAR", sname))
+
+    q_fields: list[dict] = []
+    m_fields: list[dict] = []
+    for mname, mcls in MODELS_REGISTRY.items():
+        table = mcls._table
+        low = mname.lower()
+        # Plural list query
+        q_fields.append(_field_def(
+            table, _list_ref(_object_ref(mname)),
+            f"List {mname} records",
+            args=[
+                _input_value("limit", _scalar_ref("Int")),
+                _input_value("offset", _scalar_ref("Int")),
+            ],
+        ))
+        # Singular by-id query
+        q_fields.append(_field_def(
+            low, _object_ref(mname), f"Fetch {mname} by id",
+            args=[_input_value("id", _non_null_ref(_scalar_ref("ID")))],
+        ))
+        # Mutations
+        m_fields.append(_field_def(f"create{mname}", _object_ref(mname), f"Create {mname}"))
+        m_fields.append(_field_def(
+            f"update{mname}", _object_ref(mname), f"Update {mname}",
+            args=[_input_value("id", _non_null_ref(_scalar_ref("ID")))],
+        ))
+        m_fields.append(_field_def(
+            f"delete{mname}", _scalar_ref("Boolean"), f"Delete {mname}",
+            args=[_input_value("id", _non_null_ref(_scalar_ref("ID")))],
+        ))
+
+    types.append(_full_type("OBJECT", "Query", fields=q_fields))
+    types.append(_full_type("OBJECT", "Mutation", fields=m_fields))
+    for mname, mcls in MODELS_REGISTRY.items():
+        types.append(_build_model_type(mname, mcls))
+    return types
+
+
+def _extract_single_introspection_field(obj: Any, f: Any, result: dict) -> None:
+    val = obj.get(f.name) if isinstance(obj, dict) else None
+    if f.selections:
+        result[f.alias or f.name] = _extract_introspection(val, f.selections)
+    else:
+        result[f.alias or f.name] = val
+
+
+def _extract_introspection_list(obj: list, selections: list) -> list:
+    return [_extract_introspection(item, selections) for item in obj]
+
+
+def _extract_introspection(obj: Any, selections: list) -> Any:
+    """Recursively extract selected fields from a plain dict produced by introspection."""
+    if obj is None:
+        return None
+    if isinstance(obj, list):
+        return _extract_introspection_list(obj, selections)
+    if not selections:
+        return obj
+    result: dict = {}
+    for f in selections:
+        _extract_single_introspection_field(obj, f, result)
+    return result
+
+
+def _resolve_schema_introspection(selections: list) -> dict:
+    """Resolve __schema introspection field."""
+    schema_obj: dict = {
+        "description": None,
+        "queryType": {"name": "Query"},
+        "mutationType": {"name": "Mutation"},
+        "subscriptionType": None,
+        "types": _build_schema_types(),
+        "directives": [],
+    }
+    return _extract_introspection(schema_obj, selections)  # type: ignore[return-value]
+
+
+def _resolve_type_introspection(type_name: Optional[str], selections: list) -> Optional[dict]:
+    """Resolve __type(name: ...) introspection field."""
+    if not type_name:
+        return None
+    matched = next(
+        (t for t in _build_schema_types() if t.get("name") == type_name), None
+    )
+    if matched is None:
+        return None
+    return _extract_introspection(matched, selections)  # type: ignore[return-value]
+
+
 # ── Query Resolvers ─────────────────────────────────────
 
+
+def _resolve_relation_field(app: Any, val: Any, relation: Any, f: GraphQLField) -> Any:
+    if relation.type in ("HasMany", "BelongsToMany", "MorphMany"):
+        items = val or []
+        return [resolve_object(app, item, f.selections) for item in items]
+    return resolve_object(app, val, f.selections)
+
+def _resolve_scalar_field(app: Any, val: Any, f: GraphQLField) -> Any:
+    if f.selections:
+        return resolve_object(app, val, f.selections)
+    if hasattr(val, "to_dict"):
+        return val.to_dict()
+    return val
+
+def _get_relation(model_cls: type, name: str) -> Any | None:
+    if hasattr(model_cls, "_relations"):
+        return model_cls._relations.get(name)
+    return None
+
+def _is_field_protected(obj_cls: type, name: str) -> bool:
+    field_obj = getattr(obj_cls, "_fields", {}).get(name)
+    if field_obj:
+        return bool(getattr(field_obj, "is_password", False) or getattr(field_obj, "hidden", False))
+    return False
+
+
+def _resolve_single_field(app: Any, obj: Any, f: GraphQLField) -> Any:
+    if f.name == "__typename":
+        return obj.__class__.__name__
+
+    if _is_field_protected(obj.__class__, f.name):
+        return None
+
+    val = getattr(obj, f.name, None)
+    relation = _get_relation(obj.__class__, f.name)
+    if relation:
+        return _resolve_relation_field(app, val, relation, f)
+    return _resolve_scalar_field(app, val, f)
 
 def resolve_object(
     app: Any, obj: Any, selections: list[GraphQLField]
@@ -227,125 +612,197 @@ def resolve_object(
         return {}
     res = {}
     for f in selections:
-        if f.name == "__typename":
-            res[f.alias or f.name] = obj.__class__.__name__
-            continue
-
-        val = getattr(obj, f.name, None)
-
-        model_cls = obj.__class__
-        relation = (
-            model_cls._relations.get(f.name)
-            if hasattr(model_cls, "_relations")
-            else None
-        )
-
-        if relation:
-            if relation.type in ("HasMany", "BelongsToMany", "MorphMany"):
-                items = val or []
-                res[f.alias or f.name] = [
-                    resolve_object(app, item, f.selections) for item in items
-                ]
-            else:
-                res[f.alias or f.name] = resolve_object(app, val, f.selections)
-        else:
-            if f.selections:
-                res[f.alias or f.name] = resolve_object(app, val, f.selections)
-            else:
-                if hasattr(val, "to_dict"):
-                    res[f.alias or f.name] = val.to_dict()
-                else:
-                    res[f.alias or f.name] = val
+        res[f.alias or f.name] = _resolve_single_field(app, obj, f)
     return res
 
+
+def _is_plural_query(field_name: str, model_name: str, plural_name: str) -> bool:
+    if field_name == plural_name:
+        return True
+    if field_name == plural_name.lower():
+        return True
+    return field_name == (model_name.lower() + "s")
+
+def _is_query_arg_valid(k: str, fields: Any) -> bool:
+    if k == "limit":
+        return False
+    if k == "offset":
+        return False
+    return k in fields
+
+def _apply_pagination(query: Any, limit: Any, offset: Any) -> Any:
+    if limit is not None:
+        query = query.limit(int(limit))
+    if offset is not None:
+        query = query.offset(int(offset))
+    return query
+
+def _resolve_plural_query(app: Any, model_cls: Any, field: GraphQLField) -> Any:
+    query = model_cls.query()
+    query = _apply_pagination(query, field.arguments.get("limit"), field.arguments.get("offset"))
+
+    for k, v in field.arguments.items():
+        if _is_query_arg_valid(k, model_cls._fields):
+            query = query.where(k, v)
+
+    results = query.get()
+    out = []
+    for item in results:
+        out.append(resolve_object(app, item, field.selections))
+    return out
+
+def _resolve_singular_query(app: Any, model_cls: Any, field: GraphQLField) -> Any:
+    obj_id = field.arguments.get("id")
+    if not obj_id:
+        raise ValueError(
+            f"Argument 'id' is required for query '{field.name}'"
+        )
+    item = model_cls.find(id=obj_id)
+    if not item:
+        return None
+    return resolve_object(app, item, field.selections)
+
+def _resolve_introspection_query(field: GraphQLField) -> Any:
+    if field.name == "__schema":
+        return _resolve_schema_introspection(field.selections)
+    if field.name == "__type":
+        return _resolve_type_introspection(field.arguments.get("name"), field.selections)
+    if field.name == "__typename":
+        return "Query"
+    return None
+
+
+def _resolve_model_query(app: Any, field: GraphQLField) -> Any:
+    for model_name, model_cls in MODELS_REGISTRY.items():
+        plural_name = model_cls._table
+        if _is_plural_query(field.name, model_name, plural_name):
+            return _resolve_plural_query(app, model_cls, field)
+        if field.name in (model_name, model_name.lower()):
+            return _resolve_singular_query(app, model_cls, field)
+    return None
+
+
+def _resolve_query_field(app: Any, field: GraphQLField) -> Any:
+    val = _resolve_introspection_query(field)
+    if val is not None:
+        return val
+    val = _resolve_model_query(app, field)
+    if val is not None:
+        return val
+    raise ValueError(f"Unknown root query field '{field.name}'")
+
+def _is_mutation_match(field_name: str, prefix: str, model_name: str, low_model: str) -> bool:
+    if field_name == f"{prefix}{model_name}":
+        return True
+    return field_name == f"{prefix}_{low_model}"
+
+def _filter_protected_fields(model_cls: Any, arguments: dict) -> dict:
+    model_fields = getattr(model_cls, "_fields", {})
+    return {
+        k: v for k, v in arguments.items()
+        if not getattr(model_fields.get(k), "protected", False)
+    }
+
+def _resolve_create_mutation(app: Any, model_cls: Any, field: GraphQLField, model_name: str) -> Any:
+    safe_args = _filter_protected_fields(model_cls, field.arguments)
+    obj = model_cls.query().create(**safe_args)
+    from ..events import events
+    events.emit(f"model:{model_name}:created", obj)
+    return resolve_object(app, obj, field.selections)
+
+def _resolve_update_mutation(app: Any, model_cls: Any, field: GraphQLField, model_name: str) -> Any:
+    obj_id = field.arguments.get("id")
+    if not obj_id:
+        raise ValueError("Argument 'id' is required for update mutation")
+    obj = model_cls.find(id=obj_id)
+    if not obj:
+        raise ValueError(f"{model_name} with id {obj_id} not found")
+
+    update_args = _filter_protected_fields(model_cls, {
+        k: v for k, v in field.arguments.items() if k != "id"
+    })
+
+    obj.update(**update_args)
+    from ..events import events
+    events.emit(f"model:{model_name}:updated", obj)
+    return resolve_object(app, obj, field.selections)
+
+def _resolve_delete_mutation(model_cls: Any, field: GraphQLField, model_name: str) -> bool:
+    obj_id = field.arguments.get("id")
+    if not obj_id:
+        raise ValueError("Argument 'id' is required for delete mutation")
+    obj = model_cls.find(id=obj_id)
+    if not obj:
+        return False
+    obj.delete()
+    from ..events import events
+    events.emit(f"model:{model_name}:deleted", obj)
+    return True
+
+def _resolve_mutation_field(app: Any, field: GraphQLField) -> Any:
+    for model_name, model_cls in MODELS_REGISTRY.items():
+        low_model = model_name.lower()
+        if _is_mutation_match(field.name, "create", model_name, low_model):
+            return _resolve_create_mutation(app, model_cls, field, model_name)
+
+        if _is_mutation_match(field.name, "update", model_name, low_model):
+            return _resolve_update_mutation(app, model_cls, field, model_name)
+
+        if _is_mutation_match(field.name, "delete", model_name, low_model):
+            return _resolve_delete_mutation(model_cls, field, model_name)
+
+    raise ValueError(f"Unknown root mutation field '{field.name}'")
 
 def resolve_root_field(app: Any, field: GraphQLField, is_mutation: bool) -> Any:
     """Resolve a single root-level query or mutation field."""
     if not is_mutation:
-        for model_name, model_cls in MODELS_REGISTRY.items():
-            plural_name = model_cls._table
-            if field.name in (
-                plural_name,
-                plural_name.lower(),
-                model_name.lower() + "s",
-            ):
-                limit = field.arguments.get("limit")
-                offset = field.arguments.get("offset")
+        return _resolve_query_field(app, field)
+    return _resolve_mutation_field(app, field)
 
-                query = model_cls.query()
-                if limit is not None:
-                    query = query.limit(int(limit))
-                if offset is not None:
-                    query = query.offset(int(offset))
 
-                for k, v in field.arguments.items():
-                    if k not in ("limit", "offset") and k in model_cls._fields:
-                        query = query.where(k, v)
+_INTROSPECTION_FIELDS = frozenset(("__schema", "__type", "__typename"))
 
-                results = query.get()
-                return [resolve_object(app, item, field.selections) for item in results]
 
-            if field.name in (model_name, model_name.lower()):
-                obj_id = field.arguments.get("id")
-                if not obj_id:
-                    raise ValueError(
-                        f"Argument 'id' is required for query '{field.name}'"
-                    )
-                item = model_cls.find(id=obj_id)
-                if not item:
-                    return None
-                return resolve_object(app, item, field.selections)
+def _is_introspection_query(fields: list[GraphQLField]) -> bool:
+    """Return True if every root field is a GraphQL introspection meta-field.
 
-        raise ValueError(f"Unknown root query field '{field.name}'")
-    else:
-        for model_name, model_cls in MODELS_REGISTRY.items():
-            low_model = model_name.lower()
-            if (
-                field.name == f"create{model_name}"
-                or field.name == f"create_{low_model}"
-            ):
-                obj = model_cls.query().create(**field.arguments)
-                from ..events import events
+    Introspection queries never touch the database, so complexity limits
+    must not apply to them (the standard GraphiQL introspection query scores ~179).
+    """
+    return bool(fields) and all(f.name in _INTROSPECTION_FIELDS for f in fields)
 
-                events.emit(f"model:{model_name}:created", obj)
-                return resolve_object(app, obj, field.selections)
 
-            if (
-                field.name == f"update{model_name}"
-                or field.name == f"update_{low_model}"
-            ):
-                obj_id = field.arguments.get("id")
-                if not obj_id:
-                    raise ValueError("Argument 'id' is required for update mutation")
-                obj = model_cls.find(id=obj_id)
-                if not obj:
-                    raise ValueError(f"{model_name} with id {obj_id} not found")
+def _check_introspection_disabled(app: Any, fields: list[GraphQLField]) -> None:
+    disable_introspection = app.config.get("GRAPHQL_DISABLE_INTROSPECTION")
+    if disable_introspection is None:
+        disable_introspection = not app.config.get("DEBUG", False)
+    if disable_introspection and any(f.name in ("__schema", "__type") for f in fields):
+        raise ValueError("GraphQL introspection is disabled.")
 
-                update_args = {k: v for k, v in field.arguments.items() if k != "id"}
-                obj.update(**update_args)
-                from ..events import events
 
-                events.emit(f"model:{model_name}:updated", obj)
-                return resolve_object(app, obj, field.selections)
+def _parse_and_validate_query(app: Any, tokens: list[str], variables: dict) -> list[GraphQLField]:
+    max_depth = app.config.get("GRAPHQL_MAX_DEPTH", 20)
+    parser = GraphQLParser(tokens, variables, max_depth=max_depth)
+    fields = parser.parse()
 
-            if (
-                field.name == f"delete{model_name}"
-                or field.name == f"delete_{low_model}"
-            ):
-                obj_id = field.arguments.get("id")
-                if not obj_id:
-                    raise ValueError("Argument 'id' is required for delete mutation")
-                obj = model_cls.find(id=obj_id)
-                if not obj:
-                    return False
-                obj.delete()
-                from ..events import events
+    _check_introspection_disabled(app, fields)
 
-                events.emit(f"model:{model_name}:deleted", obj)
-                return True
+    if not _is_introspection_query(fields):
+        max_complexity = app.config.get("GRAPHQL_MAX_COMPLEXITY", 100)
+        check_complexity(fields, max_complexity)
+    return fields
 
-        raise ValueError(f"Unknown root mutation field '{field.name}'")
-
+def _execute_fields(app: Any, fields: list[GraphQLField], is_mutation: bool) -> tuple[dict, list]:
+    data = {}
+    errors = []
+    for field in fields:
+        try:
+            val = resolve_root_field(app, field, is_mutation)
+            data[field.alias or field.name] = val
+        except Exception as e:
+            logger.error("GraphQL Field Error: %s", e, exc_info=True)
+            errors.append({"message": str(e)})
+    return data, errors
 
 def execute_graphql(
     app: Any, query_str: str, variables: dict[str, Any]
@@ -356,26 +813,12 @@ def execute_graphql(
         return {"errors": [{"message": "Empty query"}]}
 
     try:
-        parser = GraphQLParser(tokens, variables)
-        fields = parser.parse()
-
-        max_complexity = app.config.get("GRAPHQL_MAX_COMPLEXITY", 100)
-        check_complexity(fields, max_complexity)
+        fields = _parse_and_validate_query(app, tokens, variables)
     except Exception as e:
         return {"errors": [{"message": str(e)}]}
 
-    data = {}
-    errors = []
-
     is_mutation = tokens[0] == "mutation"
-
-    for field in fields:
-        try:
-            val = resolve_root_field(app, field, is_mutation)
-            data[field.alias or field.name] = val
-        except Exception as e:
-            logger.error("GraphQL Field Error: %s", e, exc_info=True)
-            errors.append({"message": str(e)})
+    data, errors = _execute_fields(app, fields, is_mutation)
 
     res = {}
     if data:
@@ -388,29 +831,46 @@ def execute_graphql(
 # ── HTTP Handler & Playground ─────────────────────────
 
 
+def _graphiql_assets_installed() -> bool:
+    import os as _os
+    static_dir = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "api", "static", "graphiql")
+    for name in ("react.min.js", "react-dom.min.js", "graphiql.min.js", "graphiql.min.css"):
+        if not _os.path.isfile(_os.path.join(static_dir, name)):
+            return False
+    return True
+
+
 def get_graphiql_html() -> str:
-    """Return GraphiQL development HTML template."""
-    return """<!DOCTYPE html>
+    """Return GraphiQL development HTML template, using local assets when available."""
+    if _graphiql_assets_installed():
+        css_url    = "/asok-graphql/graphiql.min.css"
+        react_url  = "/asok-graphql/react.min.js"
+        rdom_url   = "/asok-graphql/react-dom.min.js"
+        gql_url    = "/asok-graphql/graphiql.min.js"
+    else:
+        css_url    = "https://unpkg.com/graphiql@3.0.6/graphiql.min.css"
+        react_url  = "https://unpkg.com/react@18.3.1/umd/react.production.min.js"
+        rdom_url   = "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
+        gql_url    = "https://unpkg.com/graphiql@3.0.6/graphiql.min.js"
+
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Asok GraphQL Explorer</title>
-    <link href="https://unpkg.com/graphiql/graphiql.min.css" rel="stylesheet" />
+    <link href="{css_url}" rel="stylesheet" />
 </head>
-<body style="margin: 0; overflow: hidden; background: #0b0f19;">
+<body style="margin: 0; background: #0b0f19;">
     <div id="graphiql" style="height: 100vh;"></div>
-    <script crossorigin src="https://unpkg.com/react/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom/umd/react-dom.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/graphiql/graphiql.min.js"></script>
+    <script crossorigin src="{react_url}"></script>
+    <script crossorigin src="{rdom_url}"></script>
+    <script crossorigin src="{gql_url}"></script>
     <script>
-        const fetcher = GraphiQL.createFetcher({
+        const fetcher = GraphiQL.createFetcher({{
             url: window.location.pathname,
-            wsClient: new GraphiQL.SubscriptionClient(
-                (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + window.location.pathname
-            )
-        });
+        }});
         ReactDOM.render(
-            React.createElement(GraphiQL, { fetcher: fetcher }),
+            React.createElement(GraphiQL, {{ fetcher: fetcher }}),
             document.getElementById('graphiql'),
         );
     </script>
@@ -418,39 +878,113 @@ def get_graphiql_html() -> str:
 </html>"""
 
 
+def _handle_graphql_get(app: Any, request: Request) -> bytes:
+    if app.config.get("DEBUG"):
+        request.content_type = "text/html"
+        return get_graphiql_html().encode("utf-8")
+    request.status = "405 Method Not Allowed"
+    return json.dumps(
+        {"error": "GraphQL GET is only allowed in development mode"}
+    ).encode("utf-8")
+
+def _is_mutation_denied(app: Any, tokens: list[str]) -> bool:
+    if tokens and tokens[0] == "mutation":
+        auth_hook = app.config.get("GRAPHQL_AUTHORIZE")
+        allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS", False)
+        return not auth_hook and not allow_unauth
+    return False
+
+
+def _handle_graphql_post(app: Any, request: Request) -> bytes:
+    try:
+        body_data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        request.status = "400 Bad Request"
+        return json.dumps({"error": "Invalid JSON payload"}).encode("utf-8")
+
+    query = body_data.get("query", "")
+    variables = body_data.get("variables") or {}
+
+    tokens = tokenize(query)
+    if _is_mutation_denied(app, tokens):
+        request.status = "403 Forbidden"
+        request.content_type = "application/json"
+        msg = "GraphQL mutations require authentication. Configure GRAPHQL_AUTHORIZE or set GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS=True."
+        return json.dumps({"errors": [{"message": msg}]}).encode("utf-8")
+
+    result = execute_graphql(app, query, variables)
+    request.content_type = "application/json"
+    return json.dumps(result).encode("utf-8")
+
 def handle_graphql_request(app: Any, request: Request) -> Optional[bytes]:
     """Dispatch HTTP request to GraphiQL explorer or the GraphQL resolver."""
-    if request.method == "GET":
-        if app.config.get("DEBUG"):
-            request.content_type = "text/html"
-            return get_graphiql_html().encode("utf-8")
-        else:
-            request.status = "405 Method Not Allowed"
-            return json.dumps(
-                {"error": "GraphQL GET is only allowed in development mode"}
-            ).encode("utf-8")
-
-    if request.method == "POST":
-        try:
-            body_data = json.loads(request.body.decode("utf-8"))
-        except Exception:
-            request.status = "400 Bad Request"
-            return json.dumps({"error": "Invalid JSON payload"}).encode("utf-8")
-
-        query = body_data.get("query", "")
-        variables = body_data.get("variables", {})
-
-        result = execute_graphql(app, query, variables)
-        if "errors" in result and not result.get("data"):
-            request.status = "400 Bad Request"
+    auth_hook = app.config.get("GRAPHQL_AUTHORIZE")
+    if auth_hook and not auth_hook(request):
+        request.status = "403 Forbidden"
         request.content_type = "application/json"
-        return json.dumps(result).encode("utf-8")
+        return json.dumps({"errors": [{"message": "Unauthorized GraphQL access"}]}).encode("utf-8")
+
+    if request.method == "GET":
+        return _handle_graphql_get(app, request)
+    if request.method == "POST":
+        return _handle_graphql_post(app, request)
 
     request.status = "405 Method Not Allowed"
     return None
 
 
 # ── WebSockets Subscriptions ──────────────────────────
+
+
+def _handle_subscribe(conn: Any, data: dict) -> None:
+    sub_id = data.get("id")
+    payload = data.get("payload", {})
+    query_str = payload.get("query")
+    variables = payload.get("variables", {})
+
+    if not (sub_id and query_str):
+        return
+
+    try:
+        tokens = tokenize(query_str)
+        max_depth = conn.server.app.config.get("GRAPHQL_MAX_DEPTH", 20)
+        parser = GraphQLParser(tokens, variables, max_depth=max_depth)
+        fields = parser.parse()
+
+        # Complexity validation check on subscription query
+        max_complexity = conn.server.app.config.get("GRAPHQL_MAX_COMPLEXITY", 100)
+        check_complexity(fields, max_complexity)
+
+        if not hasattr(conn, "graphql_subscriptions"):
+            conn.graphql_subscriptions = {}
+        conn.graphql_subscriptions[sub_id] = (fields, variables)
+    except Exception as e:
+        conn.send_json(
+            {
+                "type": "error",
+                "id": sub_id,
+                "payload": [{"message": str(e)}],
+            }
+        )
+
+def _handle_complete(conn: Any, data: dict) -> None:
+    sub_id = data.get("id")
+    if hasattr(conn, "graphql_subscriptions") and sub_id in conn.graphql_subscriptions:
+        del conn.graphql_subscriptions[sub_id]
+
+def _handle_connection_init(conn: Any) -> None:
+    auth_hook = conn.server.app.config.get("GRAPHQL_AUTHORIZE")
+    req = getattr(conn, "request", None)
+    if auth_hook and req and not auth_hook(req):
+        conn.send_json(
+            {
+                "type": "connection_error",
+                "payload": {"message": "Unauthorized GraphQL access"},
+            }
+        )
+        conn.close()
+    else:
+        conn.send_json({"type": "connection_ack"})
 
 
 def on_graphql_ws_message(conn: Any, text: str) -> None:
@@ -462,43 +996,11 @@ def on_graphql_ws_message(conn: Any, text: str) -> None:
 
     msg_type = data.get("type")
     if msg_type == "connection_init":
-        conn.send_json({"type": "connection_ack"})
+        _handle_connection_init(conn)
     elif msg_type == "subscribe":
-        sub_id = data.get("id")
-        payload = data.get("payload", {})
-        query_str = payload.get("query")
-        variables = payload.get("variables", {})
-
-        if sub_id and query_str:
-            try:
-                tokens = tokenize(query_str)
-                parser = GraphQLParser(tokens, variables)
-                fields = parser.parse()
-
-                # Complexity validation check on subscription query
-                max_complexity = conn.server.app.config.get(
-                    "GRAPHQL_MAX_COMPLEXITY", 100
-                )
-                check_complexity(fields, max_complexity)
-
-                if not hasattr(conn, "graphql_subscriptions"):
-                    conn.graphql_subscriptions = {}
-                conn.graphql_subscriptions[sub_id] = (fields, variables)
-            except Exception as e:
-                conn.send_json(
-                    {
-                        "type": "error",
-                        "id": sub_id,
-                        "payload": [{"message": str(e)}],
-                    }
-                )
+        _handle_subscribe(conn, data)
     elif msg_type == "complete":
-        sub_id = data.get("id")
-        if (
-            hasattr(conn, "graphql_subscriptions")
-            and sub_id in conn.graphql_subscriptions
-        ):
-            del conn.graphql_subscriptions[sub_id]
+        _handle_complete(conn, data)
 
 
 def setup_graphql_subscriptions(server: Any) -> None:

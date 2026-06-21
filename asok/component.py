@@ -7,11 +7,81 @@ import json
 import os
 import secrets
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from .templates import SafeString, render_template_string
 
 COMPONENTS_REGISTRY = {}
+
+
+def _is_safe_list(val: Union[list, tuple]) -> bool:
+    return all(_is_safe_value(item) for item in val)
+
+
+def _is_safe_dict(val: dict) -> bool:
+    for k, v in val.items():
+        if not isinstance(k, str) or not _is_safe_value(v):
+            return False
+    return True
+
+
+def _is_safe_value(val: Any) -> bool:
+    """Check if a value is safe to serialize."""
+    SAFE_TYPES = (str, int, float, bool, type(None), list, dict, tuple)
+    if not isinstance(val, SAFE_TYPES):
+        return False
+    if isinstance(val, (list, tuple)):
+        return _is_safe_list(val)
+    if isinstance(val, dict):
+        return _is_safe_dict(val)
+    return True
+
+
+def _has_file_attr(module: Optional[Any]) -> bool:
+    return bool(module and hasattr(module, "__file__"))
+
+
+def _find_sys_module(cls_module: str) -> Optional[Any]:
+    import sys
+    for m in sys.modules.values():
+        if hasattr(m, "__name__") and m.__name__.endswith(cls_module):
+            return m
+    return None
+
+
+def _resolve_swapped_path(path: str) -> Optional[str]:
+    base_path, current_ext = os.path.splitext(path)
+    if current_ext == ".html" and os.path.exists(base_path + ".asok"):
+        return base_path + ".asok"
+    if current_ext == ".asok" and os.path.exists(base_path + ".html"):
+        return base_path + ".html"
+    return None
+
+
+def _verify_signature(signed: str, secret_key: str) -> Optional[str]:
+    if not signed or "." not in signed:
+        return None
+    try:
+        data_str, sig = signed.rsplit(".", 1)
+        expected = hmac.new(
+            secret_key.encode(), data_str.encode(), hashlib.sha256
+        ).hexdigest()
+        if hmac.compare_digest(sig, expected):
+            return data_str
+    except Exception:
+        pass
+    return None
+
+
+def _verify_state_timestamp(state: dict[str, Any]) -> bool:
+    ts = state.pop("_ts", 0)
+    if time.time() - ts > 3600:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Expired state signature (age: %d seconds)", time.time() - ts
+        )
+        return False
+    return True
 
 
 def exposed(fn):
@@ -58,69 +128,54 @@ class Component(metaclass=ComponentMeta):
         """Lifecycle hook called when the component is initially mounted or connected."""
         pass
 
-    def html(self, name: str) -> str:
-        """Load a raw HTML template file relative to the component's file location.
-
-        SECURITY: File size limits prevent DoS via extremely large templates.
-        """
+    def _find_dir_path(self) -> str:
         import inspect
-
         module = inspect.getmodule(self.__class__)
-        # Fallback for dynamic modules not in sys.modules
-        if not module or not hasattr(module, "__file__"):
-            import sys
+        if not _has_file_attr(module):
+            module = _find_sys_module(self.__class__.__module__)
+        if not _has_file_attr(module):
+            return os.path.dirname(os.path.abspath(inspect.getfile(self.__class__)))
+        return os.path.dirname(os.path.abspath(module.__file__))
 
-            for m in sys.modules.values():
-                if hasattr(m, "__name__") and m.__name__.endswith(
-                    self.__class__.__module__
-                ):
-                    module = m
-                    break
-
-        if not module or not hasattr(module, "__file__"):
-            # Last ditch: try to find by class file
-            dir_path = os.path.dirname(os.path.abspath(inspect.getfile(self.__class__)))
-        else:
-            dir_path = os.path.dirname(os.path.abspath(module.__file__))
-
+    def _resolve_template_path(self, dir_path: str, name: str) -> Optional[str]:
         path = os.path.join(dir_path, name)
-        if not os.path.exists(path):
-            # Try automatic extension resolution
-            resolved = False
-            # 1. Try appending
-            for ext in (".html", ".asok"):
-                if os.path.exists(path + ext):
-                    path = path + ext
-                    resolved = True
-                    break
+        if os.path.exists(path):
+            return path
+        for ext in (".html", ".asok"):
+            if os.path.exists(path + ext):
+                return path + ext
+        return _resolve_swapped_path(path)
 
-            # 2. Try swapping
-            if not resolved:
-                base_path, current_ext = os.path.splitext(path)
-                if current_ext == ".html" and os.path.exists(base_path + ".asok"):
-                    path = base_path + ".asok"
-                    resolved = True
-                elif current_ext == ".asok" and os.path.exists(base_path + ".html"):
-                    path = base_path + ".html"
-                    resolved = True
-
-            if not resolved:
-                return f"<!-- Template {name} not found in {dir_path} -->"
-
-        # SECURITY: Limit template file size to prevent DoS (max 1MB)
+    def _read_template_file(self, path: str) -> str:
         try:
             file_size = os.path.getsize(path)
             if file_size > 1_000_000:
                 return "<!-- Template file too large -->"
         except OSError:
             return "<!-- Error reading template -->"
-
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def html(self, name: str) -> str:
+        """Load a raw HTML template file relative to the component's file location.
+
+        SECURITY: File size limits prevent DoS via extremely large templates.
+        """
+        dir_path = self._find_dir_path()
+        path = self._resolve_template_path(dir_path, name)
+        if not path:
+            return f"<!-- Template {name} not found in {dir_path} -->"
+        return self._read_template_file(path)
 
     def render(self) -> str:
         """Return the template string for this component. Must be implemented by subclasses."""
         raise NotImplementedError
+
+    def _collect_attrs(self, source: dict[str, Any], target: dict[str, Any]) -> None:
+        for k, v in source.items():
+            if not k.startswith("_") and not callable(v):
+                if _is_safe_value(v):
+                    target[k] = v
 
     def _get_state(self) -> dict[str, Any]:
         """Extract all public, serializable state from the component.
@@ -128,40 +183,11 @@ class Component(metaclass=ComponentMeta):
         SECURITY: Only JSON-serializable types are allowed to prevent
         deserialization attacks (no pickle).
         """
-        # Whitelist of safe types for serialization
-        SAFE_TYPES = (str, int, float, bool, type(None), list, dict, tuple)
-
-        def is_safe_value(val: Any) -> bool:
-            """Check if a value is safe to serialize."""
-            if isinstance(val, SAFE_TYPES):
-                if isinstance(val, (list, tuple)):
-                    return all(is_safe_value(item) for item in val)
-                elif isinstance(val, dict):
-                    return all(
-                        isinstance(k, str) and is_safe_value(v) for k, v in val.items()
-                    )
-                return True
-            return False
-
         state = {}
-        # 1. Collect class-level non-callable, non-private attributes
-        #    Walk the MRO in reverse so more derived classes win.
         for cls in reversed(type(self).__mro__):
-            if cls in (Component, object):
-                continue
-            for k, v in cls.__dict__.items():
-                if not k.startswith("_") and not callable(v):
-                    # SECURITY: Only add safe types
-                    if is_safe_value(v):
-                        state[k] = v
-
-        # 2. Overlay with instance-level overrides (set via __init__ or methods)
-        for k, v in self.__dict__.items():
-            if not k.startswith("_") and not callable(v):
-                # SECURITY: Only add safe types
-                if is_safe_value(v):
-                    state[k] = v
-
+            if cls not in (Component, object):
+                self._collect_attrs(cls.__dict__, state)
+        self._collect_attrs(self.__dict__, state)
         return state
 
     def _sign_state(self, secret_key: str) -> str:
@@ -179,30 +205,15 @@ class Component(metaclass=ComponentMeta):
         cls: type[Component], signed: str, secret_key: str, cid: Optional[str] = None
     ) -> Optional[Component]:
         """Reconstruct a component instance from a signed state string."""
-        if not signed or "." not in signed:
+        data_str = _verify_signature(signed, secret_key)
+        if not data_str:
             return None
         try:
-            data_str, sig = signed.rsplit(".", 1)
-            expected = hmac.new(
-                secret_key.encode(), data_str.encode(), hashlib.sha256
-            ).hexdigest()
-            if not hmac.compare_digest(sig, expected):
-                return None
             state = json.loads(data_str)
-
-            # SECURITY: Validate timestamp to prevent replay attacks (1 hour max age)
-            ts = state.pop("_ts", 0)
-            if time.time() - ts > 3600:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "Expired state signature (age: %d seconds)", time.time() - ts
-                )
+            if not _verify_state_timestamp(state):
                 return None
 
-            # Remove nonce (already validated via signature)
             state.pop("_nonce", None)
-
             if cid:
                 state["_cid"] = cid
             return cls(**state)

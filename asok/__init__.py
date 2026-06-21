@@ -1,7 +1,7 @@
 import os
 import sys
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # Disable bytecode generation (__pycache__) by default to keep the file-system based routing clean.
 # Can be overridden by setting ASOK_WRITE_BYTECODE=true in the environment.
@@ -54,6 +54,8 @@ from .orm import Model as Model
 from .orm import ModelError as ModelError
 from .orm import Relation as Relation
 from .orm import slugify as slugify
+from .orm.migrations import Migration as Migration
+from .orm.migrations import operations as operations
 from .ratelimit import RateLimit as RateLimit
 from .ratelimit import rate_limit as rate_limit
 from .request import Request as Request

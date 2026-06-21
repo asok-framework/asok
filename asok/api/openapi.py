@@ -2,6 +2,7 @@ import importlib.util as _ut
 import inspect
 import os
 import re
+from typing import Any
 
 
 class OpenAPIGenerator:
@@ -36,6 +37,32 @@ class OpenAPIGenerator:
         self._route_count = 0
         self._schema_count = 0
 
+    def _clean_suffixes(self, route_path: str) -> str:
+        if route_path.endswith("/index"):
+            return route_path[:-6] or "/"
+        if route_path.endswith("/page"):
+            return route_path[:-5] or "/"
+        return route_path
+
+    def _sanitize_route_path(self, rel_path: str) -> str:
+        route_path = "/" + rel_path[:-3].replace("\\", "/")
+        if len(route_path) > 500:
+            return ""
+        return self._clean_suffixes(route_path)
+
+    def _process_file_if_route(self, root: str, file: str, pages_dir: str) -> None:
+        if file.endswith(".py") and not file.startswith("__"):
+            rel_path = os.path.relpath(os.path.join(root, file), pages_dir)
+            route_path = self._sanitize_route_path(rel_path)
+            if route_path:
+                self._process_page(route_path, os.path.join(root, file))
+
+    def _scan_files(self, root: str, files: list[str], pages_dir: str) -> None:
+        for file in files:
+            if self._route_count >= self._MAX_ROUTES:
+                break
+            self._process_file_if_route(root, file, pages_dir)
+
     def generate(self):
         """Scan the project's pages directory and build the complete OpenAPI specification.
 
@@ -45,142 +72,132 @@ class OpenAPIGenerator:
         if not os.path.exists(pages_dir):
             return self.spec
 
-        # SECURITY: Limit directory traversal depth to prevent DoS
         for root, _, files in os.walk(pages_dir):
-            # Calculate depth relative to pages_dir
             depth = root[len(pages_dir) :].count(os.sep)
             if depth >= self._MAX_DEPTH:
                 continue
-
-            for file in files:
-                # SECURITY: Stop if we've reached the route limit
-                if self._route_count >= self._MAX_ROUTES:
-                    break
-
-                if file.endswith(".py") and not file.startswith("__"):
-                    rel_path = os.path.relpath(os.path.join(root, file), pages_dir)
-                    route_path = "/" + rel_path[:-3].replace("\\", "/")
-
-                    # SECURITY: Validate route path length before processing
-                    if len(route_path) > 500:
-                        continue
-
-                    if route_path.endswith("/index"):
-                        route_path = route_path[:-6] or "/"
-                    if route_path.endswith("/page"):
-                        route_path = route_path[:-5] or "/"
-
-                    self._process_page(route_path, os.path.join(root, file))
+            self._scan_files(root, files, pages_dir)
 
         return self.spec
 
-    def _process_page(self, route_path, full_path):
-        # We need to load the module to inspect it
-        # In Asok, we can use _load_module if we have a way to translate path to module name
-        # For simplicity in the generator, we'll use a direct import logic
-
+    def _load_module(self, full_path: str) -> Any:
         mod_name = "api_scan_" + full_path.replace(os.sep, "_")
         spec = _ut.spec_from_file_location(mod_name, full_path)
         mod = _ut.module_from_spec(spec)
         try:
             spec.loader.exec_module(mod)
+            return mod
         except Exception:
-            return  # Skip if module fails to load
+            return None
 
-        methods = ["get", "post", "put", "patch", "delete"]
-        path_item = {}
+    def _build_base_operation(self, meta: Any, m: str, route_path: str) -> dict[str, Any]:
+        return {
+            "summary": meta.summary or f"{m.upper()} {route_path}",
+            "description": meta.description or "",
+            "tags": meta.tags or ["General"],
+            "responses": {"200": {"description": "Successful Response"}},
+        }
 
-        for m in methods:
-            fn = getattr(mod, m, None)
-            if fn and hasattr(fn, "_asok_api"):
-                meta = fn._asok_api
-                operation = {
-                    "summary": meta.summary or f"{m.upper()} {route_path}",
-                    "description": meta.description or "",
-                    "tags": meta.tags or ["General"],
-                    "responses": {"200": {"description": "Successful Response"}},
-                }
-
-                if meta.input:
-                    schema_name = self._register_schema(meta.input)
-                    operation["x-input-schema"] = schema_name
-                    operation["_input_schema"] = schema_name
-                    if m in ["post", "put", "patch"]:
-                        operation["requestBody"] = {
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "$ref": f"#/components/schemas/{schema_name}"
-                                    }
-                                }
-                            }
-                        }
-                    else:
-                        operation["parameters"] = self._schema_to_params(meta.input)
-
-                if meta.output:
-                    schema_name = self._register_schema(meta.output)
-                    operation["x-output-schema"] = schema_name
-                    operation["_output_schema"] = schema_name
-                    operation["responses"]["200"]["content"] = {
-                        "application/json": {
-                            "schema": {"$ref": f"#/components/schemas/{schema_name}"}
-                        }
+    def _add_input_schema(self, operation: dict, input_schema: Any, m: str) -> None:
+        schema_name = self._register_schema(input_schema)
+        operation["x-input-schema"] = schema_name
+        operation["_input_schema"] = schema_name
+        if m in ["post", "put", "patch"]:
+            operation["requestBody"] = {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": f"#/components/schemas/{schema_name}"}
                     }
+                }
+            }
+        else:
+            operation["parameters"] = self._schema_to_params(input_schema)
 
-                path_item[m] = operation
+    def _add_output_schema(self, operation: dict, output_schema: Any) -> None:
+        schema_name = self._register_schema(output_schema)
+        operation["x-output-schema"] = schema_name
+        operation["_output_schema"] = schema_name
+        operation["responses"]["200"]["content"] = {
+            "application/json": {
+                "schema": {"$ref": f"#/components/schemas/{schema_name}"}
+            }
+        }
 
-        if path_item:
-            # SECURITY: Check route count limit
-            if self._route_count >= self._MAX_ROUTES:
-                return
+    def _parse_method_operation(self, fn: Any, m: str, route_path: str) -> dict[str, Any] | None:
+        if not (fn and hasattr(fn, "_asok_api")):
+            return None
+        meta = fn._asok_api
+        operation = self._build_base_operation(meta, m, route_path)
+        if meta.input:
+            self._add_input_schema(operation, meta.input, m)
+        if meta.output:
+            self._add_output_schema(operation, meta.output)
+        return operation
 
-            # Handle dynamic routes: profile/[username:int].py -> /profile/{username}
-            # SECURITY: Validate route_path length before regex to prevent ReDoS
-            if len(route_path) > 500:
-                return
+    def _register_path_item(self, route_path: str, path_item: dict) -> None:
+        if not path_item:
+            return
+        if self._route_count >= self._MAX_ROUTES:
+            return
+        if len(route_path) > 500:
+            return
+        clean_path = re.sub(r"\[([^\]:]+)(?::[^\]]+)?\]", r"{\1}", route_path)
+        self.spec["paths"][clean_path] = path_item
+        self._route_count += 1
 
-            clean_path = re.sub(r"\[([^\]:]+)(?::[^\]]+)?\]", r"{\1}", route_path)
-            self.spec["paths"][clean_path] = path_item
-            self._route_count += 1
+    def _process_page(self, route_path, full_path):
+        mod = self._load_module(full_path)
+        if not mod:
+            return
+
+        path_item = {}
+        for m in ["get", "post", "put", "patch", "delete"]:
+            fn = getattr(mod, m, None)
+            op = self._parse_method_operation(fn, m, route_path)
+            if op:
+                path_item[m] = op
+
+        self._register_path_item(route_path, path_item)
+
+    def _resolve_schema_class(self, schema_cls: Any) -> type:
+        if inspect.isclass(schema_cls):
+            return schema_cls
+        if isinstance(schema_cls, list) and schema_cls:
+            return schema_cls[0]
+        if hasattr(schema_cls, "__class__"):
+            return schema_cls.__class__
+        return schema_cls
+
+    def _build_properties_and_required(self, fields: dict) -> tuple[dict, list[str]]:
+        properties = {}
+        required = []
+        field_count = 0
+        for f_name, field in fields.items():
+            if field_count >= 200:
+                break
+            properties[f_name] = self._field_to_openapi(field)
+            if not getattr(field, "nullable", True):
+                required.append(f_name)
+            field_count += 1
+        return properties, required
 
     def _register_schema(self, schema_cls):
         """Translate an Asok Schema class into an OpenAPI component schema.
 
         SECURITY: Schema count limit prevents DoS via excessive schema generation.
         """
-        # SECURITY: Check schema count limit
         if self._schema_count >= self._MAX_SCHEMAS:
             return "UnknownSchema"
 
-        if not inspect.isclass(schema_cls):
-            # Might be an instance or a list
-            if isinstance(schema_cls, list) and schema_cls:
-                schema_cls = schema_cls[0]
-            elif hasattr(schema_cls, "__class__"):
-                schema_cls = schema_cls.__class__
-
+        schema_cls = self._resolve_schema_class(schema_cls)
         name = schema_cls.__name__
         if name in self.rendered_schemas:
             return name
 
         schema_def = {"type": "object", "properties": {}}
-        required = []
-
-        # Access _fields from SchemaMeta
         fields = getattr(schema_cls, "_fields", {})
-
-        # SECURITY: Limit number of fields per schema to prevent DoS (max 200 fields)
-        field_count = 0
-        for f_name, field in fields.items():
-            if field_count >= 200:
-                break
-            prop = self._field_to_openapi(field)
-            schema_def["properties"][f_name] = prop
-            if not getattr(field, "nullable", True):
-                required.append(f_name)
-            field_count += 1
-
+        properties, required = self._build_properties_and_required(fields)
+        schema_def["properties"] = properties
         if required:
             schema_def["required"] = required
 
@@ -189,25 +206,24 @@ class OpenAPIGenerator:
         self._schema_count += 1
         return name
 
+    def _detect_field_format(self, field) -> dict[str, str]:
+        if getattr(field, "is_boolean", False):
+            return {"type": "boolean"}
+        if getattr(field, "is_json", False):
+            return {"type": "object"}
+        if getattr(field, "is_datetime", False):
+            return {"type": "string", "format": "date-time"}
+        if getattr(field, "is_email", False):
+            return {"type": "string", "format": "email"}
+        return {"type": "string"}
+
     def _field_to_openapi(self, field):
         f_type = field.sql_type
-        res = {"type": "string"}  # Default
-
         if f_type == "INTEGER":
-            res = {"type": "integer"}
-        elif f_type == "REAL":
-            res = {"type": "number"}
-
-        if getattr(field, "is_boolean", False):
-            res = {"type": "boolean"}
-        elif getattr(field, "is_json", False):
-            res = {"type": "object"}
-        elif getattr(field, "is_datetime", False):
-            res = {"type": "string", "format": "date-time"}
-        elif getattr(field, "is_email", False):
-            res = {"type": "string", "format": "email"}
-
-        return res
+            return {"type": "integer"}
+        if f_type == "REAL":
+            return {"type": "number"}
+        return self._detect_field_format(field)
 
     def _schema_to_params(self, schema_cls):
         params = []

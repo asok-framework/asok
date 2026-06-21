@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import json
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 from urllib.parse import urlencode
 
 from .core import Asok
@@ -40,6 +40,26 @@ class TestClient:
         self.app = app
         self.cookies: dict[str, str] = {}
 
+    def _parse_body(
+        self, data: Any, json_body: Any, content_type: Optional[str]
+    ) -> tuple[bytes, Optional[str]]:
+        if json_body is not None:
+            return json.dumps(json_body).encode("utf-8"), "application/json"
+        if data is not None:
+            body = urlencode(data).encode("utf-8")
+            return body, content_type or "application/x-www-form-urlencoded"
+        return b"", content_type
+
+    def _apply_cookies(self, environ: dict[str, Any]) -> None:
+        if self.cookies:
+            cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+            environ["HTTP_COOKIE"] = cookie_str
+
+    def _apply_headers(self, environ: dict[str, Any], headers: Optional[dict[str, str]]) -> None:
+        for key, value in (headers or {}).items():
+            wsgi_key = "HTTP_" + key.upper().replace("-", "_")
+            environ[wsgi_key] = value
+
     def _build_environ(
         self, method, path, data=None, json_body=None, headers=None, content_type=None
     ):
@@ -47,13 +67,7 @@ class TestClient:
         if "?" in path:
             path, query_string = path.split("?", 1)
 
-        body = b""
-        if json_body is not None:
-            body = json.dumps(json_body).encode("utf-8")
-            content_type = "application/json"
-        elif data is not None:
-            body = urlencode(data).encode("utf-8")
-            content_type = content_type or "application/x-www-form-urlencoded"
+        body, content_type = self._parse_body(data, json_body, content_type)
 
         environ = {
             "REQUEST_METHOD": method,
@@ -69,13 +83,8 @@ class TestClient:
             "wsgi.url_scheme": "http",
         }
 
-        if self.cookies:
-            cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
-            environ["HTTP_COOKIE"] = cookie_str
-
-        for key, value in (headers or {}).items():
-            wsgi_key = "HTTP_" + key.upper().replace("-", "_")
-            environ[wsgi_key] = value
+        self._apply_cookies(environ)
+        self._apply_headers(environ, headers)
 
         return environ
 

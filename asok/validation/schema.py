@@ -7,6 +7,13 @@ from ..context import request_var
 from ..orm import Field
 
 
+def _collect_schema_fields(attrs: dict) -> None:
+    fields = {k: v for k, v in attrs.items() if isinstance(v, Field)}
+    attrs["_fields"] = fields
+    for k in fields:
+        attrs.pop(k)
+
+
 class SchemaMeta(type):
     """Metaclass for all Asok Schemas.
 
@@ -17,10 +24,7 @@ class SchemaMeta(type):
     def __new__(mcs, name, bases, attrs):
         if name == "Schema":
             return super().__new__(mcs, name, bases, attrs)
-        fields = {k: v for k, v in attrs.items() if isinstance(v, Field)}
-        attrs["_fields"] = fields
-        for k in fields:
-            attrs.pop(k)
+        _collect_schema_fields(attrs)
         return super().__new__(mcs, name, bases, attrs)
 
 
@@ -64,18 +68,23 @@ class Schema(metaclass=SchemaMeta):
         """Perform recursive serialization on a single object instance."""
         data = {}
         for field_name in self._fields:
-            if hasattr(obj, field_name):
-                value = getattr(obj, field_name)
-            elif isinstance(obj, dict):
-                value = obj.get(field_name)
-            else:
-                value = None
-
-            if isinstance(value, (datetime.date, datetime.datetime)):
-                data[field_name] = value.isoformat()
-            else:
-                data[field_name] = value
+            value = self._extract_value(obj, field_name)
+            data[field_name] = self._jsonable(value)
         return data
+
+    @staticmethod
+    def _extract_value(obj: Any, field_name: str) -> Any:
+        if hasattr(obj, field_name):
+            return getattr(obj, field_name)
+        if isinstance(obj, dict):
+            return obj.get(field_name)
+        return None
+
+    @staticmethod
+    def _jsonable(value: Any) -> Any:
+        if isinstance(value, (datetime.date, datetime.datetime)):
+            return value.isoformat()
+        return value
 
     def load(
         self, data: Union[dict[str, Any], list[dict[str, Any]]]

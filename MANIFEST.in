@@ -1,8 +1,10 @@
 recursive-include asok/admin/templates *.html
 recursive-include asok/admin/static *.min.js *.min.css *.svg
+recursive-include asok/admin/static/fonts *.woff2
 recursive-include asok/assets *
 recursive-include asok/api/templates *.html
 recursive-include asok/api/static *.min.js *.min.css *.svg
+recursive-include asok/api/static/fonts *.woff2
 recursive-include asok/toolbar/static *.min.js *.min.css
 recursive-include asok/toolbar/templates *.html
 recursive-include asok/core/assets *.min.js *.min.css

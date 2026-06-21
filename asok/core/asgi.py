@@ -19,50 +19,30 @@ class ASGIMixin:
     request translation, and response delivery.
     """
 
-    async def _asgi_call(
-        self, scope: dict[str, Any], receive: Callable, send: Callable
-    ) -> None:
-        """Main ASGI entry point."""
-        # Handle lifespan events (startup / shutdown)
-        if scope["type"] == "lifespan":
-            while True:
-                message = await receive()
-                if message["type"] == "lifespan.startup":
-                    for hook in getattr(self, "_on_startup", []):
-                        try:
-                            if inspect.iscoroutinefunction(hook):
-                                await hook()
-                            else:
-                                res = hook()
-                                if inspect.iscoroutine(res):
-                                    await res
-                        except Exception as e:
-                            logger.error("Error in ASGI startup hook: %s", e)
-                    await send({"type": "lifespan.startup.complete"})
+    async def _run_lifespan_hooks(self, attr_name: str) -> None:
+        for hook in getattr(self, attr_name, []):
+            try:
+                if inspect.iscoroutinefunction(hook):
+                    await hook()
+                else:
+                    res = hook()
+                    if inspect.iscoroutine(res):
+                        await res
+            except Exception as e:
+                logger.error("Error in ASGI %s hook: %s", attr_name, e)
 
-                elif message["type"] == "lifespan.shutdown":
-                    for hook in getattr(self, "_on_shutdown", []):
-                        try:
-                            if inspect.iscoroutinefunction(hook):
-                                await hook()
-                            else:
-                                res = hook()
-                                if inspect.iscoroutine(res):
-                                    await res
-                        except Exception as e:
-                            logger.error("Error in ASGI shutdown hook: %s", e)
-                    await send({"type": "lifespan.shutdown.complete"})
-                    break
-            return
+    async def _handle_asgi_lifespan(self, receive: Callable, send: Callable) -> None:
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await self._run_lifespan_hooks("_on_startup")
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                await self._run_lifespan_hooks("_on_shutdown")
+                await send({"type": "lifespan.shutdown.complete"})
+                break
 
-        if scope["type"] == "websocket":
-            await send({"type": "websocket.close"})
-            return
-
-        if scope["type"] != "http":
-            return
-
-        # 1. Read request body chunks asynchronously
+    async def _read_asgi_body(self, receive: Callable) -> Optional[bytes]:
         body_chunks = []
         while True:
             message = await receive()
@@ -71,11 +51,10 @@ class ASGIMixin:
                 if not message.get("more_body", False):
                     break
             elif message["type"] == "http.disconnect":
-                return
+                return None
+        return b"".join(body_chunks)
 
-        body = b"".join(body_chunks)
-
-        # 2. Build WSGI-compatible environ dictionary from ASGI scope
+    def _build_environ_from_asgi(self, scope: dict[str, Any], body: bytes) -> dict[str, Any]:
         headers = {}
         for k, v in scope.get("headers", []):
             headers[k.decode("latin1").lower()] = v.decode("latin1")
@@ -97,7 +76,6 @@ class ASGIMixin:
             "wsgi.run_once": False,
             "asok.root": getattr(self, "root_dir", os.getcwd()),
             "asok.app": self,
-            "asok.secret_key": self.config.get("SECRET_KEY"),
             "asok.asgi": True,
         }
 
@@ -113,159 +91,244 @@ class ASGIMixin:
             environ["REMOTE_ADDR"] = client[0]
             environ["REMOTE_PORT"] = str(client[1])
 
-        request = Request(environ)
+        return environ
 
-        # 3. Setup Request Context & Dispatch
+    async def _send_error_response(self, status: int, body: bytes, send: Callable, content_type: bytes = b"text/plain") -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", content_type),
+                    (b"content-length", str(len(body)).encode("latin1")),
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body,
+                "more_body": False,
+            }
+        )
+
+    async def _send_final_response_exception(self, fre: _FinalResponseException, send: Callable) -> None:
+        body_bytes = (
+            fre.body.encode("utf-8") if isinstance(fre.body, str) else fre.body
+        )
+        await send(
+            {
+                "type": "http.response.start",
+                "status": fre.status_code,
+                "headers": [
+                    (
+                        b"content-type",
+                        f"{fre.content_type}; charset=utf-8".encode("latin1"),
+                    )
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body_bytes,
+                "more_body": False,
+            }
+        )
+
+    async def _send_final_redirect_exception(self, frde: _FinalRedirectException, send: Callable) -> None:
+        status_code = int(frde.status_str.split(" ", 1)[0])
+        asgi_headers = [
+            (k.lower().encode("latin1"), v.encode("latin1"))
+            for k, v in frde.headers
+        ]
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status_code,
+                "headers": asgi_headers,
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False,
+            }
+        )
+
+    async def _run_dispatch_handlers_extended(
+        self, request: Request, environ: dict[str, Any], start_response: Callable
+    ) -> Optional[Any]:
+        res = self._handle_docs_request(request, start_response)
+        if res is not None:
+            return res
+
+        res = self._handle_graphql_request(request, start_response)
+        if res is not None:
+            return res
+
+        res = self._handle_static_request(request, environ, start_response)
+        if res is not None:
+            return res
+
+        res = self._handle_ssg_isr_request(request, environ, start_response)
+        if res is not None:
+            return res
+
+        return None
+
+    async def _run_dispatch_handlers(
+        self, request: Request, environ: dict[str, Any], start_response: Callable
+    ) -> Optional[Any]:
+        res = self._handle_options_request(request, environ, start_response)
+        if res is not None:
+            return res
+
+        res = self._handle_reload_request(request, start_response)
+        if res is not None:
+            return res
+
+        res = self._handle_admin_request(request, environ, start_response)
+        if res is not None:
+            return res
+
+        return await self._run_dispatch_handlers_extended(request, environ, start_response)
+
+    def _prepare_dispatch_request(self, request: Request) -> tuple[bool, bool]:
+        import secrets
+        request._nonce = secrets.token_urlsafe(16)
+
+        is_head = request.method == "HEAD"
+        if is_head:
+            request.method = "GET"
+        return is_head, getattr(request, "_body_rejected", False)
+
+    async def _execute_controller(self, request: Request, environ: dict[str, Any]) -> Any:
+        result = self._dispatch_controller(request, environ)
+        if inspect.iscoroutine(result):
+            return await result
+        return result
+
+    def _cleanup_dispatch_request(self, request: Request, token: Any) -> None:
         from ..context import request_var
+        from ..orm import close_all_db_connections
+        from .signals import request_finished
 
+        try:
+            request_finished.send(self, request=request)
+        except Exception:
+            pass
+        close_all_db_connections()
+        request_var.reset(token)
+
+    async def _execute_and_send_response(
+        self,
+        request: Request,
+        environ: dict[str, Any],
+        is_head: bool,
+        status_headers: list,
+        start_response: Callable,
+        send: Callable
+    ) -> None:
+        try:
+            result = await self._execute_controller(request, environ)
+            final_res = self._finalize_response(
+                request, result, environ, is_head, start_response
+            )
+            await self._send_captured_response(
+                status_headers[0], status_headers[1], final_res, send
+            )
+        except _FinalResponseException as fre:
+            await self._send_final_response_exception(fre, send)
+        except _FinalRedirectException as frde:
+            await self._send_final_redirect_exception(frde, send)
+
+    async def _dispatch_asgi_http(
+        self, request: Request, environ: dict[str, Any], send: Callable
+    ) -> None:
+        from ..context import request_var
         token = request_var.set(request)
         try:
-            import secrets
-
-            from .signals import request_finished, request_started
-
+            from .signals import request_started
             request_started.send(self, request=request)
-            self.nonce = secrets.token_urlsafe(16)
-            request._nonce = self.nonce
 
-            # Force session load
-            _ = request.session
-
-            is_head = request.method == "HEAD"
-            if is_head:
-                request.method = "GET"
-
-            if getattr(request, "_body_rejected", False):
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 413,
-                        "headers": [(b"content-type", b"text/plain")],
-                    }
-                )
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": b"Request body too large",
-                        "more_body": False,
-                    }
-                )
+            is_head, body_rejected = self._prepare_dispatch_request(request)
+            if body_rejected:
+                await self._send_error_response(413, b"Request body too large", send)
                 return
 
-            status_str = "200 OK"
-            headers_list = []
+            status_headers = ["200 OK", []]
 
             def start_response(
                 status: str,
                 headers: list[tuple[str, str]],
                 exc_info: Optional[Any] = None,
             ) -> None:
-                nonlocal status_str, headers_list
-                status_str = status
-                headers_list = headers
-
-            # Call existing WSGI route/service handlers using start_response mock
-            res = self._handle_options_request(request, environ, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
+                status_headers[0] = status
+                status_headers[1] = headers
 
             if request.path == "/__health":
-                body_res = b'{"status":"ok"}'
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 200,
-                        "headers": [
-                            (b"content-type", b"application/json"),
-                            (b"content-length", str(len(body_res)).encode("latin1")),
-                        ],
-                    }
-                )
+                await self._send_error_response(200, b'{"status":"ok"}', send, content_type=b"application/json")
+                return
+
+            res = await self._run_dispatch_handlers(request, environ, start_response)
+            if res is not None:
+                await self._send_captured_response(status_headers[0], status_headers[1], res, send)
+                return
+
+            _ = request.session
+            await self._execute_and_send_response(request, environ, is_head, status_headers, start_response, send)
+
+        finally:
+            self._cleanup_dispatch_request(request, token)
+
+    async def _asgi_call(
+        self, scope: dict[str, Any], receive: Callable, send: Callable
+    ) -> None:
+        """Main ASGI entry point."""
+        if scope["type"] == "lifespan":
+            await self._handle_asgi_lifespan(receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close"})
+            return
+
+        if scope["type"] != "http":
+            return
+
+        body = await self._read_asgi_body(receive)
+        if body is None:
+            return
+
+        environ = self._build_environ_from_asgi(scope, body)
+        request = Request(environ)
+        await self._dispatch_asgi_http(request, environ, send)
+
+    async def _send_iterable_chunks(self, body_iterable: Any, send: Callable) -> None:
+        if isinstance(body_iterable, (list, tuple)):
+            for chunk in body_iterable:
                 await send(
                     {
                         "type": "http.response.body",
-                        "body": body_res,
+                        "body": chunk,
                         "more_body": False,
                     }
                 )
-                return
-
-            res = self._handle_reload_request(request, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
-
-            res = self._handle_admin_request(request, environ, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
-
-            res = self._handle_docs_request(request, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
-
-            res = self._handle_graphql_request(request, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
-
-            res = self._handle_static_request(request, environ, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
-
-            res = self._handle_ssg_isr_request(request, environ, start_response)
-            if res is not None:
-                await self._send_captured_response(status_str, headers_list, res, send)
-                return
-
-            # Dispatch Page Controller / Template
+        else:
+            # Generator / iterator
             try:
-                result = self._dispatch_controller(request, environ)
-                if inspect.iscoroutine(result):
-                    result = await result
-            except _FinalResponseException as fre:
-                status_str = Request._STATUS_MAP.get(
-                    fre.status_code, f"{fre.status_code} Unknown"
-                )
-                body_bytes = (
-                    fre.body.encode("utf-8") if isinstance(fre.body, str) else fre.body
-                )
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": fre.status_code,
-                        "headers": [
-                            (
-                                b"content-type",
-                                f"{fre.content_type}; charset=utf-8".encode("latin1"),
-                            )
-                        ],
-                    }
-                )
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": body_bytes,
-                        "more_body": False,
-                    }
-                )
-                return
-            except _FinalRedirectException as frde:
-                status_code = int(frde.status_str.split(" ", 1)[0])
-                asgi_headers = [
-                    (k.lower().encode("latin1"), v.encode("latin1"))
-                    for k, v in frde.headers
-                ]
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": status_code,
-                        "headers": asgi_headers,
-                    }
-                )
+                for chunk in body_iterable:
+                    if chunk:
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": chunk,
+                                "more_body": True,
+                            }
+                        )
+            finally:
                 await send(
                     {
                         "type": "http.response.body",
@@ -273,25 +336,6 @@ class ASGIMixin:
                         "more_body": False,
                     }
                 )
-                return
-
-            # Finalize Response
-            final_res = self._finalize_response(
-                request, result, environ, is_head, start_response
-            )
-            await self._send_captured_response(
-                status_str, headers_list, final_res, send
-            )
-
-        finally:
-            from ..orm import close_all_db_connections
-            try:
-                request_finished.send(self, request=request)
-            except Exception:
-                pass
-
-            close_all_db_connections()
-            request_var.reset(token)
 
     async def _send_captured_response(
         self,
@@ -314,35 +358,7 @@ class ASGIMixin:
         )
 
         if body_iterable:
-            if isinstance(body_iterable, (list, tuple)):
-                for chunk in body_iterable:
-                    await send(
-                        {
-                            "type": "http.response.body",
-                            "body": chunk,
-                            "more_body": False,
-                        }
-                    )
-            else:
-                # Generator / iterator
-                try:
-                    for chunk in body_iterable:
-                        if chunk:
-                            await send(
-                                {
-                                    "type": "http.response.body",
-                                    "body": chunk,
-                                    "more_body": True,
-                                }
-                            )
-                finally:
-                    await send(
-                        {
-                            "type": "http.response.body",
-                            "body": b"",
-                            "more_body": False,
-                        }
-                    )
+            await self._send_iterable_chunks(body_iterable, send)
         else:
             await send(
                 {
@@ -363,7 +379,7 @@ class ASGIMixin:
             main_loop = None
 
         chain = core_layer
-        for mw_handle in reversed(self.middleware_handlers):
+        for mw_handle in self._middleware_handlers_reversed:
 
             def make_wrapper(mw, nxt):
                 if inspect.iscoroutinefunction(mw):

@@ -697,3 +697,45 @@ def test_directives_code_splitting():
     assert "asok-dropdown" in result_b
 
 
+def test_asset_injection_bypassed_on_admin_requests():
+    """Verify that reactive, SPA, transition, directive, and widget assets are not injected on admin routes."""
+    app = Asok()
+    app.directives_enabled = True
+
+    # Simulate an admin GET request
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/admin/items",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    # HTML content that normally triggers SPA, directives, and widget injection
+    content = (
+        "<html><head></head><body>"
+        '<div asok-state="{ open: true }" asok-show="open">'
+        '  <input type="file" asok-on:change="Asok.previewImage(event, this)" data-block="#page-body">'
+        "</div>"
+        "</body></html>"
+    )
+
+    result = app._inject_assets(content, request, "testnonce123")
+
+    # The result should NOT contain asok_spa, asok_directives, etc.
+    assert "asok_spa.min.js" not in result
+    assert "asok_directives.min.js" not in result
+    assert "asok_widgets.min.js" not in result
+    assert "asok_transitions.min.js" not in result
+
+
+def test_spa_popstate_listener_registered():
+    """Verify that the SPA JavaScript assets register a popstate listener."""
+    app = Asok()
+    spa_js = app.get_asset("asok_spa.js")
+    spa_min_js = app.get_asset("asok_spa.min.js")
+
+    assert "popstate" in spa_js
+    assert "performBlockSwap" in spa_js
+    assert "popstate" in spa_min_js
+
+

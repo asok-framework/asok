@@ -10,20 +10,22 @@ _ENGINES_CACHE = {}
 _DEFAULT_SQLITE = "db.sqlite3"
 
 
+def _create_engine(db_url: str) -> BaseEngine:
+    if db_url.startswith(("postgres://", "postgresql://")):
+        return PostgresEngine(db_url)
+    if db_url.startswith("mysql://"):
+        return MySQLEngine(db_url)
+    return SQLiteEngine(db_url)
+
+
 def get_engine(db_url: str | None = None) -> BaseEngine:
     """Factory: instantiate the correct database engine based on DSN/URL.
 
     Falls back to SQLite (``db.sqlite3``) when *db_url* is ``None`` or an
     empty string — so omitting ``DATABASE_URL`` entirely always gives SQLite.
     """
-    # Normalise: treat None / whitespace-only as the default SQLite path
-    db_url = (db_url or "").strip() or _DEFAULT_SQLITE
+    clean_url = (db_url or "").strip() or _DEFAULT_SQLITE
 
-    if db_url not in _ENGINES_CACHE:
-        if db_url.startswith(("postgres://", "postgresql://")):
-            _ENGINES_CACHE[db_url] = PostgresEngine(db_url)
-        elif db_url.startswith("mysql://"):
-            _ENGINES_CACHE[db_url] = MySQLEngine(db_url)
-        else:
-            _ENGINES_CACHE[db_url] = SQLiteEngine(db_url)
-    return _ENGINES_CACHE[db_url]
+    if clean_url not in _ENGINES_CACHE:
+        _ENGINES_CACHE[clean_url] = _create_engine(clean_url)
+    return _ENGINES_CACHE[clean_url]

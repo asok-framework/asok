@@ -8,6 +8,17 @@ from asok.templates import SafeString, _render_attrs
 from . import render
 from .utils import Renderable, _merge_attrs
 
+_LENGTH_ATTR_TYPES = {
+    "text", "email", "password", "url", "search", "tel", "textarea",
+}
+_RANGE_ATTR_TYPES = {
+    "number", "range", "date", "datetime-local", "time", "month", "week",
+}
+_PATTERN_TYPES = {"text", "email", "password", "url", "search", "tel"}
+_HTML5_VALIDATABLE_TYPES = (
+    _LENGTH_ATTR_TYPES | _RANGE_ATTR_TYPES | {"select", "checkbox", "radio", "file", "color"}
+)
+
 
 class FormField:
     """Represents a single field within a Form, including its value, validation errors, and rendering logic."""
@@ -19,7 +30,9 @@ class FormField:
         field_type: str,
         rules: str = "",
         messages: Optional[Union[str, dict[str, str]]] = None,
-        choices: Optional[Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]] = None,
+        choices: Optional[
+            Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]
+        ] = None,
         **attrs: Any,
     ):
         # SECURITY: Validate field name to prevent injection in HTML attributes
@@ -34,12 +47,10 @@ class FormField:
         self._label: str = label
         self.type: str = field_type
         self.rules: str = rules
-        if isinstance(messages, str):
-            rule_names = [r.split(":")[0] for r in rules.split("|")] if rules else []
-            self.messages: dict[str, str] = {r: messages for r in rule_names}
-        else:
-            self.messages: dict[str, str] = messages or {}
-        self._choices: Optional[Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]] = choices
+        self.messages = self._parse_messages(messages, rules)
+        self._choices: Optional[
+            Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]
+        ] = choices
 
         # Dropdown specific data
         self._items: Any = attrs.pop("items", None)
@@ -56,6 +67,15 @@ class FormField:
         self.value: Any = ""
         self._error: str = ""
 
+    def _parse_messages(self, messages: Optional[Union[str, dict[str, str]]], rules: str) -> dict[str, str]:
+        if not isinstance(messages, str):
+            return messages or {}
+        return self._parse_string_messages(messages, rules)
+
+    def _parse_string_messages(self, messages: str, rules: str) -> dict[str, str]:
+        rule_names = [r.split(":")[0] for r in rules.split("|")] if rules else []
+        return {r: messages for r in rule_names}
+
     @property
     def choices(self) -> Optional[list[tuple[Any, str]]]:
         """Get the field's choices, resolving them if they are dynamic (callable)."""
@@ -67,7 +87,12 @@ class FormField:
         return self._choices
 
     @choices.setter
-    def choices(self, value: Optional[Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]]) -> None:
+    def choices(
+        self,
+        value: Optional[
+            Union[list[tuple[Any, str]], Callable[[], list[tuple[Any, str]]]]
+        ],
+    ) -> None:
         """Set the field's choices."""
         self._choices = value
 
@@ -110,115 +135,135 @@ class FormField:
 
     def _format_value_for_input(self) -> str:
         """Format value appropriately for HTML5 input types."""
-        if not self.value:
+        if self.value is None or self.value == "":
             return ""
+        return self._dispatch_format(str(self.value))
 
-        val_str = str(self.value)
-
-        # Format for HTML5 date/time inputs
+    def _dispatch_format(self, val_str: str) -> str:
         if self.type == "date":
-            # Convert "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS" to "YYYY-MM-DD"
-            if "T" in val_str:
-                return val_str.split("T")[0]
-            elif " " in val_str:
-                return val_str.split(" ")[0]
-            return val_str[:10] if len(val_str) >= 10 else val_str
+            return self._format_date(val_str)
+        if self.type == "datetime-local":
+            return self._format_datetime_local(val_str)
+        if self.type == "time":
+            return self._format_time(val_str)
+        return val_str
 
-        elif self.type == "datetime-local":
-            # Convert to "YYYY-MM-DDTHH:MM" (no seconds, no timezone)
-            val_str = val_str.replace(" ", "T")  # Convert space to T
-            # Remove seconds, microseconds, and timezone
-            if "T" in val_str:
-                parts = val_str.split("T")
-                date_part = parts[0]
-                time_part = parts[1] if len(parts) > 1 else "00:00"
-                # Remove timezone info if present (+00:00, Z, etc.)
-                time_part = time_part.split("+")[0].split("-")[0].split("Z")[0]
-                # Keep only HH:MM
-                time_parts = time_part.split(":")
-                time_part = (
-                    ":".join(time_parts[:2]) if len(time_parts) >= 2 else time_part
-                )
-                return f"{date_part}T{time_part}"
+    def _format_date(self, val_str: str) -> str:
+        if "T" in val_str:
+            return val_str.split("T")[0]
+        elif " " in val_str:
+            return val_str.split(" ")[0]
+        return val_str[:10] if len(val_str) >= 10 else val_str
+
+    def _format_datetime_local(self, val_str: str) -> str:
+        val_str = val_str.replace(" ", "T")
+        if "T" not in val_str:
             return val_str
+        parts = val_str.split("T")
+        date_part = parts[0]
+        time_part = parts[1] if len(parts) > 1 else "00:00"
+        time_part = time_part.split("+")[0].split("-")[0].split("Z")[0]
+        time_parts = time_part.split(":")
+        time_part = ":".join(time_parts[:2]) if len(time_parts) >= 2 else time_part
+        return f"{date_part}T{time_part}"
 
-        elif self.type == "time":
-            # Convert to "HH:MM"
-            if "T" in val_str:
-                val_str = val_str.split("T")[1]
-            elif " " in val_str:
-                val_str = val_str.split(" ")[1]
-            # Remove seconds and keep only HH:MM
-            time_parts = val_str.split(":")
-            return ":".join(time_parts[:2]) if len(time_parts) >= 2 else val_str
+    def _format_time(self, val_str: str) -> str:
+        if "T" in val_str:
+            val_str = val_str.split("T")[1]
+        elif " " in val_str:
+            val_str = val_str.split(" ")[1]
+        time_parts = val_str.split(":")
+        return ":".join(time_parts[:2]) if len(time_parts) >= 2 else val_str
 
         return val_str
 
+    def _render_readonly(self, val: str) -> str:
+        display = val if val else "—"
+        return f'<div class="readonly-value">{display}</div>'
+
+    def _render_input_fallback(self, val: str, merged: dict[str, Any]) -> str:
+        attrs = {"type": self.type, "id": self.name, "name": self.name, **merged}
+        if self.type != "file":
+            attrs["value"] = val
+        return f"<input{_render_attrs(attrs)}>"
+
+    def _apply_min_max_attr(self, range_key: str, length_key: str, val: str, attrs: dict[str, Any]) -> None:
+        if self.type in _LENGTH_ATTR_TYPES:
+            attrs[length_key] = val
+        elif self.type in _RANGE_ATTR_TYPES:
+            attrs[range_key] = val
+
+    def _apply_ranged_rule_attr(self, name: str, arg: str, attrs: dict[str, Any]) -> None:
+        if name == "min":
+            self._apply_min_max_attr("min", "minlength", arg, attrs)
+        elif name == "max":
+            self._apply_min_max_attr("max", "maxlength", arg, attrs)
+        elif name == "between" and "," in arg:
+            lo, _, hi = arg.partition(",")
+            lo, hi = lo.strip(), hi.strip()
+            self._apply_min_max_attr("min", "minlength", lo, attrs)
+            self._apply_min_max_attr("max", "maxlength", hi, attrs)
+
+    def _apply_accepted_rule_attr(self, name: str, attrs: dict[str, Any]) -> bool:
+        if name == "accepted" and self.type == "checkbox":
+            attrs["required"] = True
+            return True
+        return False
+
+    def _apply_regex_rule_attr(self, name: str, arg: str, attrs: dict[str, Any]) -> bool:
+        if name == "regex" and arg and self.type in _PATTERN_TYPES:
+            attrs.setdefault("pattern", arg)
+            return True
+        return False
+
+    def _apply_single_rule_attr(self, name: str, arg: str, attrs: dict[str, Any]) -> None:
+        if name == "required":
+            attrs["required"] = True
+        elif self._apply_accepted_rule_attr(name, attrs):
+            pass
+        elif self._apply_regex_rule_attr(name, arg, attrs):
+            pass
+        elif arg:
+            self._apply_ranged_rule_attr(name, arg, attrs)
+
+    def _rules_to_html_attrs(self) -> dict[str, Any]:
+        """Translate validation rules into HTML5 attributes for client-side enforcement.
+
+        Composite widgets (dropdown, phone, daterange, ...) carry their hidden
+        input separately and are skipped — their visible elements aren't the
+        target for these attributes.
+        """
+        if not self.rules or self.type not in _HTML5_VALIDATABLE_TYPES:
+            return {}
+        attrs: dict[str, Any] = {}
+        for raw in self.rules.split("|"):
+            name, _, arg = raw.strip().partition(":")
+            self._apply_single_rule_attr(name.strip(), arg.strip(), attrs)
+        return attrs
+
+
     def render_input(self, **overrides: Any) -> str:
         """Internal method for rendering the HTML input element (input, select, or textarea)."""
-        esc = escape
-        val = esc(self._format_value_for_input())
+        val = escape(self._format_value_for_input())
 
         if self.readonly:
-            display = val if val else "—"
-            return f'<div class="readonly-value">{display}</div>'
+            return self._render_readonly(val)
 
-        base = dict(self.attrs)
+        base = self._rules_to_html_attrs()
+        base.update(self.attrs)
         if self._error:
             existing = base.get("class", "")
             base["class"] = f"{existing} input-error".strip()
 
         merged = _merge_attrs(base, overrides)
 
-        if self.type == "textarea":
-            return render.render_textarea(self, val, merged)
-        if self.type == "select":
-            return render.render_select(self, val, merged)
-        if self.type == "checkbox":
-            return render.render_checkbox(self, val, merged)
-        if self.type == "radio":
-            return render.render_radio(self, val, merged)
-        if self.type == "dropdown":
-            return render.render_dropdown(self, val, merged, overrides)
-        if self.type == "image":
-            return render.render_image(self, val, merged)
-        if self.type == "tags":
-            return render.render_tags(self, val, merged)
-        if self.type == "daterange":
-            return render.render_daterange(self, val, merged)
-        if self.type == "toggle":
-            return render.render_toggle(self, val, merged)
-        if self.type == "otp":
-            return render.render_otp(self, val, merged)
-        if self.type == "month":
-            return render.render_month(self, val, merged)
-        if self.type == "rating":
-            return render.render_rating(self, val, merged)
-        if self.type == "timerange":
-            return render.render_timerange(self, val, merged)
-        if self.type == "files":
-            return render.render_files(self, val, merged)
-        if self.type == "autocomplete":
-            return render.render_autocomplete(self, val, merged)
-        if self.type == "cascading":
-            return render.render_cascading(self, val, merged)
-        if self.type == "phone":
-            return render.render_phone(self, val, merged)
-        if self.type == "wysiwyg":
-            return render.render_wysiwyg(self, val, merged)
-        if self.type == "dropzone":
-            return render.render_dropzone(self, val, merged)
-        if self.type == "signature":
-            return render.render_signature(self, val, merged)
-        if self.type == "transfer":
-            return render.render_transfer(self, val, merged)
-        if self.type == "treeselect":
-            return render.render_treeselect(self, val, merged)
+        renderer = getattr(render, f"render_{self.type}", None)
+        if renderer is not None:
+            if self.type == "dropdown":
+                return renderer(self, val, merged, overrides)
+            return renderer(self, val, merged)
 
-        attrs = {"type": self.type, "id": self.name, "name": self.name, **merged}
-        if self.type != "file":
-            attrs["value"] = val
-        return f"<input{_render_attrs(attrs)}>"
+        return self._render_input_fallback(val, merged)
 
     def render_error(self, **overrides: Any) -> str:
         """Internal method for rendering the error message <div>."""

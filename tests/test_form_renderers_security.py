@@ -158,3 +158,26 @@ def test_form_renderers_directive_security():
             pytest.fail(
                 f"Form renderer {field_name} failed security check: {e}\nGenerated HTML:\n{html_content}"
             )
+
+
+def test_dropdown_and_tags_single_quote_escaping():
+    """Verify that single quotes in dropdown and tags choices are escaped properly to prevent JS syntax/parsing errors."""
+    field_dropdown = MockField("test_dropdown", value="l'id", choices=[("l'id", "L'arbre")])
+    html_dropdown = render_dropdown(field_dropdown, "", {}, {})
+    # Check that asok-state uses html_safe_json to escape single quotes securely
+    assert "asok-state=" in html_dropdown
+    assert "L&#x27;arbre" in html_dropdown
+    # The click handler should escape single quotes in JS
+    assert "Asok.selectDropdown" in html_dropdown
+    assert "l\\&amp;#x27;id" in html_dropdown
+    assert "L\\&amp;#x27;arbre" in html_dropdown
+    # The filter condition should also contain the escaped string
+    assert "l\\&amp;#x27;arbre" in html_dropdown
+
+    field_tags = MockField("test_tags", value='["t\'ag"]', choices=[("t'ag", "T'ag label")])
+    html_tags = render_tags(field_tags, "", {})
+    # Check that tag values in click action are escaped properly for JS string literals
+    assert "Asok.addTag" in html_tags
+    assert "t\\&amp;#x27;ag" in html_tags
+    assert "T\\&amp;#x27;ag label" in html_tags
+

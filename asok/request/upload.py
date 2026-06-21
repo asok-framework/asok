@@ -10,6 +10,13 @@ from asok.utils.image import is_image, optimize_image
 
 _RE_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+_DANGEROUS_EXTS = {
+    "php", "phtml", "php3", "php4", "php5", "phps", "pht",
+    "exe", "com", "bat", "cmd", "sh", "bash", "zsh", "csh",
+    "pl", "py", "rb", "js", "jsp", "asp", "aspx", "cgi",
+    "dll", "so", "dylib",
+}
+
 
 def _sanitize_filename(filename: str) -> str:
     """Sanitize an uploaded filename to prevent path traversal and unsafe characters.
@@ -25,50 +32,24 @@ def _sanitize_filename(filename: str) -> str:
     # Strip leading dots/spaces to prevent hidden files
     filename = filename.lstrip(". ")
 
-    # SECURITY: Detect double extensions (e.g., shell.php.png, malware.exe.jpg)
-    # Split on dots and check for dangerous extensions in all positions
-    parts = filename.split(".")
-    if len(parts) > 2:  # Has more than one extension
-        dangerous_exts = {
-            "php",
-            "phtml",
-            "php3",
-            "php4",
-            "php5",
-            "phps",
-            "pht",
-            "exe",
-            "com",
-            "bat",
-            "cmd",
-            "sh",
-            "bash",
-            "zsh",
-            "csh",
-            "pl",
-            "py",
-            "rb",
-            "js",
-            "jsp",
-            "asp",
-            "aspx",
-            "cgi",
-            "dll",
-            "so",
-            "dylib",
-        }
-        # Check all extensions except the last one
-        for ext in parts[1:-1]:
-            if ext.lower() in dangerous_exts:
-                raise ValueError(
-                    f"Double extension detected: '{filename}'. "
-                    f"Files with dangerous intermediate extensions (e.g., .php, .exe) are not allowed."
-                )
+    _check_double_extensions(filename)
 
     # Fallback for empty names
     if not filename:
         filename = "upload"
     return filename
+
+
+def _check_double_extensions(filename: str) -> None:
+    """Raise ValueError if the filename contains dangerous intermediate extensions."""
+    parts = filename.split(".")
+    if len(parts) > 2:
+        for ext in parts[1:-1]:
+            if ext.lower() in _DANGEROUS_EXTS:
+                raise ValueError(
+                    f"Double extension detected: '{filename}'. "
+                    f"Files with dangerous intermediate extensions (e.g., .php, .exe) are not allowed."
+                )
 
 
 class UploadedFile:
@@ -151,6 +132,90 @@ class UploadedFile:
         """Return a file-like BytesIO stream of the content."""
         return io.BytesIO(self.content)
 
+    def _lookup_riff_type(self, riff_type: bytes) -> tuple[str, list] | tuple[None, None]:
+        if riff_type == b"WEBP":
+            return "image/webp", [".webp"]
+        if riff_type == b"WAVE":
+            return "audio/wav", [".wav"]
+        if riff_type == b"AVI ":
+            return "video/avi", [".avi"]
+        return None, None
+
+    def _detect_riff_mime(self) -> tuple[str, list] | tuple[None, None]:
+        """Detect MIME type for RIFF-based formats (WebP, WAV, AVI)."""
+        if not self.content.startswith(b"RIFF") or len(self.content) < 12:
+            return None, None
+        return self._lookup_riff_type(self.content[8:12])
+
+    def _has_ftyp_signature(self) -> bool:
+        if self.content.startswith(b"ftyp"):
+            return True
+        return len(self.content) >= 8 and self.content[4:8] == b"ftyp"
+
+    def _get_ftyp_brand(self) -> Optional[bytes]:
+        if not self._has_ftyp_signature():
+            return None
+        ftyp_start = self.content.find(b"ftyp")
+        if ftyp_start == -1 or len(self.content) < ftyp_start + 8:
+            return None
+        return self.content[ftyp_start + 4: ftyp_start + 8]
+
+    def _lookup_ftyp_brand(self, ftyp_brand: bytes) -> tuple[str, list] | tuple[None, None]:
+        if ftyp_brand.startswith(b"M4A"):
+            return "audio/mp4", [".m4a"]
+        if ftyp_brand.startswith(b"3gp"):
+            return "video/3gpp", [".3gp"]
+        if ftyp_brand in (b"isom", b"mp41", b"mp42"):
+            return "video/mp4", [".mp4"]
+        if ftyp_brand.startswith(b"qt  "):
+            return "video/quicktime", [".mov"]
+        return None, None
+
+    def _detect_ftyp_mime(self) -> tuple[str, list] | tuple[None, None]:
+        """Detect MIME type for ftyp-based formats (MP4, MOV, M4A, 3GP)."""
+        brand = self._get_ftyp_brand()
+        if brand is None:
+            return None, None
+        return self._lookup_ftyp_brand(brand)
+
+    def _detect_generic_mime(self) -> tuple[str, list] | tuple[None, None]:
+        """Detect MIME type via the generic magic bytes table."""
+        for magic, (mime, exts) in self._MAGIC_BYTES.items():
+            if self.content.startswith(magic):
+                return mime, exts
+        return None, None
+
+    def _detect_mime(self) -> tuple[str, list]:
+        """Detect MIME type from content, returning (mime, extensions)."""
+        mime, exts = self._detect_riff_mime()
+        if mime:
+            return mime, exts
+        mime, exts = self._detect_ftyp_mime()
+        if mime:
+            return mime, exts
+        mime, exts = self._detect_generic_mime()
+        if mime:
+            return mime, exts
+        all_mimes = ", ".join({m for m, _ in self._MAGIC_BYTES.values()})
+        raise ValueError(f"Unknown or unsupported file type. Supported types: {all_mimes}")
+
+    def _check_allowed_types(self, detected_mime: str, allowed_types: Optional[list[str]]) -> None:
+        """Raise ValueError if detected_mime is not in allowed_types."""
+        if allowed_types and detected_mime not in allowed_types:
+            raise ValueError(
+                f"File type '{detected_mime}' not allowed. "
+                f"Allowed types: {', '.join(allowed_types)}"
+            )
+
+    def _check_extension_match(self, detected_mime: str, detected_exts: list) -> None:
+        """Raise ValueError if the file extension doesn't match the detected MIME type."""
+        _, ext = os.path.splitext(self.filename.lower())
+        if ext not in detected_exts:
+            raise ValueError(
+                f"File extension '{ext}' does not match detected type '{detected_mime}'. "
+                f"Expected one of: {', '.join(detected_exts)}"
+            )
+
     def validate_mime_type(self, allowed_types: Optional[list[str]] = None) -> bool:
         """Validate the file MIME type using magic bytes.
 
@@ -167,76 +232,162 @@ class UploadedFile:
         if not self.content:
             raise ValueError("Cannot validate empty file")
 
-        # Verify magic bytes handling ambiguous formats
-        detected_mime = None
-        detected_exts = []
-
-        # RIFF is ambiguous (WebP, WAV, AVI) - check sub-signature
-        if self.content.startswith(b"RIFF") and len(self.content) >= 12:
-            riff_type = self.content[8:12]
-            if riff_type == b"WEBP":
-                detected_mime = "image/webp"
-                detected_exts = [".webp"]
-            elif riff_type == b"WAVE":
-                detected_mime = "audio/wav"
-                detected_exts = [".wav"]
-            elif riff_type == b"AVI ":
-                detected_mime = "video/avi"
-                detected_exts = [".avi"]
-
-        # ftyp is ambiguous (MP4, MOV, M4A, 3GP) - check type
-        elif self.content.startswith(b"ftyp") or (
-            len(self.content) >= 8 and self.content[4:8] == b"ftyp"
-        ):
-            # Extract ftyp type (4 bytes after "ftyp")
-            ftyp_start = self.content.find(b"ftyp")
-            if ftyp_start != -1 and len(self.content) >= ftyp_start + 8:
-                ftyp_brand = self.content[ftyp_start + 4 : ftyp_start + 8]
-                if ftyp_brand.startswith(b"M4A"):
-                    detected_mime = "audio/mp4"
-                    detected_exts = [".m4a"]
-                elif ftyp_brand.startswith(b"3gp"):
-                    detected_mime = "video/3gpp"
-                    detected_exts = [".3gp"]
-                elif ftyp_brand in (b"isom", b"mp41", b"mp42"):
-                    detected_mime = "video/mp4"
-                    detected_exts = [".mp4"]
-                elif ftyp_brand.startswith(b"qt  "):
-                    detected_mime = "video/quicktime"
-                    detected_exts = [".mov"]
-
-        # SECURITY: Fallback to generic MIME types for unrecognized sub-types
-        # If specialized RIFF/ftyp checks didn't match, fall back to default MIME from magic bytes
-        if not detected_mime:
-            for magic, (mime, exts) in self._MAGIC_BYTES.items():
-                if self.content.startswith(magic):
-                    detected_mime = mime
-                    detected_exts = exts
-                    break
-
-        if not detected_mime:
-            raise ValueError(
-                f"Unknown or unsupported file type. "
-                f"Supported types: {', '.join(set(m for m, _ in self._MAGIC_BYTES.values()))}"
-            )
-
-        # Vérifier contre la liste autorisée
-        if allowed_types and detected_mime not in allowed_types:
-            raise ValueError(
-                f"File type '{detected_mime}' not allowed. "
-                f"Allowed types: {', '.join(allowed_types)}"
-            )
-
-        # Verify that the extension matches the detected type
-        _, ext = os.path.splitext(self.filename.lower())
-        if ext not in detected_exts:
-            raise ValueError(
-                f"File extension '{ext}' does not match detected type '{detected_mime}'. "
-                f"Expected one of: {', '.join(detected_exts)}"
-            )
+        detected_mime, detected_exts = self._detect_mime()
+        self._check_allowed_types(detected_mime, allowed_types)
+        self._check_extension_match(detected_mime, detected_exts)
 
         self._validated = True
         return True
+
+    # ── save() helpers ──────────────────────────────────────────────────────
+
+    def _warn_no_allowed_types(self) -> None:
+        """Log a security warning when allowed_types is not specified."""
+        logging.getLogger(__name__).warning(
+            "SECURITY WARNING: File upload without allowed_types restriction. "
+            "This allows any file type with valid magic bytes. "
+            "Always specify allowed_types=['image/jpeg', 'image/png', ...] "
+            "for secure file uploads."
+        )
+
+    def _warn_validation_disabled(self) -> None:
+        """Log a security warning when validation is disabled."""
+        logging.getLogger(__name__).warning(
+            "SECURITY WARNING: File validation disabled (validate=False). "
+            "This is dangerous and should only be used for trusted sources."
+        )
+
+    def _build_safe_name(self, secure_filename: bool) -> str:
+        """Generate a safe filename (UUID-based or sanitized original)."""
+        if secure_filename:
+            import uuid
+            _, ext = os.path.splitext(self.filename)
+            return f"{uuid.uuid4()}{ext.lower()}"
+        from asok.utils.security import secure_filename as sanitize_filename
+        return sanitize_filename(self.filename)
+
+    def _is_svg_file(self, safe_name: str) -> bool:
+        _, ext = os.path.splitext(safe_name)
+        if ext.lower() == ".svg":
+            return True
+        try:
+            detected_mime, _ = self._detect_mime()
+            return detected_mime == "image/svg+xml"
+        except Exception:
+            return False
+
+    def _sanitize_svg_content(self, content: bytes, safe_name: str, validate: bool, logger) -> bytes:
+        """Sanitize SVG content if the file is an SVG and validation is enabled."""
+        if not validate:
+            return content
+
+        if self._is_svg_file(safe_name):
+            from asok.utils.svg_sanitizer import sanitize_svg
+            try:
+                sanitized = sanitize_svg(content)
+                logger.debug("SVG file sanitized: %s", safe_name)
+                return sanitized
+            except ValueError as e:
+                raise ValueError(f"SVG sanitization failed: {e}")
+        return content
+
+    def _save_to_s3(self, destination: str, secure_filename: bool, private: bool, validate: bool) -> str:
+        """Upload file to S3 storage and return the URL."""
+        from asok.core.storage import get_storage
+        logger = logging.getLogger(__name__)
+
+        safe_name = self._build_safe_name(secure_filename)
+        is_dir = destination.endswith(("/", "\\"))
+        if is_dir:
+            upload_to = destination.strip("/\\")
+        else:
+            upload_to = os.path.dirname(destination).strip("/\\")
+
+        content_to_upload = self._sanitize_svg_content(self.content, safe_name, validate, logger)
+        url = get_storage().save(safe_name, content_to_upload, upload_to, private=private)
+        self.filename = safe_name
+        return url
+
+    def _build_dest_path(self, base_dir: str, destination: str, safe_name: str) -> str:
+        if not os.path.isabs(destination):
+            dest = os.path.abspath(os.path.join(base_dir, destination))
+        else:
+            dest = os.path.abspath(destination)
+
+        is_dir = destination.endswith(("/", "\\"))
+        if is_dir or os.path.isdir(dest):
+            os.makedirs(dest, exist_ok=True)
+            return os.path.join(dest, safe_name)
+        return os.path.join(os.path.dirname(dest), safe_name)
+
+    def _validate_local_dest_safety(self, dest: str, base_dir: str, destination: str) -> None:
+        try:
+            resolved_dest = os.path.realpath(dest)
+            resolved_base = os.path.realpath(base_dir)
+            common = os.path.commonpath([resolved_dest, resolved_base])
+            if common != resolved_base:
+                raise ValueError(f"Path traversal blocked: {destination}")
+        except ValueError:
+            raise
+        except Exception:
+            raise ValueError(f"Invalid destination: {destination}")
+
+    def _resolve_local_dest(self, destination: str, safe_name: str) -> str:
+        """Resolve and validate the local filesystem destination path."""
+        root = os.getcwd()
+        base_dir = os.path.abspath(os.path.join(root, "src/partials/uploads"))
+        dest = self._build_dest_path(base_dir, destination, safe_name)
+        self._validate_local_dest_safety(dest, base_dir, destination)
+        return dest
+
+    def _deduplicate_dest(self, dest: str) -> str:
+        """Append a counter suffix if the destination file already exists."""
+        if not os.path.exists(dest):
+            return dest
+        base, ext = os.path.splitext(dest)
+        counter = 1
+        while os.path.exists(f"{base}_{counter}{ext}"):
+            counter += 1
+        return f"{base}_{counter}{ext}"
+
+    def _write_local_file(self, dest: str, content: bytes, private: bool) -> None:
+        """Write content to disk and apply file permissions."""
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(content)
+        chmod = 0o600 if private else 0o644
+        os.chmod(dest, chmod)
+
+    def _maybe_optimize_image(self, dest: str) -> None:
+        """Run image optimization if enabled and applicable."""
+        if os.environ.get("IMAGE_OPTIMIZATION") == "true" and is_image(dest):
+            keep = os.environ.get("IMAGE_KEEP_ORIGINAL", "true").lower() != "false"
+            optimize_image(dest, keep_original=keep)
+
+    def _save_local(self, destination: str, secure_filename: bool, private: bool, validate: bool) -> str:
+        """Save the file to the local filesystem and return the absolute path."""
+        logger = logging.getLogger("asok.upload")
+        safe_name = self._build_safe_name(secure_filename)
+        dest = self._resolve_local_dest(destination, safe_name)
+        dest = self._deduplicate_dest(dest)
+
+        logger.debug("Saving uploaded file to: %s", dest)
+
+        content_to_write = self._sanitize_svg_content(self.content, dest, validate, logger)
+        self._write_local_file(dest, content_to_write, private)
+        self._maybe_optimize_image(dest)
+
+        self.filename = os.path.basename(dest)
+        return dest
+
+    def _validate_before_save(self, validate: bool, allowed_types: Optional[list[str]]) -> None:
+        if validate and allowed_types is None:
+            self._warn_no_allowed_types()
+
+        if not validate:
+            self._warn_validation_disabled()
+        elif not self._validated:
+            self.validate_mime_type(allowed_types)
 
     def save(
         self,
@@ -267,156 +418,13 @@ class UploadedFile:
         SECURITY: Always specify allowed_types to prevent malicious file uploads.
         Example: file.save('uploads/', allowed_types=['image/jpeg', 'image/png'])
         """
-        # SECURITY WARNING: Log if allowed_types not specified
-        if validate and allowed_types is None:
-            logging.getLogger(__name__).warning(
-                "SECURITY WARNING: File upload without allowed_types restriction. "
-                "This allows any file type with valid magic bytes. "
-                "Always specify allowed_types=['image/jpeg', 'image/png', ...] "
-                "for secure file uploads."
-            )
-
-        # MIME type validation BEFORE writing to disk
-        if not validate:
-            logging.getLogger(__name__).warning(
-                "SECURITY WARNING: File validation disabled (validate=False). "
-                "This is dangerous and should only be used for trusted sources."
-            )
-        elif not self._validated:
-            self.validate_mime_type(allowed_types)
+        self._validate_before_save(validate, allowed_types)
 
         # Route to S3 Storage if configured
         if os.environ.get("ASOK_STORAGE_BACKEND", "local").lower() == "s3":
-            from asok.core.storage import get_storage
+            return self._save_to_s3(destination, secure_filename, private, validate)
 
-            is_dir = destination.endswith(("/", "\\"))
-            if secure_filename:
-                import uuid
-
-                _, ext = os.path.splitext(self.filename)
-                safe_name = f"{uuid.uuid4()}{ext.lower()}"
-            else:
-                from asok.utils.security import secure_filename as sanitize_filename
-
-                safe_name = sanitize_filename(self.filename)
-
-            if is_dir:
-                upload_to = destination.strip("/\\")
-            else:
-                upload_to = os.path.dirname(destination).strip("/\\")
-
-            # SECURITY: Sanitize SVG files before uploading to S3
-            content_to_upload = self.content
-            _, ext = os.path.splitext(safe_name)
-            if (
-                ext.lower() == ".svg"
-                and allowed_types
-                and "image/svg+xml" in allowed_types
-            ):
-                from asok.utils.svg_sanitizer import sanitize_svg
-
-                try:
-                    content_to_upload = sanitize_svg(self.content)
-                    logging.getLogger(__name__).debug(
-                        "SVG file sanitized for S3: %s", safe_name
-                    )
-                except ValueError as e:
-                    raise ValueError(f"SVG sanitization failed: {e}")
-
-            url = get_storage().save(
-                safe_name, content_to_upload, upload_to, private=private
-            )
-            self.filename = safe_name
-            return url
-
-        # Detect if the user wants to save into a directory
-        is_dir = destination.endswith(("/", "\\"))
-
-        # Base directory
-        root = os.getcwd()
-        base_dir = os.path.abspath(os.path.join(root, "src/partials/uploads"))
-
-        # Resolve full path
-        if not os.path.isabs(destination):
-            dest = os.path.abspath(os.path.join(base_dir, destination))
-        else:
-            dest = os.path.abspath(destination)
-
-        # SECURITY: Generate secure filename if requested
-        if secure_filename:
-            import uuid
-
-            _, ext = os.path.splitext(self.filename)
-            safe_name = f"{uuid.uuid4()}{ext.lower()}"
-        else:
-            # Use original filename sanitized
-            from asok.utils.security import secure_filename as sanitize_filename
-
-            safe_name = sanitize_filename(self.filename)
-
-        # If it's a directory or already exists as one, append filename
-        if is_dir or os.path.isdir(dest):
-            os.makedirs(dest, exist_ok=True)
-            dest = os.path.join(dest, safe_name)
-        else:
-            # Replace filename in destination with safe name
-            dest_dir = os.path.dirname(dest)
-            dest = os.path.join(dest_dir, safe_name)
-
-        # SECURITY: Use logger instead of print to avoid path disclosure
-        logger = logging.getLogger("asok.upload")
-        logger.debug("Saving uploaded file to: %s", dest)
-
-        # SECURITY: Resolve symlinks before path validation to prevent TOCTOU attacks
-        # This prevents an attacker from replacing dest with a symlink after validation
-        try:
-            # Resolve all symlinks in both paths
-            resolved_dest = os.path.realpath(dest)
-            resolved_base = os.path.realpath(base_dir)
-            common = os.path.commonpath([resolved_dest, resolved_base])
-            if common != resolved_base:
-                raise ValueError(f"Path traversal blocked: {destination}")
-        except Exception:
-            raise ValueError(f"Invalid destination: {destination}")
-
-        # Ensure parent directory exists
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-
-        if os.path.exists(dest):
-            base, ext = os.path.splitext(dest)
-            counter = 1
-            while os.path.exists(f"{base}_{counter}{ext}"):
-                counter += 1
-            dest = f"{base}_{counter}{ext}"
-
-        # SECURITY: Sanitize SVG files to remove JavaScript and other dangerous content
-        content_to_write = self.content
-        _, ext = os.path.splitext(dest)
-        if ext.lower() == ".svg" and allowed_types and "image/svg+xml" in allowed_types:
-            from asok.utils.svg_sanitizer import sanitize_svg
-
-            try:
-                content_to_write = sanitize_svg(self.content)
-                logger.debug("SVG file sanitized successfully: %s", safe_name)
-            except ValueError as e:
-                raise ValueError(f"SVG sanitization failed: {e}")
-
-        with open(dest, "wb") as f:
-            f.write(content_to_write)
-
-        # SECURITY: Set restrictive permissions
-        # 0o600 = rw------- (owner read/write only, for private uploads)
-        # 0o644 = rw-r--r-- (owner read/write, public read, for public uploads)
-        chmod = 0o600 if private else 0o644
-        os.chmod(dest, chmod)
-
-        # Optimization hook
-        if os.environ.get("IMAGE_OPTIMIZATION") == "true" and is_image(dest):
-            keep = os.environ.get("IMAGE_KEEP_ORIGINAL", "true").lower() != "false"
-            optimize_image(dest, keep_original=keep)
-
-        self.filename = os.path.basename(dest)
-        return dest
+        return self._save_local(destination, secure_filename, private, validate)
 
     def __getitem__(self, key: str) -> Union[str, bytes]:
         return {"filename": self.filename, "content": self.content}[key]

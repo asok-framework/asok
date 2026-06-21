@@ -36,7 +36,7 @@
     <div style="display:flex;flex-direction:column;gap:32px">
     
       {% if errors_global %}
-        <div style="padding:16px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--r); color:#b91c1c; font-weight:500;">
+        <div class="alert alert-danger">
           {{ icon('alert-triangle', 18) }} {{ errors_global }}
         </div>
       {% endif %}
@@ -116,6 +116,14 @@
             <input type="hidden" class="m2m-hidden" name="m2m_{{ m.name }}" data-name="{{ m.name }}">
             
             {% if m.options %}
+              {% if m.options | length > 5 %}
+                <div class="m2m-search-wrap" style="position:relative; margin-bottom:16px; max-width:320px">
+                  <span style="position:absolute; left:12px; top:50%; transform:translateY(-50%); display:flex; align-items:center; color:var(--fg-3); pointer-events:none">
+                    {{ icon('search', 14) }}
+                  </span>
+                  <input type="text" class="m2m-search-input" placeholder="{{ t('Search options…') }}" style="padding-left:34px; height:38px; font-size:0.875rem; border:1px solid var(--border); border-radius:var(--r); width:100%; background:var(--surface); color:var(--fg); outline:none">
+                </div>
+              {% endif %}
               <div class="m2m-grid" data-m2m="{{ m.name }}">
                 {% for opt in m.options %}
                   <label class="m2m-tile">

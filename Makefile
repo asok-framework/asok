@@ -1,9 +1,9 @@
-.PHONY: install dev test coverage build clean lint format compile
+.PHONY: install dev test coverage build clean lint format compile complexity
 
 PYTHON ?= python3
 
 # Default command
-all: lint test
+all: lint complexity test
 
 # Compile core assets with esbuild
 compile:
@@ -32,6 +32,17 @@ lint:
 # Format the code using Ruff
 format:
 	$(PYTHON) -m ruff format asok/ tests/
+
+# Check cyclomatic complexity using Radon (Grade C or worse fails the check)
+complexity:
+	@echo "Checking cyclomatic complexity with Radon..."
+	@OUTPUT=$$($(PYTHON) -m radon cc asok/ -n B -s); \
+	if [ -n "$$OUTPUT" ]; then \
+		echo "Complexity violation! The following functions/methods exceed Grade A:"; \
+		echo "$$OUTPUT"; \
+		exit 1; \
+	fi
+	@echo "Complexity checks passed successfully (all functions/methods are Grade A)!"
 
 # Build the distribution packages (.whl and .tar.gz)
 build: clean compile

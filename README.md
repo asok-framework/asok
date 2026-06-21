@@ -8,38 +8,90 @@
   <a href="https://pypi.org/project/asok/"><img src="https://img.shields.io/pypi/v/asok?style=for-the-badge&color=228b22" alt="PyPI Version"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10+-3776ab?style=for-the-badge&logo=python&logoColor=white" alt="Python Version"></a>
   <a href="https://github.com/asok-framework/asok/actions"><img src="https://img.shields.io/github/actions/workflow/status/asok-framework/asok/tests.yml?style=for-the-badge&label=tests" alt="Tests"></a>
-  <a href="https://github.com/asok-framework/asok/issues"><img src="https://img.shields.io/github/issues/asok-framework/asok?style=for-the-badge&color=orange" alt="Issues"></a>
-  <a href="https://github.com/asok-framework/asok/pulls"><img src="https://img.shields.io/github/issues-pr/asok-framework/asok?style=for-the-badge&color=blue" alt="Pull Requests"></a>
 </p>
 
----
-
-**Asok** is a cohesive, full-stack Python web framework designed for developer speed, elegant architecture, and security-conscious defaults. Built around a "zero-runtime-dependency" philosophy, it unifies server-side logic and client-side reactivity into a single, high-performance package, offering a streamlined development experience from the first line of code.
-
-🌐 **[Official Website & Documentation](https://asok-framework.com)** | 📖 **[Quick Start Guide](https://asok-framework.com/docs/01-getting-started)** | 💬 **[Join Discord](https://discord.com/invite/aYYkuPT3qR)** | 🎥 **[YouTube Tutorials](https://www.youtube.com/@asok-framework)**
+<p align="center"><strong>Full-stack Python. Zero runtime dependencies.</strong></p>
 
 ---
 
-## 🎯 Why Asok?
+Asok is a batteries-included Python web framework built entirely on the standard library. It gives you routing, ORM, templates, admin interface, REST and GraphQL APIs, WebSockets, background tasks, and SSG/ISR — all from a single `pip install`, with nothing else required at runtime.
 
-### Zero Runtime Dependencies, Maximum Power
-Asok requires **no external runtime dependencies** - just Python 3.10+. No Werkzeug, no Jinja2, no SQLAlchemy. The core framework is built from the Python standard library, making it:
-- ✅ **Extremely lightweight** (~360KB)
-- ✅ **Easy to audit** (everything in one codebase, no hidden dependencies)
-- ✅ **Forever stable** (no dependency hell or supply chain risks)
+Built for developers who want a complete stack without assembling one.
 
-### Modern Developer Experience
+🌐 **[Documentation](https://asok-framework.com/docs)** · 💬 **[Discord](https://discord.com/invite/aYYkuPT3qR)** · 🎥 **[Tutorials](https://www.youtube.com/@asok-framework)**
+
+---
+
+## When to choose Asok
+
+| | Flask | Django | Asok |
+|---|---|---|---|
+| Runtime dependencies | ~6 | ~20+ transitive | **0** |
+| ORM built-in | ✗ | ✓ | ✓ |
+| Admin interface | ✗ | ✓ | ✓ |
+| File-based routing | ✗ | ✗ | ✓ |
+| GraphQL built-in | ✗ | ✗ | ✓ |
+| WebSockets built-in | ✗ | ✗ | ✓ |
+| Reactive components | ✗ | ✗ | ✓ |
+| SSG / ISR | ✗ | ✗ | ✓ |
+| Auto OpenAPI docs | ✗ | ✗ | ✓ |
+| Background tasks | ✗ | ✗ | ✓ |
+
+**Choose Asok when** you want a full stack out of the box, dependency auditability matters (security-critical environments, embedded deployments, strict supply chain policies), or you're a solo developer or small team who doesn't want to assemble and maintain a stack of integrations.
+
+---
+
+## A complete app in one file
+
 ```python
-# File-based routing like Next.js
-src/pages/blog/[slug]/page.py  →  /blog/hello-world
+# wsgi.py
+from asok import Asok, Field, Model, Admin
 
-# Client-side Reactivity
-<div asok-state="{ count: 0 }">
-  <button asok-on:click="count++" asok-text="count"></button>
-</div>
+app = Asok(__name__)
 
-# WebSocket Sync
+class Post(Model):
+    title   = Field.String(nullable=False)
+    body    = Field.Text()
+    author  = Field.String()
+
+admin = Admin(app)
+```
+
+```python
+# src/pages/page.py
+from asok import Request
+from src.models.post import Post
+
+def render(request: Request):
+    posts = Post.query().order_by("-id").limit(10).get()
+    return request.render("page.html", posts=posts)
+```
+
+That's a working app with database, admin interface, and a paginated index page. Run it:
+
+```bash
+pip install asok
+asok create my-blog && cd my-blog
+asok migrate
+asok dev
+```
+
+---
+
+## Live Interactivity & Reactivity (No Client JS Needed)
+
+Asok provides two built-in options for building interactive frontends, both operating on **Zero-Eval Security** (strict CSP compliance, no `'unsafe-eval'` required).
+
+### 1. Live Stateful Components (Real-time WebSockets)
+Create reactive, server-side components that synchronize state automatically over WebSockets using the `@exposed` decorator.
+
+```python
+# src/components/counter.py
+from asok import Component
+from asok.component import exposed
+
 class Counter(Component):
+    """Reusable UI component for Counter."""
     count = 0
 
     @exposed
@@ -48,320 +100,197 @@ class Counter(Component):
 
     def render(self):
         return self.html("counter.html")
+```
 
-# Admin interface in 2 lines
-admin = Admin(app)
+```html
+<!-- src/components/counter.html -->
+<div>
+    <h3>Count: {{ count }}</h3>
+    <button ws-click="increment">Add 1</button>
+</div>
+```
+
+```html
+<!-- In any page template (e.g., src/pages/page.html) -->
+{{ component('Counter', count=10) }}
+```
+
+### 2. Client-Side Reactive Directives
+For offline or local state updates, use native lightweight reactive directives directly in your HTML markup (~5KB client runtime, zero build step):
+
+```html
+<div asok-state="{ count: 0 }">
+  <h3>Count: <span asok-text="count"></span></h3>
+  <button asok-on:click="count++">Add 1</button>
+</div>
 ```
 
 ---
 
-## ✨ Key Features
+## Features
 
-### Core Framework
-- 💎 **Full Type Hints** - Complete PEP 484 support for IDE autocomplete
-- ⌨️ **Powerful CLI** - Scaffolding, migrations, dev server, production builds
-- 🛣️ **File-based Routing** - Next.js-style routing (`src/pages/` → URLs)
-- ⛓️ **Dynamic Routes** - Parameters via `[id]`, `[slug:slug]` patterns
+### Routing & Templates
+- **File-based routing** — `src/pages/blog/[slug]/page.py` maps to `/blog/hello-world`
+- **Dynamic parameters** — `[id]`, `[slug:slug]`, catch-all patterns
+- **Template engine** — Jinja-compatible with inheritance, macros, and auto-escaping
+- **HTML streaming** — chunked responses for instant TTFB
 
-### Database & ORM
-- 🗄️ **Built-in ORM** - SQLite (default), PostgreSQL, and MySQL support with relations, migrations, soft deletes
-- 🔍 **Full-Text Search** - FTS5/FULLTEXT integration for lightning-fast search
-- 🔐 **Auto Password Hashing** - PBKDF2-SHA256 with **600,000 iterations**
-- 📊 **Query Builder** - Fluent API with eager loading
+### ORM
+- **Multi-database** — SQLite (default), PostgreSQL, MySQL with connection pooling
+- **Relations** — HasMany, BelongsTo, BelongsToMany, MorphTo, self-referencing
+- **Migrations** — automatic schema diffing, rollback, multi-DB
+- **Security** — parameterized queries, column whitelisting, mass-assignment protection, encrypted fields (Fernet AES-256)
+- **Password fields** — PBKDF2-SHA256 with 600,000 iterations
 
-### Templates & Frontend
-- 🎨 **Template Engine** - Jinja-compatible with inheritance and macros
-- ⚡ **Reactive Components** - Client-side reactivity (< 3KB, no build step)
-- 🔄 **Live Components** - Server-driven real-time updates via WebSockets
-- 💨 **HTML Streaming** - Chunked responses for instant TTFB
-- 🎭 **Transitions** - Built-in fade/slide/scale animations
+### API
+- **REST** — decorator-based routes with automatic OpenAPI 3.0 generation and live Swagger UI
+- **GraphQL** — schema auto-generated from ORM models, playground in development, WS subscriptions
+- **API versioning** — URL-based and header-based, deprecation sunset headers
+- **Bearer token auth** — HMAC-signed, configurable expiry
 
-### High-Performance APIs
-- 🔌 **Native API Engine** - Build robust REST APIs with minimal code
-- 📑 **Auto-OpenAPI** - Automatic OpenAPI 3.0 (Swagger) generation for every route
-- 🛡️ **Bearer Token Auth** - Built-in secure authentication for stateless clients
-- ⚡ **Optimized JSON** - High-speed serialization for high-throughput services
-- 📑 **Live Documentation** - Interactive API explorer (Swagger UI) included
+### Real-time
+- **WebSockets** — rooms, presence tracking, typing indicators, direct messages
+- **Live components** — server-driven reactive UI over WebSockets
+- **Client reactivity** — `asok-state`, `asok-on:click`, `asok-text` directives (~3KB, no build step)
 
-### Security
-- 🔒 **CSRF Protection** - Auto-rotation, HMAC validation, SameSite=Strict
-- 🔒 **XSS Prevention** - Auto-escaping templates, CSP nonces
-- 🔒 **SQL Injection** - Parameterized queries, column validation
-- 🔒 **Secure Sessions** - HttpOnly, Secure flags, HMAC-signed
-- 🔒 **Path Traversal** - Absolute path validation
-- 🔒 **OWASP Top 10** - Built-in protections for common web vulnerabilities
+### Admin interface
+- Auto-generated CRUD for every model
+- Role-based access control (RBAC)
+- Two-factor authentication (TOTP + backup codes)
+- Audit logs, inline editing, advanced filters
+- Fully customizable templates
 
-### Admin & Developer Tools
-- 👨‍💼 **Auto Admin** - Django-inspired admin in 2 lines of code
-- 🌍 **i18n Ready** - Multi-language support with JSON translations
-- 📧 **Email Service** - SMTP integration with templates
-- 📦 **Production Build** - Bytecode compilation, minification, WebP conversion
-- 🧪 **Testing Tools** - Built-in test client, fixtures support
+### Infrastructure
+- **WSGI + ASGI** — run on Gunicorn or Uvicorn
+- **Background tasks** — thread pool (local) or Redis queue (`asok worker`) with HMAC-signed job envelopes
+- **Caching** — in-memory, Redis, fragment caching
+- **Sessions** — HMAC-signed, Redis-backed, HttpOnly + SameSite=Strict
+- **Static site generation** — SSG for static routes, ISR with background cache warming
+- **Islands architecture** — selective hydration for performance-critical pages
+- **Email** — SMTP with templates, async dispatch via Redis
+- **S3 storage** — AWS S3 integration with automatic mime-type detection
+
+### Security (audited)
+- CSRF protection with auto-rotation and HMAC validation
+- Content Security Policy with per-request nonces
+- HSTS, X-Frame-Options, X-Content-Type-Options, Permissions-Policy
+- HTML and SVG sanitizer (two-pass whitelist)
+- Path traversal prevention on file uploads
+- SQL injection protection (parameterized queries + identifier validation)
+- Rate limiting (per-IP, per-user, configurable windows)
+- GraphQL mutations blocked by default without `GRAPHQL_AUTHORIZE`
+
+### Developer experience
+- **CLI** — `asok create`, `asok dev`, `asok migrate`, `asok make model`, `asok build`
+- **Production build** — bytecode compilation, JS/CSS minification, WebP conversion
+- **Testing** — built-in test client, `TestClient`, fixture helpers
+- **Developer toolbar** — request inspector, query analyzer, cache stats in-browser
+- **i18n** — `{{ __('key') }}` with JSON locale files, translation management UI
+- **Extensions** — community plugin system with secure path sandboxing
+- **VSCode extension** — syntax highlighting, IntelliSense, route navigation
 
 ---
 
-## 💭 Philosophy
-
-Asok is designed for developers who want to build modern web applications without managing a complex stack of dependencies. It's a **cohesive toolkit** where everything works together out of the box—from database to real-time features—while remaining simple enough to understand and audit.
-
-**Core Principles:**
-- **Cohesion over Composition**: All components are designed to work together seamlessly
-- **Simplicity over Magic**: Clear, readable code with minimal abstraction layers
-- **Security by Default**: Strong security defaults are built in, with additional production hardening available through configuration
-- **Developer Joy**: Fast feedback loops, intuitive APIs, excellent error messages
-
-Asok doesn't aim to replace existing frameworks—it offers a different approach for teams who value simplicity, security, and rapid development in a unified environment.
-
----
-
-## 🛠️ Installation & Setup
-
-### 1. Installation
-By default, Asok has zero external dependencies and works out of the box with SQLite:
+## Installation
 
 ```bash
 pip install asok
 ```
 
-If you wish to use optional database engines or the Redis backend (for caching and sessions), install the corresponding extra(s):
+Asok has zero runtime dependencies. SQLite works out of the box. Add extras only if you need them:
 
 ```bash
-# Optional database engines & capabilities
-pip install "asok[postgres]"         # Standard (requires system libpq)
-pip install "asok[postgres-binary]"  # Binarized (no system dependencies, great for dev)
-pip install "asok[mysql]"
-pip install "asok[redis]"
-pip install "asok[async]"
-
-# Combined extras (e.g. Postgres + Redis)
-pip install "asok[postgres-binary,redis]"
-
+pip install "asok[postgres]"        # PostgreSQL
+pip install "asok[mysql]"           # MySQL
+pip install "asok[redis]"           # Redis (caching, sessions, background tasks)
+pip install "asok[async]"           # ASGI / async support
+pip install "asok[postgres,redis]"  # Combined
 ```
 
-or clone the repo and use the `asok/` folder.
+---
 
-### 2. Create a project
+## Quick start
 
 ```bash
 asok create my-project
 cd my-project
-```
-
-### 3. Start the server
-```bash
 asok dev
 ```
 
+Open [http://localhost:8000](http://localhost:8000). Edit `src/pages/page.html` to start.
+
 ---
 
-## 🏗️ Project Structure
+## Project structure
 
-```text
-├── src
-│   ├── components                # Reactive components
-│   ├── locales                   # JSON translations (en.json, fr.json, ...)
-│   │   ├── en.json                  
-│   │   └── fr.json
-│   ├── middlewares               # Request interceptors
-│   ├── models                    # ORM models (Post.py, User.py)
-│   ├── pages                     # YOUR ROUTES (page.py, page.html)
-│   │   ├── page.html
-│   │   └── page.py
-│   └── partials                  # css, js, images, html, uploads
-│       ├── css
-│       │   └── base.css
-│       ├── html
-│       │   └── base.html
-│       ├── images
-│       │   └── logo.svg
-│       ├── js
-│       │   └── base.js
-│       └── uploads
-└── wsgi.py                # Application entry point
+```
+my-project/
+├── src/
+│   ├── components/       # Reactive components
+│   ├── locales/          # Translations (en.json, fr.json, ...)
+│   ├── middlewares/      # Request interceptors
+│   ├── models/           # ORM models
+│   ├── pages/            # Routes (page.py + page.html)
+│   └── partials/         # css, js, images, uploads
+└── wsgi.py               # Entry point
 ```
 
 ---
 
-## 🛣️ Routing
-Routing is dictated by the structure of the `src/pages/` folder. Each folder represents a URL segment, and contains a `page.py` or `page.html` file.
-
-- `src/pages/page.html` → `/`
-- `src/pages/about/page.html` → `/about`
-- `src/pages/user/[id]/page.py` → `/user/123` (`id` parameter)
-- `src/pages/blog/[slug:slug]/page.py` → `/blog/my-post-slug`
-
-### Dynamic Page Example (`src/pages/shop/[cat]/page.py`)
-```python
-from asok import Request 
-
-def render(request: Request):
-    category = request.params.get('cat')
-    return f"Shop : {category}"
-```
-
----
-
-## 🎨 Templates & Inheritance
-Templates in `src/pages/` can inherit from layouts in `src/partials/html/`.
-
-**Layout (`src/partials/html/base.html`)** :
-```html
-<!DOCTYPE html>
-<html lang="{{ request.lang }}">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="{{ static('images/logo.svg') }}" type="image/svg+xml">
-    <title>{% block title %}{% endblock %} &mdash; my-project</title>
-    <link rel="stylesheet" href="{{ static('css/base.css') }}">
-    <script defer src="{{ static('js/base.js') }}"></script>
-</head>
-<body>
-    <main>{% block main %}{% endblock %}</main>
-</body>
-</html>
-```
-
-**Page (`src/pages/page.html`)** :
-```html
-{% extends "html/base.html" %}
-{% block title %}Welcome{% endblock %}
-
-{% block main %}
-    <div class="container">
-        <img src="{{ static('images/logo.svg') }}" alt="Logo Asok">
-        <h1>Welcome to Asok</h1>
-        <p>No dependencies—just Python’s standard library</p>
-        <p>Edit <code>src/pages/page.html</code> to get started.</p>
-    </div>
-{% endblock %}
-
-```
-
----
-
-## 🗄️ AsokDB (The ORM)
-Define your models in `src/models/`.
-
-```python
-from asok import Field, Model
-
-class User(Model):
-    email = Field.String(unique=True, nullable=False)
-    password = Field.Password()
-    name = Field.String()
-    is_admin = Field.Boolean(default=False)
-    created_at = Field.CreatedAt()
-```
-
----
-
-## 🌍 i18n & Validation
-- **Translation**: `{{ __('welcome') }}` (looks in `src/locales/`).
-- **Validation**: `Validator(data).rule('email', 'required|email')`.
-- **CSRF**: `{{ request.csrf_input() }}` automatic in forms.
-
----
-
-## 🎨 Admin Customization
-
-The administration interface is highly customizable:
-
-```python
-admin = Admin(app, site_name="My Platform", favicon="images/logo.svg")
-```
-
-### Asset Resolution (Smart Resolution)
-The admin automatically detects the source of resources:
-- **Internal Assets**: Files like `admin.css` or the default `logo.svg` are served from the package.
-- **Project Assets**: If you specify a path (e.g. `images/logo.svg` or `uploads/icon.png`), the admin will serve them from your resources folder (`src/partials/`).
-
----
-
-## 🚀 Towards Production
-Asok supports both **WSGI** and **ASGI**. Use Gunicorn for WSGI or Uvicorn for ASGI:
+## Production
 
 ```bash
-# WSGI (Gunicorn)
+# WSGI
 gunicorn wsgi:app
 
-# ASGI (Uvicorn) — for async/await support
+# ASGI
 uvicorn asgi:app
 ```
 
----
+Required environment variables:
 
-## 🔒 Production Security Checklist
-
-Asok is built to be secure by default, but production environments require specific configurations to enable all protections.
-
-### 1. Mandatory Environment Variables
-In production (`DEBUG=False`), Asok enforces strict security checks:
-- **`SECRET_KEY`**: Must be at least **32 characters** long. Use `secrets.token_hex(32)` to generate one.
-- **`APP_URL`**: Required for Magic Links to prevent Host Header Injection. Example: `https://myapp.com`.
-
-### 2. Secure Defaults
-- **DEBUG**: Default is `False`. You must explicitly set `DEBUG=True` in your `.env` for development.
-- **Password Hashing**: PBKDF2-SHA256 with **600,000 iterations**.
-- **Security Headers**: HSTS (1 year), CSP (with nonces), X-Frame-Options (DENY), and X-Content-Type-Options (nosniff) are enabled by default.
-
-### 3. Recommended .env for Production
 ```env
-ASOK_ENV=production
 DEBUG=false
-SECRET_KEY=your-64-character-ultra-secure-key-here
+SECRET_KEY=your-64-character-key   # generate: python -c "import secrets; print(secrets.token_hex(32))"
 APP_URL=https://yourdomain.com
 DATABASE_URL=sqlite:///data/prod.db
 ```
 
----
-
-## 🤝 Contributing
-
-**We ❤️ contributions!** Asok is built to be simple, transparent, and fun to hack on. Whether you're a Python beginner or expert, there's a place for you here.
-
-### 🌟 Ways to Contribute
-
-- 🐛 **Report bugs** - Found an issue? [Open a bug report](https://github.com/asok-framework/asok/issues/new?template=bug_report.md)
-- 💡 **Suggest features** - Have an idea? [Start a discussion](https://github.com/asok-framework/asok/discussions)
-- 📝 **Improve docs** - Spot a typo? Docs are in [asok-docs](https://github.com/asok-framework/asok-docs)
-- 🔧 **Submit PRs** - Fixed something? [Send a pull request](https://github.com/asok-framework/asok/pulls)
-- ⭐ **Star the repo** - Show your support!
-- 💬 **Help others** - Answer questions in [Discussions](https://github.com/asok-framework/asok/discussions)
-
-### 🚀 Quick Start for Contributors
+Generate a deployment config:
 
 ```bash
-# 1. Fork and clone the repo
-git clone https://github.com/YOUR_USERNAME/asok.git
-cd asok
-
-# 2. Create a virtual environment
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-
-# 3. Install dependencies (dev mode)
-pip install -e .
-
-# 4. Run the test suite
-python -m pytest
-
-# 5. Create a branch for your feature
-git checkout -b feature/amazing-feature
-
-# 6. Make your changes and test
-python -m pytest -v
-
-# 7. Commit and push
-git commit -m "feat: add amazing feature"
-git push origin feature/amazing-feature
+asok deploy   # outputs Gunicorn + Nginx + SystemD configs
+asok build    # optimized production build (bytecode + minification)
 ```
 
-**📖 Read our full [Contributing Guide](CONTRIBUTING.md)** for code style, commit conventions, and more.
+---
 
-### 🏆 Contributors
+## Roadmap
 
-Thanks to all our amazing contributors! 🎉
+| Version | Status | Focus |
+|---|---|---|
+| v0.4.0 | ✅ Released (June 2026) | GraphQL, extensions, SSG/ISR, advanced WebSockets |
+| v0.5.0 | ✅ Released (June 2026) | Security hardening, GraphQL auth, signed Redis jobs, offline GraphiQL |
+| v1.0.0 | 📋 Q3 2026 | Stable API, monitoring, multi-tenancy, CDN pipeline |
+
+Full details in [ROADMAP.md](ROADMAP.md).
+
+---
+
+## Contributing
+
+```bash
+git clone https://github.com/asok-framework/asok.git
+cd asok
+python -m venv venv && source venv/bin/activate
+pip install -e .
+python -m pytest
+```
+
+- [Report a bug](https://github.com/asok-framework/asok/issues/new?template=bug_report.md)
+- [Suggest a feature](https://github.com/asok-framework/asok/discussions)
+- [Read the contributing guide](CONTRIBUTING.md)
+- [Join Discord](https://discord.com/invite/aYYkuPT3qR)
 
 <a href="https://github.com/asok-framework/asok/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=asok-framework/asok" />
@@ -369,82 +298,6 @@ Thanks to all our amazing contributors! 🎉
 
 ---
 
-## 💬 Support & Resources
+## License
 
-**Need help?**
-- 📚 Read the [documentation](https://asok-framework.com/docs)
-- 🔍 Search [existing issues](https://github.com/asok-framework/asok/issues)
-- 💬 Ask in [GitHub Discussions](https://github.com/asok-framework/asok/discussions)
-- 🐛 Report bugs via [GitHub Issues](https://github.com/asok-framework/asok/issues/new)
-
-**Documentation & Resources:**
-- 📖 [Complete Framework Guide](https://asok-framework.com/docs)
-- 📖 [Documentation Source](https://github.com/asok-framework/asok-docs) - Contribute to the docs
-- 🛠️ [Code Examples](https://github.com/asok-framework/asok-examples) - Ready-to-use projects and templates
-- 📖 [CHANGELOG](https://github.com/asok-framework/asok-docs/blob/main/CHANGELOG.md) - See what's new in each release
-
-**Stay updated:**
-- ⭐ Star the repo to follow development
-- 👀 Watch releases for new versions
-
----
-
-## 🗺️ Roadmap
-
-Asok is actively developed with exciting features planned:
-
-**v0.4.0** - GraphQL & Extensions ✅ **Released June 2026**
-- **Plugin System**: Fully extensible community extension system with secure path sandboxing
-- **Advanced SSR & Hydration**: Islands architecture, Static Site Generation (SSG), and Incremental Static Regeneration (ISR)
-- **GraphQL API**: Built-in GraphQL server with schema auto-generation from models and subscription support
-- **API Versioning**: URL-based and header-based versioning, negotiation, deprecation warnings and sunsetting
-- **Advanced WebSockets**: Real-time presence tracking, room authorization hooks, Direct Messages, and typing indicators
-- **Multi-Database Scaling**: Advanced ORM database router for read replicas and query load balancing
-
-**v0.3.0** - Enterprise Ready ✅ **Released June 2026**
-- **Async/ASGI**: Full async/await support with ASGI/WSGI dual engine
-- **Multi-DB**: PostgreSQL & MySQL with connection pooling, vector search
-- **Advanced ORM**: Polymorphic relations, self-referencing, nested eager loading, N+1 detection
-- **WebSocket Rooms**: Multi-user collaboration with room broadcasting
-- **Redis**: Caching, sessions, cache warming, fragment caching
-- **Cloud**: AWS S3 storage integration
-- **Background Jobs**: `asok worker` for async task processing
-- **Admin Enhancements**: Inline editing, advanced filtering, saved presets, column customization
-- **VSCode Extension**: Syntax highlighting, IntelliSense, snippets, route navigation
-- **Localization**: Translation management UI and automatic string extraction
-- **Query Optimization**: N+1 detection, query analysis, index suggestions, slow query logging
-
-**v0.5.0** - Enterprise Scale & Observability (Planned Q1 2027)
-- **Built-in Monitoring**: Prometheus/Grafana integration, performance metrics and health check endpoints
-- **Multi-Tenancy**: SaaS tenant isolation structures and middleware
-- **CDN Integration**: Automatic static media asset pipeline delivery
-- **Microservices Support**: Built-in gRPC support and service mesh integration
-
-**Note:** Timelines are subject to change based on community feedback and development priorities.
-
----
-
-## 🏭 Production Status
-
-Asok v0.4.0 is **actively developed software** with growing production adoption. It's suitable for:
-
-**✅ Recommended for:**
-- Production web applications and APIs
-- Internal tools and admin dashboards
-- Personal projects and MVPs
-- Rapid prototyping and experimentation
-- Learning full-stack Python development
-- Projects requiring zero runtime dependencies
-- Applications where dependency auditing is critical
-
-**⚠️ Current Limitations:**
-- **Ecosystem**: Growing community, limited third-party plugins
-- **Maturity**: v0.4.x - APIs are stabilizing but may evolve before v1.0
-
-**For mission-critical production applications**, Asok v0.4.0 provides enterprise features (async, multi-DB, Redis, S3) suitable for production workloads. Evaluate if the current feature set meets your specific requirements.
-
----
-
-## 📜 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).

@@ -36,6 +36,52 @@ class IPLocation:
         except (OSError, socket.error):
             return 0
 
+    def _check_db_file_safety(self) -> bool:
+        if not os.path.exists(self.db_path):
+            return False
+        try:
+            file_size = os.path.getsize(self.db_path)
+            if file_size > 100_000_000:
+                logger.warning(
+                    f"GeoIP database too large ({file_size} bytes), skipping"
+                )
+                return False
+        except OSError:
+            return False
+        return True
+
+    def _parse_csv_line(self, line: str) -> Optional[tuple[int, int, dict[str, Any]]]:
+        parts = line.strip().split(",")
+        if len(parts) < 6:
+            return None
+        try:
+            start = int(parts[0])
+            end = int(parts[1])
+            info = {
+                "city": parts[2],
+                "country": parts[3],
+                "lat": float(parts[4]),
+                "lon": float(parts[5]),
+            }
+            return start, end, info
+        except ValueError:
+            return None
+
+    def _read_and_parse_csv(self) -> None:
+        line_count = 0
+        max_lines = 1_000_000
+        with open(self.db_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line_count += 1
+                if line_count > max_lines:
+                    logger.warning(
+                        f"GeoIP database has too many lines (>{max_lines}), truncating"
+                    )
+                    break
+                parsed = self._parse_csv_line(line)
+                if parsed is not None:
+                    self._data.append(parsed)
+
     def _load_data(self) -> None:
         """Load and parse the local CSV database if it exists.
 
@@ -44,49 +90,12 @@ class IPLocation:
         if self._loaded:
             return
 
-        if not os.path.exists(self.db_path):
-            self._loaded = True
-            return
-
-        # SECURITY: Check file size before loading (max 100MB)
-        try:
-            file_size = os.path.getsize(self.db_path)
-            if file_size > 100_000_000:
-                logger.warning(
-                    f"GeoIP database too large ({file_size} bytes), skipping"
-                )
-                self._loaded = True
-                return
-        except OSError:
+        if not self._check_db_file_safety():
             self._loaded = True
             return
 
         try:
-            line_count = 0
-            max_lines = 1_000_000  # SECURITY: Limit number of lines
-
-            with open(self.db_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line_count += 1
-                    if line_count > max_lines:
-                        logger.warning(
-                            f"GeoIP database has too many lines (>{max_lines}), truncating"
-                        )
-                        break
-                    parts = line.strip().split(",")
-                    if len(parts) >= 6:
-                        try:
-                            start = int(parts[0])
-                            end = int(parts[1])
-                            info = {
-                                "city": parts[2],
-                                "country": parts[3],
-                                "lat": float(parts[4]),
-                                "lon": float(parts[5]),
-                            }
-                            self._data.append((start, end, info))
-                        except ValueError:
-                            continue
+            self._read_and_parse_csv()
             # Ensure data is sorted for binary search
             self._data.sort(key=lambda x: x[0])
         except Exception as e:
@@ -94,17 +103,7 @@ class IPLocation:
 
         self._loaded = True
 
-    def lookup(self, ip: str) -> dict[str, Any]:
-        """Perform a binary search for the given IP address."""
-        self._load_data()
-
-        if not self._data:
-            return {"city": "Unknown", "country": "Unknown", "lat": 0.0, "lon": 0.0}
-
-        ip_int = self._ip_to_int(ip)
-        if ip_int == 0:
-            return {"city": "Unknown", "country": "Unknown", "lat": 0.0, "lon": 0.0}
-
+    def _binary_search_ip(self, ip_int: int) -> dict[str, Any]:
         low = 0
         high = len(self._data) - 1
 
@@ -114,12 +113,26 @@ class IPLocation:
 
             if start <= ip_int <= end:
                 return info
-            elif ip_int < start:
+            if ip_int < start:
                 high = mid - 1
             else:
                 low = mid + 1
+        return {}
 
-        return {"city": "Unknown", "country": "Unknown", "lat": 0.0, "lon": 0.0}
+    def lookup(self, ip: str) -> dict[str, Any]:
+        """Perform a binary search for the given IP address."""
+        self._load_data()
+
+        default_res = {"city": "Unknown", "country": "Unknown", "lat": 0.0, "lon": 0.0}
+        if not self._data:
+            return default_res
+
+        ip_int = self._ip_to_int(ip)
+        if ip_int == 0:
+            return default_res
+
+        result = self._binary_search_ip(ip_int)
+        return result if result else default_res
 
 
 def iso_to_flag(iso_code: str) -> str:

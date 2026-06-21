@@ -111,11 +111,21 @@ class TestRedisCache:
                 if fnmatch.fnmatch(k, pattern)
             ]
 
+        def mock_scan_iter(match=None):
+            import fnmatch
+
+            if isinstance(match, bytes):
+                match = match.decode("utf-8")
+            for k in store.keys():
+                if match is None or fnmatch.fnmatch(k, match):
+                    yield k.encode("utf-8") if isinstance(k, str) else k
+
         mock_client.get.side_effect = mock_get
         mock_client.set.side_effect = mock_set
         mock_client.setex.side_effect = mock_setex
         mock_client.delete.side_effect = mock_delete
         mock_client.keys.side_effect = mock_keys
+        mock_client.scan_iter.side_effect = mock_scan_iter
         return mock_client
 
     @pytest.fixture

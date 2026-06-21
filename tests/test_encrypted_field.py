@@ -5,18 +5,21 @@ from unittest.mock import MagicMock
 try:
     from cryptography.fernet import Fernet  # noqa: F401
 except ImportError:
+
     class MockFernet:
         def __init__(self, key):
             self.key = key if isinstance(key, bytes) else key.encode()
 
         def encrypt(self, data: bytes) -> bytes:
             import base64
+
             # Embed key in token to simulate validation
             payload = self.key + b":" + data
             return b"gAAAAA" + base64.b64encode(payload)
 
         def decrypt(self, token: bytes) -> bytes:
             import base64
+
             token_bytes = token if isinstance(token, bytes) else token.encode()
             if token_bytes.startswith(b"gAAAAA"):
                 decoded = base64.b64decode(token_bytes[6:])
@@ -130,3 +133,17 @@ def test_encrypted_field_null_handling():
     # Load from DB and verify it is still None (and not converted or encrypted)
     loaded = SecureUser.find(id=user.id)
     assert loaded.ssn is None
+
+
+def test_encrypted_field_missing_secret_key(monkeypatch):
+    # Remove SECRET_KEY from environment
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    # Clear the encryption key cache to force key resolution
+    from asok.orm.model import _ENCRYPTION_KEY_CACHE
+    _ENCRYPTION_KEY_CACHE.clear()
+
+    # Attempting to encrypt a value without SECRET_KEY must raise RuntimeError
+    user = SecureUser(name="Bob", ssn="123-45-6789")
+    with pytest.raises(RuntimeError, match="SECRET_KEY is not configured"):
+        user.save()
+
