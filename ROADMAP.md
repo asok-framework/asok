@@ -6,6 +6,14 @@ This roadmap outlines the planned features and improvements for upcoming Asok re
 
 ## Current Stable Release
 
+### v0.5.1 (Released: June 2026)
+
+**Status**: ✅ Stable
+
+Patch release — resolved table check and creation issues inside the `createsuperuser` command to automatically provision the `role_user` pivot table if missing.
+
+---
+
 ### v0.5.0 (Released: June 2026)
 
 **Status**: ✅ Stable
@@ -150,6 +158,7 @@ Check [GitHub Discussions](https://github.com/asok-framework/asok/discussions) f
 | v0.3.0 | June 1, 2026 | ✅ Released | Async & Multi-DB Support |
 | v0.4.0 | June 7, 2026 | ✅ Released | GraphQL & Extensions |
 | v0.5.0 | June 20, 2026 | ✅ Released | Security Hardening |
+| v0.5.1 | June 24, 2026 | ✅ Released | CLI Fixes & Patch Update |
 | v1.0.0 | Q3 2026 | 📋 Planned | Stable API, Monitoring & Observability |
 
 **Note**: Dates are approximate and subject to change based on community priorities and development capacity.
@@ -178,6 +187,6 @@ We maintain backward compatibility within major versions and provide clear upgra
 
 ---
 
-**Last Updated**: June 7, 2026
+**Last Updated**: June 24, 2026
 
 For the most up-to-date information, check the [GitHub Projects board](https://github.com/asok-framework/asok/projects).

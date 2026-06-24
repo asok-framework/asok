@@ -351,3 +351,35 @@ sys.injected_flag = True
             assert not getattr(sys, "injected_flag", False), "Code injection was executed!"
         except Exception:
             pass
+
+
+def test_shared_variables_caching_and_double_evaluation():
+    from asok.core import Asok
+    from asok.request import Request
+
+    app = Asok()
+    call_count = 0
+
+    def my_helper(arg):
+        nonlocal call_count
+        call_count += 1
+        return f"result-{arg}"
+
+    app.share(my_helper=lambda request: my_helper)
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+    req = Request(environ)
+
+    # First lookup resolves lambda and caches `my_helper`
+    helper1 = req.shared("my_helper")
+    assert helper1 is my_helper
+
+    # Second lookup returns cached `my_helper` directly without re-evaluation
+    helper2 = req.shared("my_helper")
+    assert helper2 is my_helper
+    assert call_count == 0
+

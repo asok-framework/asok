@@ -119,7 +119,9 @@ def _build_compiled_callable(template_string: str, is_debug: bool) -> Callable[.
     for token in _RE_TOKENS.split(template_string):
         _emit_for_token(state, token)
     compiled_code = "\n".join(state.code)
-    return _exec_template_code(compiled_code)
+    run_fn = _exec_template_code(compiled_code)
+    run_fn._compiled_code = compiled_code
+    return run_fn
 
 
 def _exec_template_code(compiled_code: str) -> Callable[..., Any]:
@@ -157,6 +159,14 @@ def _compile_and_run(
     if run_fn is None:
         run_fn = _build_compiled_callable(template_string, is_debug)
         _compiled_cache[cache_key] = run_fn
-    return run_fn(
-        context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug
-    )
+    try:
+        return run_fn(
+            context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug
+        )
+    except Exception as e:
+        code_str = getattr(run_fn, "_compiled_code", "unknown")
+        # Log or raise with context info to debug
+        print(f"DEBUG: Context keys: {list(context.keys())}")
+        print(f"DEBUG: dropzone_loader type: {type(context.get('dropzone_loader'))} value: {repr(context.get('dropzone_loader'))}")
+        print(f"DEBUG: dropzone type: {type(context.get('dropzone'))} value: {repr(context.get('dropzone'))}")
+        raise type(e)(f"{str(e)}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}") from e

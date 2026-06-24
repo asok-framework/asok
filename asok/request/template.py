@@ -151,11 +151,11 @@ class TemplateMixin:
         cache = self.__dict__.setdefault("_shared_cache", {})
         val, was_in_cache = self._get_shared_raw_value(name, cache)
 
+        if was_in_cache:
+            return val
+
         resolved = self._resolve_shared_value(val)
-
-        if resolved is not val or not was_in_cache:
-            cache[name] = resolved
-
+        cache[name] = resolved
         return resolved
 
     def shared_form(self: Any, name: str) -> Any:

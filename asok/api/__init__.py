@@ -1,7 +1,18 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Optional, ParamSpec, TypeVar
+from typing import Any, Callable, Optional, TypeVar
+
+try:
+    from typing import ParamSpec
+except ImportError:
+    try:
+        from typing_extensions import ParamSpec
+    except ImportError:
+        # Fallback dummy class for Python < 3.10 compatibility if typing_extensions is not present
+        class ParamSpec:  # type: ignore
+            def __init__(self, name: str):
+                self.__name__ = name
 
 from ..core import Asok
 from ..request import Request

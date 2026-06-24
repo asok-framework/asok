@@ -24,18 +24,78 @@ Built for developers who want a complete stack without assembling one.
 
 ## When to choose Asok
 
-| | Flask | Django | Asok |
-|---|---|---|---|
-| Runtime dependencies | ~6 | ~20+ transitive | **0** |
-| ORM built-in | ✗ | ✓ | ✓ |
-| Admin interface | ✗ | ✓ | ✓ |
-| File-based routing | ✗ | ✗ | ✓ |
-| GraphQL built-in | ✗ | ✗ | ✓ |
-| WebSockets built-in | ✗ | ✗ | ✓ |
-| Reactive components | ✗ | ✗ | ✓ |
-| SSG / ISR | ✗ | ✗ | ✓ |
-| Auto OpenAPI docs | ✗ | ✗ | ✓ |
-| Background tasks | ✗ | ✗ | ✓ |
+<table style="width: 100%; table-layout: fixed;">
+  <thead>
+    <tr style="text-align: left;">
+      <th style="width: 40%;"></th>
+      <th style="width: 20%;">Flask</th>
+      <th style="width: 20%;">Django</th>
+      <th style="width: 20%;">Asok</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Runtime dependencies</td>
+      <td>~6</td>
+      <td>~20+ transitive</td>
+      <td><strong>0</strong></td>
+    </tr>
+    <tr>
+      <td>ORM built-in</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Admin interface</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>File-based routing</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>GraphQL built-in</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>WebSockets built-in</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Reactive components</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>SSG / ISR</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Auto OpenAPI docs</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Background tasks</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+  </tbody>
+</table>
 
 **Choose Asok when** you want a full stack out of the box, dependency auditability matters (security-critical environments, embedded deployments, strict supply chain policies), or you're a solo developer or small team who doesn't want to assemble and maintain a stack of integrations.
 
@@ -60,7 +120,7 @@ admin = Admin(app)
 ```python
 # src/pages/page.py
 from asok import Request
-from src.models.post import Post
+from models.post import Post
 
 def render(request: Request):
     posts = Post.query().order_by("-id").limit(10).get()
@@ -271,6 +331,7 @@ asok build    # optimized production build (bytecode + minification)
 |---|---|---|
 | v0.4.0 | ✅ Released (June 2026) | GraphQL, extensions, SSG/ISR, advanced WebSockets |
 | v0.5.0 | ✅ Released (June 2026) | Security hardening, GraphQL auth, signed Redis jobs, offline GraphiQL |
+| v0.5.1 | ✅ Released (June 2026) | CLI and database connection patch updates |
 | v1.0.0 | 📋 Q3 2026 | Stable API, monitoring, multi-tenancy, CDN pipeline |
 
 Full details in [ROADMAP.md](ROADMAP.md).

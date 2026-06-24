@@ -559,6 +559,13 @@ def _get_or_create_admin_role(Role):
 
 def _attach_user_to_role(user, admin_role) -> None:
     engine = user.__class__.get_engine()
+    if not engine.table_exists("role_user"):
+        q_role_user = engine.quote_identifier("role_user")
+        q_role_id = engine.quote_identifier("role_id")
+        q_user_id = engine.quote_identifier("user_id")
+        engine.execute(
+            f"CREATE TABLE {q_role_user} ({q_user_id} INTEGER NOT NULL, {q_role_id} INTEGER NOT NULL, PRIMARY KEY ({q_user_id}, {q_role_id}))"
+        )
     q_role_user = engine.quote_identifier("role_user")
     q_role_id = engine.quote_identifier("role_id")
     q_user_id = engine.quote_identifier("user_id")
@@ -572,6 +579,7 @@ def _attach_user_to_role(user, admin_role) -> None:
         f"INSERT INTO {q_role_user} ({q_role_id}, {q_user_id}) VALUES (?, ?)",
         (admin_role.id, user.id),
     )
+
 
 
 def _load_models(root: str) -> None:
