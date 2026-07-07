@@ -26,11 +26,14 @@ class VirtualModelState:
         """Create a VirtualModelState from a live Python Model class."""
         fields = {}
         for f_name, f_obj in model_cls._fields.items():
+            def_val = getattr(f_obj, "default", None)
+            if hasattr(def_val, "value"):
+                def_val = def_val.value
             fields[f_name] = {
                 "type": f_obj.__class__.__name__,
                 "sql_type": getattr(f_obj, "sql_type", "TEXT"),
                 "nullable": getattr(f_obj, "nullable", True),
-                "default": getattr(f_obj, "default", None),
+                "default": def_val,
                 "unique": getattr(f_obj, "unique", False),
                 "max_length": getattr(f_obj, "max_length", None),
                 "precision": getattr(f_obj, "precision", None),

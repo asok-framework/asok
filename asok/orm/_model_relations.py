@@ -24,6 +24,7 @@ def build_foreign_key_property(field_name: str, related_model: Any) -> property:
 
         with database_router_context(shard=getattr(self, "_shard", None)):
             return related_model.find(id=val)
+
     return property(get_related)
 
 
@@ -41,6 +42,7 @@ def build_has_many_property(rel, rel_name: str) -> property:
         fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
         with _shard_context(self):
             return target_model.all(**{fk: self.id})
+
     return property(get_collection)
 
 
@@ -55,6 +57,7 @@ def build_has_one_property(rel, rel_name: str) -> property:
         fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
         with _shard_context(self):
             return target_model.find(**{fk: self.id})
+
     return property(get_one)
 
 
@@ -72,6 +75,7 @@ def build_belongs_to_property(rel, rel_name: str) -> property:
             return None
         with _shard_context(self):
             return target_model.find(id=val)
+
     return property(get_parent)
 
 
@@ -84,6 +88,7 @@ def build_belongs_to_many_property(rel, rel_name: str) -> property:
         if not target_model:
             return []
         return _execute_pivot_query(self, rel, target_model)
+
     return property(get_many_to_many)
 
 
@@ -103,6 +108,7 @@ def build_morph_to_property(rel, rel_name: str) -> property:
             return None
         with _shard_context(self):
             return target_model.find(id=target_id)
+
     return property(get_morph_to)
 
 
@@ -122,6 +128,7 @@ def build_morph_many_property(rel, rel_name: str) -> property:
                 .where(fk_type, self.__class__.__name__)
                 .get()
             )
+
     return property(get_morph_many)
 
 
@@ -149,21 +156,24 @@ def build_relation_property(rel, rel_name: str) -> property | None:
 
 
 def build_translatable_property(base_name: str) -> property:
-    return property(_make_translatable_getter(base_name), _make_translatable_setter(base_name))
+    return property(
+        _make_translatable_getter(base_name), _make_translatable_setter(base_name)
+    )
 
 
 def _make_translatable_getter(base_name: str):
     def getter(self):
         lang, default_lang = _current_locales()
-        if (val := _try_lang_field(self, base_name, lang)):
+        if val := _try_lang_field(self, base_name, lang):
             return val
-        if (val := _try_default_lang_or_base(self, base_name, lang, default_lang)):
+        if val := _try_default_lang_or_base(self, base_name, lang, default_lang):
             return val
-        if (val := _try_fallback_lang(self, base_name, default_lang)):
+        if val := _try_fallback_lang(self, base_name, default_lang):
             return val
-        if (val := _try_any_translation_field(self, base_name)):
+        if val := _try_any_translation_field(self, base_name):
             return val
         return self.__dict__.get(base_name)
+
     return getter
 
 
@@ -180,6 +190,7 @@ def _make_translatable_setter(base_name: str):
             setattr(self, target_field, value)
         else:
             self.__dict__[base_name] = value
+
     return setter
 
 
@@ -267,7 +278,8 @@ def _execute_pivot_query(instance, rel, target_model):
         rows = engine.execute(sql, (instance.id,))
         results = ModelList(
             (target_model(**row) for row in rows),
-            sql=sql, args=[instance.id],
+            sql=sql,
+            args=[instance.id],
         )
         for r in results:
             r._shard = getattr(instance, "_shard", None)

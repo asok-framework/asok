@@ -107,6 +107,42 @@ class Cache:
             while len(self._store) > self._max_entries:
                 self._store.popitem(last=False)
 
+    def incr(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        """Increment a key's value in the cache by the given amount.
+
+        If the key does not exist, it is initialized to the amount.
+        """
+        if self.backend == "file":
+            return self._file_incr(key, amount, ttl)
+        elif self.backend == "redis":
+            return self._redis_incr(key, amount, ttl)
+        return self._memory_incr(key, amount, ttl)
+
+    def _is_valid_memory_entry(
+        self, entry: tuple[Any, Optional[float]] | None, now: float
+    ) -> bool:
+        if entry is None:
+            return False
+        return entry[1] is None or now <= entry[1]
+
+    def _memory_incr(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        with self._lock:
+            entry = self._store.get(key)
+            now = time.time()
+            if self._is_valid_memory_entry(entry, now):
+                assert entry is not None
+                new_val = int(entry[0]) + amount
+                self._store[key] = (new_val, entry[1])
+                self._store.move_to_end(key)
+                return new_val
+
+            new_val = amount
+            expires = (now + ttl) if ttl else None
+            self._store[key] = (new_val, expires)
+            while len(self._store) > self._max_entries:
+                self._store.popitem(last=False)
+            return new_val
+
     def forget(self, key: str) -> None:
         """Remove a specific key from the cache."""
         if self.backend == "file":
@@ -179,6 +215,22 @@ class Cache:
         except Exception:
             pass
 
+    def _redis_incr(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        client = self._get_redis_client()
+        rkey = self._redis_key(key)
+        try:
+            if ttl is not None:
+                pipe = client.pipeline()
+                pipe.incrby(rkey, amount)
+                pipe.ttl(rkey)
+                val, current_ttl = pipe.execute()
+                if val == amount or current_ttl == -1:
+                    client.expire(rkey, ttl)
+                return val
+            return client.incrby(rkey, amount)
+        except Exception:
+            return amount
+
     def _redis_forget(self, key: str) -> None:
         client = self._get_redis_client()
         rkey = self._redis_key(key)
@@ -232,6 +284,35 @@ class Cache:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"value": value, "expires": expires}, f)
+
+    def _read_file_incr_val(self, path: str, now: float) -> tuple[int, Optional[float]]:
+        if not os.path.exists(path):
+            return 0, None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                entry = json.load(f)
+            exp = entry["expires"]
+            if not exp or now <= exp:
+                return int(entry["value"]), exp
+        except (json.JSONDecodeError, KeyError, OSError, ValueError):
+            pass
+        return 0, None
+
+    def _file_incr(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        # NOTE: Not cross-process atomic (read-then-write without file lock).
+        # Under high concurrency across multiple processes, some increments may be lost.
+        # Redis backend is recommended for strict multi-process rate limiting.
+        path = self._key_path(key)
+        now = time.time()
+        val, expires = self._read_file_incr_val(path, now)
+        new_val = val + amount
+        if expires is None:
+            expires = (now + ttl) if ttl else None
+
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"value": new_val, "expires": expires}, f)
+        return new_val
 
     def _file_forget(self, key):
         path = self._key_path(key)

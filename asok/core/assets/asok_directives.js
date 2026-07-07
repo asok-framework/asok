@@ -235,7 +235,7 @@
       const isShown = evaluateExpression(getAttr('asok-show-ref'), state, el);
       if (!el._asokShowInitialized) {
         el._asokShowInitialized = true;
-        el.style.display = isShown ? '' : 'none';
+        el.style.display = isShown ? 'block' : 'none';
       } else {
         const isCurrentlyShown = el.style.display !== 'none';
         if (isShown) {
@@ -244,7 +244,7 @@
             el.removeAttribute('data-hide-active');
             el.setAttribute('data-show-active', '');
             applyTransition(el, true, () => {
-              el.style.display = '';
+              el.style.display = 'block';
             });
           }
         } else {

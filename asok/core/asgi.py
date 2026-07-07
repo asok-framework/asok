@@ -54,7 +54,9 @@ class ASGIMixin:
                 return None
         return b"".join(body_chunks)
 
-    def _build_environ_from_asgi(self, scope: dict[str, Any], body: bytes) -> dict[str, Any]:
+    def _build_environ_from_asgi(
+        self, scope: dict[str, Any], body: bytes
+    ) -> dict[str, Any]:
         headers = {}
         for k, v in scope.get("headers", []):
             headers[k.decode("latin1").lower()] = v.decode("latin1")
@@ -93,7 +95,13 @@ class ASGIMixin:
 
         return environ
 
-    async def _send_error_response(self, status: int, body: bytes, send: Callable, content_type: bytes = b"text/plain") -> None:
+    async def _send_error_response(
+        self,
+        status: int,
+        body: bytes,
+        send: Callable,
+        content_type: bytes = b"text/plain",
+    ) -> None:
         await send(
             {
                 "type": "http.response.start",
@@ -112,20 +120,81 @@ class ASGIMixin:
             }
         )
 
-    async def _send_final_response_exception(self, fre: _FinalResponseException, send: Callable) -> None:
-        body_bytes = (
-            fre.body.encode("utf-8") if isinstance(fre.body, str) else fre.body
+    async def _send_asgi_error(
+        self,
+        request: Request,
+        e: Exception,
+        send: Callable,
+        environ: Optional[dict[str, Any]] = None,
+    ) -> None:
+        import traceback
+        import uuid
+
+        error_id = str(uuid.uuid4())[:8]
+        logger.error(
+            "[ERROR-ID:%s] Unhandled Exception in ASGI: %s\n%s",
+            error_id,
+            str(e),
+            traceback.format_exc(),
         )
+        # SECURITY: never expose traces to the client; logs hold details.
+        error_page = self._render_error_page(
+            request, 500, message="An internal error occurred."
+        )
+        body = error_page.encode("utf-8") if isinstance(error_page, str) else error_page
+
+        headers = [("Content-Type", "text/html; charset=utf-8")]
+        if request is not None and environ is not None:
+            headers += self._cookie_headers(request, environ)
+            headers += self._security_headers(
+                request=request, nonce=getattr(request, "nonce", None)
+            )
+        headers.append(("Content-Length", str(len(body))))
+
+        asgi_headers = [
+            (k.lower().encode("latin1"), v.encode("latin1")) for k, v in headers
+        ]
+
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 500,
+                "headers": asgi_headers,
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body,
+                "more_body": False,
+            }
+        )
+
+    async def _send_final_response_exception(
+        self,
+        fre: _FinalResponseException,
+        send: Callable,
+        request: Optional[Request] = None,
+        environ: Optional[dict[str, Any]] = None,
+    ) -> None:
+        body_bytes = fre.body.encode("utf-8") if isinstance(fre.body, str) else fre.body
+        headers = [("Content-Type", f"{fre.content_type}; charset=utf-8")]
+        if request is not None and environ is not None:
+            headers += self._cookie_headers(request, environ)
+            headers += self._security_headers(
+                request=request, nonce=getattr(request, "nonce", None)
+            )
+        headers.append(("Content-Length", str(len(body_bytes))))
+
+        asgi_headers = [
+            (k.lower().encode("latin1"), v.encode("latin1")) for k, v in headers
+        ]
+
         await send(
             {
                 "type": "http.response.start",
                 "status": fre.status_code,
-                "headers": [
-                    (
-                        b"content-type",
-                        f"{fre.content_type}; charset=utf-8".encode("latin1"),
-                    )
-                ],
+                "headers": asgi_headers,
             }
         )
         await send(
@@ -136,11 +205,12 @@ class ASGIMixin:
             }
         )
 
-    async def _send_final_redirect_exception(self, frde: _FinalRedirectException, send: Callable) -> None:
+    async def _send_final_redirect_exception(
+        self, frde: _FinalRedirectException, send: Callable
+    ) -> None:
         status_code = int(frde.status_str.split(" ", 1)[0])
         asgi_headers = [
-            (k.lower().encode("latin1"), v.encode("latin1"))
-            for k, v in frde.headers
+            (k.lower().encode("latin1"), v.encode("latin1")) for k, v in frde.headers
         ]
         await send(
             {
@@ -193,10 +263,13 @@ class ASGIMixin:
         if res is not None:
             return res
 
-        return await self._run_dispatch_handlers_extended(request, environ, start_response)
+        return await self._run_dispatch_handlers_extended(
+            request, environ, start_response
+        )
 
     def _prepare_dispatch_request(self, request: Request) -> tuple[bool, bool]:
         import secrets
+
         request._nonce = secrets.token_urlsafe(16)
 
         is_head = request.method == "HEAD"
@@ -204,7 +277,9 @@ class ASGIMixin:
             request.method = "GET"
         return is_head, getattr(request, "_body_rejected", False)
 
-    async def _execute_controller(self, request: Request, environ: dict[str, Any]) -> Any:
+    async def _execute_controller(
+        self, request: Request, environ: dict[str, Any]
+    ) -> Any:
         result = self._dispatch_controller(request, environ)
         if inspect.iscoroutine(result):
             return await result
@@ -229,7 +304,7 @@ class ASGIMixin:
         is_head: bool,
         status_headers: list,
         start_response: Callable,
-        send: Callable
+        send: Callable,
     ) -> None:
         try:
             result = await self._execute_controller(request, environ)
@@ -240,17 +315,47 @@ class ASGIMixin:
                 status_headers[0], status_headers[1], final_res, send
             )
         except _FinalResponseException as fre:
-            await self._send_final_response_exception(fre, send)
+            await self._send_final_response_exception(fre, send, request, environ)
         except _FinalRedirectException as frde:
             await self._send_final_redirect_exception(frde, send)
+
+    async def _run_asgi_request_flow(
+        self,
+        request: Request,
+        environ: dict[str, Any],
+        is_head: bool,
+        status_headers: list,
+        start_response: Callable,
+        send: Callable,
+    ) -> None:
+        try:
+            res = await self._run_dispatch_handlers(request, environ, start_response)
+            if res is not None:
+                await self._send_captured_response(
+                    status_headers[0], status_headers[1], res, send
+                )
+                return
+
+            _ = request.session
+            await self._execute_and_send_response(
+                request, environ, is_head, status_headers, start_response, send
+            )
+        except _FinalResponseException as fre:
+            await self._send_final_response_exception(fre, send, request, environ)
+        except _FinalRedirectException as frde:
+            await self._send_final_redirect_exception(frde, send)
+        except Exception as e:
+            await self._send_asgi_error(request, e, send, environ)
 
     async def _dispatch_asgi_http(
         self, request: Request, environ: dict[str, Any], send: Callable
     ) -> None:
         from ..context import request_var
+
         token = request_var.set(request)
         try:
             from .signals import request_started
+
             request_started.send(self, request=request)
 
             is_head, body_rejected = self._prepare_dispatch_request(request)
@@ -269,16 +374,14 @@ class ASGIMixin:
                 status_headers[1] = headers
 
             if request.path == "/__health":
-                await self._send_error_response(200, b'{"status":"ok"}', send, content_type=b"application/json")
+                await self._send_error_response(
+                    200, b'{"status":"ok"}', send, content_type=b"application/json"
+                )
                 return
 
-            res = await self._run_dispatch_handlers(request, environ, start_response)
-            if res is not None:
-                await self._send_captured_response(status_headers[0], status_headers[1], res, send)
-                return
-
-            _ = request.session
-            await self._execute_and_send_response(request, environ, is_head, status_headers, start_response, send)
+            await self._run_asgi_request_flow(
+                request, environ, is_head, status_headers, start_response, send
+            )
 
         finally:
             self._cleanup_dispatch_request(request, token)
@@ -308,12 +411,14 @@ class ASGIMixin:
 
     async def _send_iterable_chunks(self, body_iterable: Any, send: Callable) -> None:
         if isinstance(body_iterable, (list, tuple)):
-            for chunk in body_iterable:
+            items = list(body_iterable)
+            last = len(items) - 1
+            for i, chunk in enumerate(items):
                 await send(
                     {
                         "type": "http.response.body",
                         "body": chunk,
-                        "more_body": False,
+                        "more_body": i < last,
                     }
                 )
         else:

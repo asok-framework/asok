@@ -34,6 +34,7 @@ def app():
 
     # Ensure correct models are in the registry after Asok() setup has run
     from asok.orm import MODELS_REGISTRY
+
     MODELS_REGISTRY["User"] = User
     MODELS_REGISTRY["Role"] = Role
 

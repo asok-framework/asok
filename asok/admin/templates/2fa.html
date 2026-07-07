@@ -65,9 +65,12 @@
         </form>
 
         <div style="text-align:center; margin-top:20px">
-          <a href="{{ admin_prefix }}/logout" class="muted" style="font-size:0.875rem; text-decoration:none">
-            {{ icon('arrow-left', 12) }} {{ t('Back to Sign in') }}
-          </a>
+          <form method="post" action="{{ admin_prefix }}/logout" style="display:inline;margin:0">
+            <input type="hidden" name="_csrf_token" value="{{ request.csrf_token_value }}">
+            <button type="submit" class="muted" style="background:none;border:none;font-size:0.875rem;text-decoration:none;cursor:pointer;padding:0">
+              {{ icon('arrow-left', 12) }} {{ t('Back to Sign in') }}
+            </button>
+          </form>
         </div>
       </div>
 

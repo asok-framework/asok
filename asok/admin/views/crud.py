@@ -18,7 +18,9 @@ from ..utils import _display
 class CRUDViewsMixin:
     # ── List view ────────────────────────────────────────────
 
-    def _fetch_list_items(self, request: Any, entry: dict[str, Any], trash: bool) -> tuple[Any, int, int, int]:
+    def _fetch_list_items(
+        self, request: Any, entry: dict[str, Any], trash: bool
+    ) -> tuple[Any, int, int, int]:
         per_page = entry["per_page"]
         page = max(1, int(request.args.get("page", 1) or 1))
         sort = request.args.get("sort", "-id") or "-id"
@@ -35,7 +37,9 @@ class CRUDViewsMixin:
         items = query.limit(per_page).offset((page - 1) * per_page).get()
         return items, page, pages, total
 
-    def _build_item_dicts(self, items: list[Any], columns: list[str], model: Any) -> list[dict[str, Any]]:
+    def _build_item_dicts(
+        self, items: list[Any], columns: list[str], model: Any
+    ) -> list[dict[str, Any]]:
         item_dicts = []
         for it in items:
             d = {"id": it.id}
@@ -44,10 +48,18 @@ class CRUDViewsMixin:
             item_dicts.append(d)
         return item_dicts
 
-    def _is_bulk_editable_field(self, f: Any, name: str, readonly_fields: list[str]) -> bool:
+    def _is_bulk_editable_field(
+        self, f: Any, name: str, readonly_fields: list[str]
+    ) -> bool:
         if name in readonly_fields:
             return False
-        for attr in ("is_password", "is_file", "is_timestamp", "is_soft_delete", "is_foreign_key"):
+        for attr in (
+            "is_password",
+            "is_file",
+            "is_timestamp",
+            "is_soft_delete",
+            "is_foreign_key",
+        ):
             if getattr(f, attr, False):
                 return False
         return True
@@ -59,7 +71,9 @@ class CRUDViewsMixin:
             return False
         return bool(self._can(request, entry["slug"], "edit"))
 
-    def _build_bulk_edit_fields(self, request: Any, entry: dict[str, Any], trash: bool) -> list[dict[str, Any]]:
+    def _build_bulk_edit_fields(
+        self, request: Any, entry: dict[str, Any], trash: bool
+    ) -> list[dict[str, Any]]:
         bulk_edit_fields = []
         if self._can_edit_bulk(request, entry, trash):
             model = entry["model"]
@@ -70,7 +84,9 @@ class CRUDViewsMixin:
                     )
         return bulk_edit_fields
 
-    def _build_bulk_actions(self, request: Any, entry: dict[str, Any], trash: bool) -> list[dict[str, Any]]:
+    def _build_bulk_actions(
+        self, request: Any, entry: dict[str, Any], trash: bool
+    ) -> list[dict[str, Any]]:
         if trash:
             return [
                 {"name": "restore", "label": "Restore selected"},
@@ -82,12 +98,12 @@ class CRUDViewsMixin:
             if self._can(request, entry["slug"], "delete"):
                 bulk_actions.append({"name": "delete", "label": "Delete selected"})
         for act in entry["actions"]:
-            bulk_actions.append(
-                {"name": act, "label": act.replace("_", " ").title()}
-            )
+            bulk_actions.append({"name": act, "label": act.replace("_", " ").title()})
         return bulk_actions
 
-    def _build_list_breadcrumbs(self, entry: dict[str, Any], trash: bool) -> list[dict[str, Any]]:
+    def _build_list_breadcrumbs(
+        self, entry: dict[str, Any], trash: bool
+    ) -> list[dict[str, Any]]:
         breadcrumbs = [
             {"label": "Dashboard", "url": self.prefix},
             {
@@ -179,7 +195,9 @@ class CRUDViewsMixin:
                 out.append(i)
         return out
 
-    def _check_self_targeting(self, request: Any, model: Any, ids: list[int], slug: str) -> list[int]:
+    def _check_self_targeting(
+        self, request: Any, model: Any, ids: list[int], slug: str
+    ) -> list[int]:
         auth_name = self.app.config.get("AUTH_MODEL", "User")
         if model.__name__ != auth_name:
             return ids
@@ -190,9 +208,7 @@ class CRUDViewsMixin:
             return ids
 
         filtered_ids = self._filter_user_id(ids, user_id)
-        request.flash(
-            "error", self.t(request, "You cannot target your own account.")
-        )
+        request.flash("error", self.t(request, "You cannot target your own account."))
         if not filtered_ids:
             raise RedirectException(self.prefix + "/" + slug)
         return filtered_ids
@@ -284,7 +300,9 @@ class CRUDViewsMixin:
             return self._coerce_real_bulk_value(raw)
         return raw or None
 
-    def _apply_bulk_update(self, model: Any, ids: list[int], field_name: str, val: Any) -> int:
+    def _apply_bulk_update(
+        self, model: Any, ids: list[int], field_name: str, val: Any
+    ) -> int:
         count = 0
         for i in ids:
             obj = model.find(id=i)
@@ -297,7 +315,9 @@ class CRUDViewsMixin:
                     pass
         return count
 
-    def _bulk_set_field(self, request: Any, entry: dict[str, Any], ids: list[int], field_name: str) -> Any:
+    def _bulk_set_field(
+        self, request: Any, entry: dict[str, Any], ids: list[int], field_name: str
+    ) -> Any:
         model = entry["model"]
         slug = entry["slug"]
         if not entry["can_edit"] or not self._can(request, slug, "edit"):
@@ -320,20 +340,18 @@ class CRUDViewsMixin:
             entity_id=None,
             changes={"ids": ids, "field": field_name, "value": str(val)},
         )
-        request.flash(
-            "success", self.t(request, "Updated {count} items", count=count)
-        )
+        request.flash("success", self.t(request, "Updated {count} items", count=count))
         return None
 
-    def _bulk_custom_action(self, request: Any, entry: dict[str, Any], ids: list[int], action: str) -> None:
+    def _bulk_custom_action(
+        self, request: Any, entry: dict[str, Any], ids: list[int], action: str
+    ) -> None:
         model = entry["model"]
         fn = getattr(model, action, None)
         if not fn:
             request.flash(
                 "error",
-                self.t(
-                    request, "Action '{action}' not found on model", action=action
-                ),
+                self.t(request, "Action '{action}' not found on model", action=action),
             )
             return
 
@@ -360,7 +378,9 @@ class CRUDViewsMixin:
             ),
         )
 
-    def _handle_soft_delete_bulk_action(self, request: Any, model: Any, ids: list[int], action: str) -> bool:
+    def _handle_soft_delete_bulk_action(
+        self, request: Any, model: Any, ids: list[int], action: str
+    ) -> bool:
         if not model._soft_delete_field:
             return False
         if action == "force_delete":
@@ -371,7 +391,9 @@ class CRUDViewsMixin:
             return True
         return False
 
-    def _dispatch_bulk_action(self, request: Any, entry: dict[str, Any], ids: list[int], action: str) -> Any:
+    def _dispatch_bulk_action(
+        self, request: Any, entry: dict[str, Any], ids: list[int], action: str
+    ) -> Any:
         model = entry["model"]
         if action == "delete":
             return self._bulk_delete(request, entry, ids)
@@ -445,7 +467,9 @@ class CRUDViewsMixin:
         except ValueError:
             return 20
 
-    def _apply_lookup_search(self, query: Any, model: Any, searchable: list[str], q: str) -> None:
+    def _apply_lookup_search(
+        self, query: Any, model: Any, searchable: list[str], q: str
+    ) -> None:
         placeholders = []
         for f in searchable:
             if model._valid_column(f):
@@ -484,18 +508,35 @@ class CRUDViewsMixin:
         request.content_type = "application/json"
         return json.dumps(data)
 
-    _PRIVILEGE_FIELDS = ("is_admin", "is_superuser", "is_staff", "permissions", "role", "roles")
+    _PRIVILEGE_FIELDS = (
+        "is_admin",
+        "is_superuser",
+        "is_staff",
+        "permissions",
+        "role",
+        "roles",
+    )
 
     def _is_blocked_import_attribute(self, field: Any) -> bool:
-        for attr in ("protected", "is_timestamp", "is_soft_delete", "is_password", "is_file"):
+        for attr in (
+            "protected",
+            "is_timestamp",
+            "is_soft_delete",
+            "is_password",
+            "is_file",
+        ):
             if getattr(field, attr, False):
                 return True
         return False
 
     def _is_populated_slug(self, field: Any) -> bool:
-        return bool(getattr(field, "is_slug", False) and getattr(field, "populate_from", None))
+        return bool(
+            getattr(field, "is_slug", False) and getattr(field, "populate_from", None)
+        )
 
-    def _is_importable_field(self, field: Any, name: str, allow_privileged: bool = False) -> bool:
+    def _is_importable_field(
+        self, field: Any, name: str, allow_privileged: bool = False
+    ) -> bool:
         if self._is_blocked_import_attribute(field):
             return False
         if self._is_populated_slug(field):
@@ -508,7 +549,9 @@ class CRUDViewsMixin:
         Privilege fields (is_admin, permissions, roles, ...) are stripped unless the
         importing user is a super-admin, mirroring _strip_secured_fields for the form path.
         """
-        allow_privileged = bool(request and getattr(getattr(request, "user", None), "is_admin", False))
+        allow_privileged = bool(
+            request and getattr(getattr(request, "user", None), "is_admin", False)
+        )
         return [
             name
             for name, field in model._fields.items()
@@ -583,7 +626,9 @@ class CRUDViewsMixin:
             return ""
         return str(v).strip()
 
-    def _parse_csv_cell_entry(self, model: Any, importable: list[str], k: str, v: Any) -> tuple[str, Any] | None:
+    def _parse_csv_cell_entry(
+        self, model: Any, importable: list[str], k: str, v: Any
+    ) -> tuple[str, Any] | None:
         if not k:
             return None
         key = k.strip()
@@ -595,7 +640,9 @@ class CRUDViewsMixin:
             return key, None
         return key, self._coerce_csv_cell(key, field, val)
 
-    def _parse_csv_row(self, model: Any, importable: list[str], row: dict[str, Any]) -> dict[str, Any]:
+    def _parse_csv_row(
+        self, model: Any, importable: list[str], row: dict[str, Any]
+    ) -> dict[str, Any]:
         data = {}
         for k, v in row.items():
             entry = self._parse_csv_cell_entry(model, importable, k, v)
@@ -612,7 +659,9 @@ class CRUDViewsMixin:
                     return item
         return None
 
-    def _process_csv_row(self, model: Any, data: dict[str, Any], update_existing: bool) -> str | None:
+    def _process_csv_row(
+        self, model: Any, data: dict[str, Any], update_existing: bool
+    ) -> str | None:
         item = None
         if update_existing:
             if data.get("id"):
@@ -628,7 +677,9 @@ class CRUDViewsMixin:
         model.create(**data)
         return "created"
 
-    def _flash_import_results(self, request: Any, created: int, updated: int, failed: int) -> None:
+    def _flash_import_results(
+        self, request: Any, created: int, updated: int, failed: int
+    ) -> None:
         if failed == 0:
             msg = self.t(request, "Imported {count} rows", count=created + updated)
             if updated:
@@ -653,7 +704,14 @@ class CRUDViewsMixin:
         if str(e) != "File too large":
             request.flash("error", self.t(request, "CSV parse error: {error}", error=e))
 
-    def _process_csv_import(self, request: Any, model: Any, importable: list[str], upload: Any, update_existing: bool) -> dict[str, Any] | None:
+    def _process_csv_import(
+        self,
+        request: Any,
+        model: Any,
+        importable: list[str],
+        upload: Any,
+        update_existing: bool,
+    ) -> dict[str, Any] | None:
         try:
             text = self._validate_and_read_csv(request, upload)
             reader = csv.DictReader(io.StringIO(text))
@@ -677,7 +735,12 @@ class CRUDViewsMixin:
                 changes={"created": created, "updated": updated, "failed": failed},
             )
             self._flash_import_results(request, created, updated, failed)
-            return {"created": created, "updated": updated, "failed": failed, "errors": errors}
+            return {
+                "created": created,
+                "updated": updated,
+                "failed": failed,
+                "errors": errors,
+            }
         except Exception as e:
             self._handle_csv_exception(request, e)
             return None
@@ -692,7 +755,9 @@ class CRUDViewsMixin:
             if not upload or not upload.filename:
                 request.flash("error", self.t(request, "Choose a CSV file to upload."))
             else:
-                report = self._process_csv_import(request, model, importable, upload, update_existing)
+                report = self._process_csv_import(
+                    request, model, importable, upload, update_existing
+                )
         return self._render(
             request,
             "import.html",
@@ -716,7 +781,9 @@ class CRUDViewsMixin:
             return self.t(request, "Edit {name}", name=self.t(request, name))
         return self.t(request, "New {name}", name=self.t(request, name))
 
-    def _build_edit_breadcrumbs(self, request: Any, entry: dict[str, Any], item: Any) -> list[dict[str, Any]]:
+    def _build_edit_breadcrumbs(
+        self, request: Any, entry: dict[str, Any], item: Any
+    ) -> list[dict[str, Any]]:
         is_new = bool(not item or not getattr(item, "id", None))
         return [
             {"label": self.t(request, "Dashboard"), "url": self.prefix},
@@ -741,7 +808,14 @@ class CRUDViewsMixin:
         if meta:
             meta.pop(name, None)
 
-    def _strip_secured_fields(self, request: Any, form: Form, meta: dict[str, Any] | None, is_role: bool, editing_self: bool) -> None:
+    def _strip_secured_fields(
+        self,
+        request: Any,
+        form: Form,
+        meta: dict[str, Any] | None,
+        is_role: bool,
+        editing_self: bool,
+    ) -> None:
         if is_role:
             form._fields.pop("permissions", None)
             self._pop_meta(meta, "permissions")
@@ -765,14 +839,23 @@ class CRUDViewsMixin:
             return True
         return bool(self._can(request, "roles", "edit"))
 
-    def _is_roles_widget_applicable(self, request: Any, is_user: bool, editing_self: bool) -> bool:
+    def _is_roles_widget_applicable(
+        self, request: Any, is_user: bool, editing_self: bool
+    ) -> bool:
         if not is_user:
             return False
         if editing_self:
             return False
         return self._can_edit_roles(request)
 
-    def _build_edit_m2m(self, request: Any, entry: dict[str, Any], item: Any, is_user: bool, editing_self: bool) -> list[dict[str, Any]]:
+    def _build_edit_m2m(
+        self,
+        request: Any,
+        entry: dict[str, Any],
+        item: Any,
+        is_user: bool,
+        editing_self: bool,
+    ) -> list[dict[str, Any]]:
         m2m = self._build_m2m(entry["model"], item)
         if self._is_roles_widget_applicable(request, is_user, editing_self):
             w = self._build_user_roles_widget(item)
@@ -780,7 +863,9 @@ class CRUDViewsMixin:
                 m2m = [w] + self._filter_m2m_roles(m2m)
         return m2m
 
-    def _is_editing_self(self, request: Any, entry: dict[str, Any], item: Any, is_user: bool) -> bool:
+    def _is_editing_self(
+        self, request: Any, entry: dict[str, Any], item: Any, is_user: bool
+    ) -> bool:
         if not item:
             return False
         if not getattr(item, "id", None):
@@ -789,7 +874,9 @@ class CRUDViewsMixin:
             return False
         return bool(self._is_self(request, entry, item))
 
-    def _get_can_delete_perm(self, request: Any, entry: dict[str, Any], editing_self: bool) -> bool:
+    def _get_can_delete_perm(
+        self, request: Any, entry: dict[str, Any], editing_self: bool
+    ) -> bool:
         if not entry["can_delete"]:
             return False
         if editing_self:
@@ -848,7 +935,9 @@ class CRUDViewsMixin:
             editing_self=editing_self,
         )
 
-    def _build_detail_breadcrumbs(self, request: Any, entry: dict[str, Any], item: Any) -> list[dict[str, Any]]:
+    def _build_detail_breadcrumbs(
+        self, request: Any, entry: dict[str, Any], item: Any
+    ) -> list[dict[str, Any]]:
         name = entry["label"][:-1] if entry["label"].endswith("s") else entry["label"]
         title = _display(item) if item else self.t(request, name)
         return [
@@ -867,7 +956,9 @@ class CRUDViewsMixin:
                 selected.append({"label": opt["label"]})
         return selected
 
-    def _build_detail_m2m(self, entry: dict[str, Any], item: Any, is_user: bool) -> list[dict[str, Any]]:
+    def _build_detail_m2m(
+        self, entry: dict[str, Any], item: Any, is_user: bool
+    ) -> list[dict[str, Any]]:
         m2m = self._build_m2m(entry["model"], item)
         if is_user:
             w = self._build_user_roles_widget(item)
@@ -917,7 +1008,9 @@ class CRUDViewsMixin:
             breadcrumbs=breadcrumbs,
         )
 
-    def _is_field_skipped(self, name: str, field: Any, readonly: set[str], form_exclude: set[str]) -> bool:
+    def _is_field_skipped(
+        self, name: str, field: Any, readonly: set[str], form_exclude: set[str]
+    ) -> bool:
         if name in readonly:
             return True
         if name in form_exclude:
@@ -994,7 +1087,9 @@ class CRUDViewsMixin:
             return upload_to
         return ""
 
-    def _save_uploaded_file(self, request: Any, item: Any, name: str, field: Any, upload: Any) -> None:
+    def _save_uploaded_file(
+        self, request: Any, item: Any, name: str, field: Any, upload: Any
+    ) -> None:
         upload_to = self._get_upload_to_path(field)
         try:
             upload.save(
@@ -1005,7 +1100,9 @@ class CRUDViewsMixin:
         except ValueError as e:
             request.flash("error", str(e))
 
-    def _handle_file_upload(self, request: Any, item: Any, name: str, field: Any) -> None:
+    def _handle_file_upload(
+        self, request: Any, item: Any, name: str, field: Any
+    ) -> None:
         upload = request.files.get(name)
         if not upload:
             return
@@ -1024,7 +1121,9 @@ class CRUDViewsMixin:
             return False
         return ":" in raw
 
-    def _apply_morph_fields(self, item: Any, fk_type: str, fk_id: str, raw: Any) -> None:
+    def _apply_morph_fields(
+        self, item: Any, fk_type: str, fk_id: str, raw: Any
+    ) -> None:
         try:
             type_value, id_value = raw.split(":", 1)
             setattr(item, fk_type, type_value)
@@ -1054,6 +1153,7 @@ class CRUDViewsMixin:
     def _sanitize_field_content(self, field: Any, raw: Any) -> Any:
         if getattr(field, "wysiwyg", False) and raw:
             from ...utils.html_sanitizer import sanitize_html
+
             return sanitize_html(raw)
         return raw
 
@@ -1100,12 +1200,23 @@ class CRUDViewsMixin:
     def _is_admin_self_edit(self, name: str, editing_self: bool) -> bool:
         return bool(editing_self and name == "is_admin")
 
-    def _handle_special_apply_fields(self, request: Any, entry: dict[str, Any], name: str, field: Any, item: Any, is_role: bool, editing_self: bool) -> bool:
+    def _handle_special_apply_fields(
+        self,
+        request: Any,
+        entry: dict[str, Any],
+        name: str,
+        field: Any,
+        item: Any,
+        is_role: bool,
+        editing_self: bool,
+    ) -> bool:
         if getattr(field, "is_password", False):
             self._handle_password_field(request, name, item)
             return True
 
-        if self._is_field_skipped(name, field, set(entry["readonly_fields"]), set(entry["form_exclude"])):
+        if self._is_field_skipped(
+            name, field, set(entry["readonly_fields"]), set(entry["form_exclude"])
+        ):
             return True
 
         if self._is_permissions_field(name, is_role):
@@ -1115,8 +1226,20 @@ class CRUDViewsMixin:
 
         return self._is_admin_self_edit(name, editing_self)
 
-    def _apply_single_field(self, request: Any, entry: dict[str, Any], name: str, field: Any, item: Any, form: Form, is_role: bool, editing_self: bool) -> None:
-        if self._handle_special_apply_fields(request, entry, name, field, item, is_role, editing_self):
+    def _apply_single_field(
+        self,
+        request: Any,
+        entry: dict[str, Any],
+        name: str,
+        field: Any,
+        item: Any,
+        form: Form,
+        is_role: bool,
+        editing_self: bool,
+    ) -> None:
+        if self._handle_special_apply_fields(
+            request, entry, name, field, item, is_role, editing_self
+        ):
             return
 
         if getattr(field, "is_file", False):
@@ -1145,10 +1268,14 @@ class CRUDViewsMixin:
         is_user = model.__name__ == auth_name
         editing_self = bool(is_user and self._is_self(request, entry, item))
         for name, field in model._fields.items():
-            self._apply_single_field(request, entry, name, field, item, form, is_role, editing_self)
+            self._apply_single_field(
+                request, entry, name, field, item, form, is_role, editing_self
+            )
         return True
 
-    def _is_role_sync_authorized(self, request: Any, name: str, editing_self: bool) -> bool:
+    def _is_role_sync_authorized(
+        self, request: Any, name: str, editing_self: bool
+    ) -> bool:
         if name != "roles":
             return True
         if getattr(request.user, "is_admin", False):
@@ -1182,7 +1309,9 @@ class CRUDViewsMixin:
             return False
         return name == "roles"
 
-    def _sync_single_relation(self, request: Any, item: Any, name: str, editing_self: bool) -> None:
+    def _sync_single_relation(
+        self, request: Any, item: Any, name: str, editing_self: bool
+    ) -> None:
         if not self._is_role_sync_authorized(request, name, editing_self):
             return
 
@@ -1208,18 +1337,26 @@ class CRUDViewsMixin:
         if request.form.get("_save_add"):
             raise RedirectException(self.prefix + "/" + slug + "/new")
         if request.form.get("_save_continue"):
-            raise RedirectException(
-                self.prefix + "/" + slug + "/" + str(item_id)
-            )
+            raise RedirectException(self.prefix + "/" + slug + "/" + str(item_id))
         raise RedirectException(self.prefix + "/" + slug)
 
-    def _handle_create_model_error(self, request: Any, entry: dict[str, Any], item: Any, form: Form, meta: Any, e: ModelError) -> Any:
+    def _handle_create_model_error(
+        self,
+        request: Any,
+        entry: dict[str, Any],
+        item: Any,
+        form: Form,
+        meta: Any,
+        e: ModelError,
+    ) -> Any:
         errors = {e.field: str(e)} if e.field else {"_": str(e)}
         return self._edit_form(
             request, entry, item, form=form, meta=meta, errors=errors
         )
 
-    def _save_and_finalize_creation(self, request: Any, entry: dict[str, Any], item: Any, form: Form, meta: Any) -> None:
+    def _save_and_finalize_creation(
+        self, request: Any, entry: dict[str, Any], item: Any, form: Form, meta: Any
+    ) -> None:
         try:
             item.save()
         except ModelError as e:
@@ -1244,7 +1381,9 @@ class CRUDViewsMixin:
             try:
                 self._save_and_finalize_creation(request, entry, item, form, meta)
             except ModelError as e:
-                return self._handle_create_model_error(request, entry, item, form, meta, e)
+                return self._handle_create_model_error(
+                    request, entry, item, form, meta, e
+                )
         except RedirectException:
             raise
         except Exception as e:
@@ -1259,7 +1398,13 @@ class CRUDViewsMixin:
         privilege_fields = ["is_admin", "roles", "role", "permissions"]
         return any(field in diff for field in privilege_fields)
 
-    def _check_privilege_change_session_regeneration(self, request: Any, entry: dict[str, Any], item: Any, diff: dict[str, Any] | None) -> None:
+    def _check_privilege_change_session_regeneration(
+        self,
+        request: Any,
+        entry: dict[str, Any],
+        item: Any,
+        diff: dict[str, Any] | None,
+    ) -> None:
         if not diff:
             return
         auth_name = self.app.config.get("AUTH_MODEL", "User")
@@ -1271,7 +1416,9 @@ class CRUDViewsMixin:
             if self._has_privilege_diff(diff):
                 request.session_regenerate()
 
-    def _save_and_finalize_update(self, request: Any, entry: dict[str, Any], item: Any, before: Any) -> None:
+    def _save_and_finalize_update(
+        self, request: Any, entry: dict[str, Any], item: Any, before: Any
+    ) -> None:
         try:
             item.save()
         except ModelError as e:
@@ -1304,7 +1451,9 @@ class CRUDViewsMixin:
             try:
                 self._save_and_finalize_update(request, entry, item, before)
             except ModelError as e:
-                return self._handle_create_model_error(request, entry, item, form, meta, e)
+                return self._handle_create_model_error(
+                    request, entry, item, form, meta, e
+                )
         except RedirectException:
             raise
         except Exception as e:

@@ -28,7 +28,9 @@ class _JSONFormatter(logging.Formatter):
         if record.exc_info and record.exc_info[1]:
             entry["exception"] = str(record.exc_info[1])
 
-    def _add_extra_fields(self, record: logging.LogRecord, entry: dict[str, Any]) -> None:
+    def _add_extra_fields(
+        self, record: logging.LogRecord, entry: dict[str, Any]
+    ) -> None:
         for key in ("method", "path", "status", "duration_ms", "ip"):
             val = getattr(record, key, None)
             if val is not None:

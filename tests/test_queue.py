@@ -74,7 +74,9 @@ def test_worker_loop() -> None:
     from asok.cli.worker import run_worker
 
     with patch.dict(sys.modules, {"redis": mock_redis}):
-        with patch.dict(os.environ, {"ASOK_QUEUE_BACKEND": "redis", "SECRET_KEY": secret}):
+        with patch.dict(
+            os.environ, {"ASOK_QUEUE_BACKEND": "redis", "SECRET_KEY": secret}
+        ):
             global _dummy_task_executed
             _dummy_task_executed = False
 

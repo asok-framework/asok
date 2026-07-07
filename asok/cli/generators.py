@@ -121,9 +121,11 @@ def _do_make_migration(name: str, mig_dir: str) -> None:
 
     from asok.orm import MODELS_REGISTRY
     from asok.orm.migrations.state import ProjectState
+
     current_state = ProjectState.from_codebase(MODELS_REGISTRY)
 
     from asok.orm.migrations.autodetector import MigrationAutodetector
+
     autodetector = MigrationAutodetector(historical_state, current_state)
     operations = autodetector.changes()
 
@@ -134,10 +136,12 @@ def _do_make_migration(name: str, mig_dir: str) -> None:
     _write_migration_file(name, mig_dir, mig_files, operations)
 
 
-def _write_migration_file(name: str, mig_dir: str, mig_files: list[str], operations: list[Any]) -> None:
+def _write_migration_file(
+    name: str, mig_dir: str, mig_files: list[str], operations: list[Any]
+) -> None:
     dependencies = []
     if mig_files:
-        dependencies.append(mig_files[-1][:-3]) # Strip .py
+        dependencies.append(mig_files[-1][:-3])  # Strip .py
 
     filepath = _resolve_migration_filepath(name, mig_dir)
     if filepath is None:
@@ -147,7 +151,9 @@ def _write_migration_file(name: str, mig_dir: str, mig_files: list[str], operati
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
-    Style.success(f"Created migration: {Style.BOLD}{os.path.basename(filepath)}{Style.RESET}")
+    Style.success(
+        f"Created migration: {Style.BOLD}{os.path.basename(filepath)}{Style.RESET}"
+    )
 
 
 def _resolve_migration_filepath(name: str, mig_dir: str):
@@ -181,9 +187,9 @@ def _is_versioned_migration_file(f: str) -> bool:
     return f.endswith(".py") and f[:4].isdigit()
 
 
-
 def _classify_migrations(mig_dir: str, mig_files: list[str]) -> tuple[list, list]:
     import importlib.util as _ilu
+
     class_migrations = []
     legacy_files = []
 
@@ -214,10 +220,13 @@ def _apply_class_migrations_to_state(state: Any, class_migrations: list) -> None
 
 def _run_legacy_in_memory(legacy_files: list) -> Any:
     import sqlite3
+
     conn = sqlite3.connect(":memory:")
+
     class MemoryConnWrapper:
         def __init__(self, db_conn):
             self.db_conn = db_conn
+
         def execute(self, sql, *args):
             return self.db_conn.execute(sql, *args)
 
@@ -233,20 +242,25 @@ def _run_legacy_in_memory(legacy_files: list) -> Any:
 
 def _inspect_legacy_sqlite_tables(conn: Any) -> dict:
     from asok.orm.migrations.state import VirtualModelState
+
     cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_asok_%'")
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_asok_%'"
+    )
     tables = [row[0] for row in cursor.fetchall()]
 
     models = {}
     for table in tables:
         fields = _inspect_legacy_sqlite_fields(cursor, table)
         model_name = _infer_model_name_from_table(table)
-        models[model_name] = VirtualModelState(name=model_name, table=table, fields=fields)
+        models[model_name] = VirtualModelState(
+            name=model_name, table=table, fields=fields
+        )
     return models
 
 
 def _inspect_legacy_sqlite_fields(cursor: Any, table: str) -> dict:
-    cursor.execute(f"PRAGMA table_info(\"{table}\")")
+    cursor.execute(f'PRAGMA table_info("{table}")')
     cols = cursor.fetchall()
     fields = {}
     for col in cols:
@@ -264,12 +278,12 @@ def _inspect_legacy_sqlite_fields(cursor: Any, table: str) -> dict:
 
 
 def _infer_model_name_from_table(table: str) -> str:
-    parts = table.split('_')
+    parts = table.split("_")
     model_name = "".join(p.capitalize() for p in parts)
-    if model_name.endswith('s'):
+    if model_name.endswith("s"):
         model_name = model_name[:-1]
-    if model_name.endswith('ie'):
-        model_name = model_name[:-2] + 'y'
+    if model_name.endswith("ie"):
+        model_name = model_name[:-2] + "y"
     return model_name
 
 
@@ -294,8 +308,9 @@ def _reconstruct_historical_state(mig_dir: str, mig_files: list[str]) -> Any:
     return state
 
 
-
-def _build_declarative_migration_file_content(name: str, dependencies: list[str], operations: list[Any]) -> str:
+def _build_declarative_migration_file_content(
+    name: str, dependencies: list[str], operations: list[Any]
+) -> str:
     dep_list = ",\n        ".join(repr(d) for d in dependencies)
     op_list = ",\n        ".join(op.deconstruct() for op in operations)
     return f'''"""
@@ -403,11 +418,15 @@ def _build_migration_sql(engine) -> tuple[list[str], list[str]]:
     up_sql: list[str] = []
     down_sql: list[str] = []
     for model_name, model_cls in MODELS_REGISTRY.items():
-        _build_model_migration_sql(engine, model_name, model_cls, up_sql, down_sql, is_sqlite)
+        _build_model_migration_sql(
+            engine, model_name, model_cls, up_sql, down_sql, is_sqlite
+        )
     return up_sql, down_sql
 
 
-def _build_model_migration_sql(engine, model_name, model_cls, up_sql, down_sql, is_sqlite) -> None:
+def _build_model_migration_sql(
+    engine, model_name, model_cls, up_sql, down_sql, is_sqlite
+) -> None:
     table = model_cls._table
     if not engine.table_exists(table):
         Style.info(f"  + New table detected: {table}")
@@ -435,7 +454,9 @@ def _build_create_table_columns(engine, model_cls) -> list[str]:
         if f_name == "id":
             fields.append(pk_def)
             continue
-        fields.append(_build_column_def(engine, f_name, f_obj, include_constraints=True))
+        fields.append(
+            _build_column_def(engine, f_name, f_obj, include_constraints=True)
+        )
     return fields
 
 
@@ -469,7 +490,9 @@ def _emit_alter_table(engine, model_cls, table: str, up_sql, down_sql) -> None:
         Style.info(f"    + New column detected: {table}.{f_name}")
         col_sql = _build_column_def(engine, f_name, f_obj, include_constraints=False)
         q_table = engine.quote_identifier(table)
-        up_sql.append(f"conn.execute({repr(f'ALTER TABLE {q_table} ADD COLUMN {col_sql}')})")
+        up_sql.append(
+            f"conn.execute({repr(f'ALTER TABLE {q_table} ADD COLUMN {col_sql}')})"
+        )
         down_sql.append(
             f"# Column drop depends on DB: cannot easily drop column {f_name} from {table}"
         )
@@ -483,7 +506,9 @@ def _emit_pivot_tables(engine, model_name, model_cls, up_sql, down_sql) -> None:
         _emit_one_pivot(engine, model_name, rel, processed_pivots, up_sql, down_sql)
 
 
-def _emit_one_pivot(engine, model_name: str, rel, processed_pivots, up_sql, down_sql) -> None:
+def _emit_one_pivot(
+    engine, model_name: str, rel, processed_pivots, up_sql, down_sql
+) -> None:
     pivot, pfk, pofk = _resolve_pivot_identifiers(model_name, rel)
     if pivot in processed_pivots:
         return
@@ -503,7 +528,9 @@ def _resolve_pivot_identifiers(model_name: str, rel) -> tuple[str, str, str]:
     return pivot, pfk, pofk
 
 
-def _emit_pivot_table_sql(engine, pivot: str, pfk: str, pofk: str, up_sql, down_sql) -> None:
+def _emit_pivot_table_sql(
+    engine, pivot: str, pfk: str, pofk: str, up_sql, down_sql
+) -> None:
     q_pivot = engine.quote_identifier(pivot)
     q_pfk = engine.quote_identifier(pfk)
     q_pofk = engine.quote_identifier(pofk)
@@ -516,7 +543,9 @@ def _emit_pivot_table_sql(engine, pivot: str, pfk: str, pofk: str, up_sql, down_
     down_sql.append(f"conn.execute({repr(f'DROP TABLE IF EXISTS {q_pivot}')})")
 
 
-def _emit_fts_changes(engine, model_cls, table: str, is_sqlite: bool, up_sql, down_sql) -> None:
+def _emit_fts_changes(
+    engine, model_cls, table: str, is_sqlite: bool, up_sql, down_sql
+) -> None:
     if not model_cls._search_fields:
         return
     if is_sqlite:
@@ -536,11 +565,15 @@ def _emit_sqlite_fts(model_cls, table: str, engine, up_sql, down_sql) -> None:
         f"({f_names}, content='{table}', content_rowid='id')"
     )
     up_sql.append(f"conn.execute({repr(sql_fts)})")
-    up_sql.append(f"conn.execute({repr(f'INSERT INTO {fts_table}({fts_table}) VALUES(' + repr('rebuild') + ')')})")
+    up_sql.append(
+        f"conn.execute({repr(f'INSERT INTO {fts_table}({fts_table}) VALUES(' + repr('rebuild') + ')')})"
+    )
     _emit_sqlite_fts_triggers(model_cls, table, fts_table, up_sql, down_sql)
 
 
-def _emit_sqlite_fts_triggers(model_cls, table: str, fts_table: str, up_sql, down_sql) -> None:
+def _emit_sqlite_fts_triggers(
+    model_cls, table: str, fts_table: str, up_sql, down_sql
+) -> None:
     triggers = _build_sqlite_fts_triggers(model_cls, table, fts_table)
     for sql in triggers:
         up_sql.append(f"conn.execute({repr(sql)})")
@@ -551,7 +584,9 @@ def _emit_sqlite_fts_triggers(model_cls, table: str, fts_table: str, up_sql, dow
         down_sql.append(f"conn.execute({repr(drop_trigger_sql)})")
 
 
-def _build_sqlite_fts_triggers(model_cls, table: str, fts_table: str) -> tuple[str, str, str]:
+def _build_sqlite_fts_triggers(
+    model_cls, table: str, fts_table: str
+) -> tuple[str, str, str]:
     f_quoted = ", ".join(f'"{n}"' for n in model_cls._search_fields)
     f_new = ", ".join(f'new."{n}"' for n in model_cls._search_fields)
     f_old = ", ".join(f'old."{n}"' for n in model_cls._search_fields)
@@ -598,17 +633,12 @@ def _emit_mysql_fulltext(model_cls, table: str, engine, up_sql, down_sql) -> Non
     )
 
 
-
-
-
 def make_page(name: str) -> None:
     """Generate a page directory with page.py and page.html."""
     if not _is_valid_page_name(name):
         return
     page_dir = f"src/pages/{name}"
     os.makedirs(page_dir, exist_ok=True)
-    _ensure_init_py("src/pages")
-    _ensure_init_py(page_dir)
     _write_page_py(page_dir)
     _write_page_html(page_dir, name)
     Style.success(f"Page created: {Style.BOLD}{page_dir}/...{Style.RESET}")
@@ -671,7 +701,6 @@ def make_component(name: str) -> None:
     if not _is_valid_scaffold_name(name, "component"):
         return
     os.makedirs("src/components", exist_ok=True)
-    _ensure_init_py("src/components")
     filename = f"src/components/{name.lower()}.py"
     if os.path.exists(filename):
         print(f"  {filename} already exists.")

@@ -28,11 +28,13 @@ def _check_name_chars(app_name: str) -> None:
         )
         raise ValueError("Invalid chars")
 
+
 def _check_name_path(app_name: str) -> None:
     for sep in ("..", "/", "\\"):
         if sep in app_name:
             Style.error("Project name cannot contain path separators or '..'")
             raise ValueError("Path separators")
+
 
 def _validate_app_name(app_name: str) -> None:
     if app_name == ".":
@@ -48,6 +50,7 @@ def _validate_app_name(app_name: str) -> None:
         raise ValueError("Name too long")
     _check_name_path(app_name)
     _check_name_chars(app_name)
+
 
 def _create_directories(root: str) -> None:
     for d in [
@@ -67,29 +70,39 @@ def _create_directories(root: str) -> None:
         dir_path = os.path.join(root, d)
         os.makedirs(dir_path, exist_ok=True)
         if d in (
-            "src",
-            "src/components",
             "src/middlewares",
             "src/models",
-            "src/pages",
             "src/migrations",
         ):
             _ensure_init_py(dir_path)
+
 
 def _write_file(root: str, path: str, content: str) -> None:
     with open(os.path.join(root, path), "w", encoding="utf-8") as f:
         f.write(content)
 
-def _write_scaffold_files(root: str, app_name: str, tailwind: bool, admin: bool) -> None:
+
+def _write_scaffold_files(
+    root: str, app_name: str, tailwind: bool, admin: bool
+) -> None:
     if admin:
-        _write_file(root, "wsgi.py", "from asok import Asok\nfrom asok.admin import Admin\n\napp = Asok()\nAdmin(app)\n")
+        _write_file(
+            root,
+            "wsgi.py",
+            "from asok import Asok\nfrom asok.admin import Admin\n\napp = Asok()\nAdmin(app)\n",
+        )
     else:
         _write_file(root, "wsgi.py", "from asok import Asok\n\napp = Asok()\n")
 
     import secrets
+
     secret_key = secrets.token_hex(32)
     _write_file(root, ".env", f"DEBUG=true\nSECRET_KEY={secret_key}\n")
-    _write_file(root, ".gitignore", "__pycache__/\n*.py[cod]\nvenv/\n.venv/\ndb.sqlite3\ndb.sqlite3-shm\ndb.sqlite3-wal\n.env\n.DS_Store\n.asok/\nsrc/partials/uploads/\nsrc/partials/css/base.build.css\n")
+    _write_file(
+        root,
+        ".gitignore",
+        "__pycache__/\n*.py[cod]\nvenv/\n.venv/\ndb.sqlite3\ndb.sqlite3-shm\ndb.sqlite3-wal\n.env\n.DS_Store\n.asok/\nsrc/partials/uploads/\nsrc/partials/css/base.build.css\n",
+    )
     _write_file(root, "src/partials/js/base.js", "")
     _write_file(root, "src/partials/uploads/.gitkeep", "")
     _write_file(root, "src/locales/en.json", "{}\n")
@@ -102,7 +115,10 @@ def _write_scaffold_files(root: str, app_name: str, tailwind: bool, admin: bool)
     )
 
     css_link = "css/base.build.css" if tailwind else "css/base.css"
-    _write_file(root, "src/partials/html/base.html", f"""<!DOCTYPE html>
+    _write_file(
+        root,
+        "src/partials/html/base.html",
+        f"""<!DOCTYPE html>
 <html lang="{{{{ request.lang }}}}">
 <head>
     <meta charset="UTF-8">
@@ -116,11 +132,15 @@ def _write_scaffold_files(root: str, app_name: str, tailwind: bool, admin: bool)
     <main>{{% block main %}}{{% endblock %}}</main>
 </body>
 </html>
-""")
+""",
+    )
 
     if tailwind:
         _write_file(root, "src/partials/css/base.css", '@import "tailwindcss";\n')
-        _write_file(root, "src/pages/page.html", """{% extends "html/base.html" %}
+        _write_file(
+            root,
+            "src/pages/page.html",
+            """{% extends "html/base.html" %}
 {% block title %}Welcome{% endblock %}
 
 {% block main %}
@@ -139,9 +159,13 @@ def _write_scaffold_files(root: str, app_name: str, tailwind: bool, admin: bool)
         </div>
     </div>
 {% endblock %}
-""")
+""",
+        )
     else:
-        _write_file(root, "src/partials/css/base.css", """* {
+        _write_file(
+            root,
+            "src/partials/css/base.css",
+            """* {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -196,8 +220,12 @@ code {
 code:hover {
   background: #334155;
 }
-""")
-        _write_file(root, "src/pages/page.html", """{% extends "html/base.html" %}
+""",
+        )
+        _write_file(
+            root,
+            "src/pages/page.html",
+            """{% extends "html/base.html" %}
 {% block title %}Welcome{% endblock %}
 
 {% block main %}
@@ -208,12 +236,20 @@ code:hover {
         <p>Edit <code>src/pages/page.html</code> to get started.</p>
     </div>
 {% endblock %}
-""")
+""",
+        )
 
-    _write_file(root, "src/pages/page.py", "from asok import Request\n\ndef render(request: Request):\n    return request.html('page.html')\n")
+    _write_file(
+        root,
+        "src/pages/page.py",
+        "from asok import Request\n\ndef render(request: Request):\n    return request.html('page.html')\n",
+    )
 
     if admin:
-        _write_file(root, "src/models/user.py", """from asok import Field, Model
+        _write_file(
+            root,
+            "src/models/user.py",
+            """from asok import Field, Model
 
 
 class User(Model):
@@ -225,7 +261,51 @@ class User(Model):
     totp_enabled = Field.Boolean(default=False)
     backup_codes = Field.String(nullable=True, hidden=True)
     created_at = Field.CreatedAt()
-""")
+""",
+        )
+        _write_file(
+            root,
+            "src/models/role.py",
+            """from asok import Field, Model
+
+
+class Role(Model):
+    name = Field.String(unique=True, nullable=False)
+    label = Field.String()
+    permissions = Field.String(default="")
+    created_at = Field.CreatedAt()
+
+    def __str__(self):
+        return self.label or self.name
+""",
+        )
+        _write_file(
+            root,
+            "src/models/admin_log.py",
+            """from asok import Field, Model
+
+
+class AdminLog(Model):
+    user_id = Field.Integer(nullable=True)
+    action = Field.String(nullable=False)
+    entity = Field.String(nullable=False)
+    entity_id = Field.Integer(nullable=True)
+    changes = Field.String()
+    created_at = Field.CreatedAt()
+
+    class Admin:
+        label = "Audit logs"
+        slug = "logs"
+        list_display = ["id", "created_at", "user_id", "action", "entity", "entity_id"]
+        list_filter = ["action", "entity"]
+        search_fields = ["action", "entity", "changes"]
+        per_page = 50
+        can_add = False
+        can_edit = False
+        can_delete = False
+""",
+        )
+
 
 def _run_post_install_setups(root: str, tailwind: bool, image: bool) -> None:
     from .tools import image_install, tailwind_build, tailwind_install
@@ -237,7 +317,9 @@ def _run_post_install_setups(root: str, tailwind: bool, image: bool) -> None:
             tailwind_build(root, minify=False)
         except Exception as e:
             Style.error(f"Tailwind setup failed: {e}")
-            print(f"  {Style.DIM}You can retry later with: asok tailwind --install{Style.RESET}\n")
+            print(
+                f"  {Style.DIM}You can retry later with: asok tailwind --install{Style.RESET}\n"
+            )
 
     if image:
         print()
@@ -247,6 +329,7 @@ def _run_post_install_setups(root: str, tailwind: bool, image: bool) -> None:
                 f.write("\nIMAGE_OPTIMIZATION=true\n")
         except Exception as e:
             Style.warn(f"Image optimization setup failed: {e}")
+
 
 def _resolve_options(
     tailwind: Optional[bool],
@@ -260,6 +343,7 @@ def _resolve_options(
     if image is None:
         image = Style.confirm("Add Image Optimization (WebP)?")
     return bool(tailwind), bool(admin), bool(image)
+
 
 def scaffold(
     app_name: str,
@@ -281,13 +365,17 @@ def scaffold(
         root = os.path.join(os.getcwd(), app_name)
         os.makedirs(root, exist_ok=True)
 
-    print(f"\n{Style.BOLD}{Style.CYAN}🚀 Creating Asok project: {Style.GREEN}{app_name}{Style.RESET}...")
+    print(
+        f"\n{Style.BOLD}{Style.CYAN}🚀 Creating Asok project: {Style.GREEN}{app_name}{Style.RESET}..."
+    )
 
     _create_directories(root)
     _write_scaffold_files(root, app_name, tailwind_opt, admin_opt)
     _run_post_install_setups(root, tailwind_opt, image_opt)
 
-    print(f"\n  {Style.GREEN}{Style.BOLD}✅ Project '{app_name}' created!{Style.RESET}\n")
+    print(
+        f"\n  {Style.GREEN}{Style.BOLD}✅ Project '{app_name}' created!{Style.RESET}\n"
+    )
     if root != os.getcwd():
         print(f"  {Style.DIM}$ cd {app_name}{Style.RESET}")
     print(f"  {Style.DIM}$ asok dev{Style.RESET}\n")

@@ -14,15 +14,18 @@ def _parse_datetime(dt: Union[datetime.datetime, str, None]) -> datetime.datetim
         return datetime.datetime.fromisoformat(dt.replace("Z", "+00:00"))
     return dt
 
+
 def _get_seconds_diff(dt: datetime.datetime) -> float:
     now = datetime.datetime.now(dt.tzinfo) if dt.tzinfo else datetime.datetime.now()
     diff = now - dt
     return diff.total_seconds()
 
+
 def _get_plural_suffix(count: int) -> str:
     if count > 1:
         return "s"
     return ""
+
 
 def _format_time_interval(seconds: float) -> str:
     if seconds < 0:
@@ -45,10 +48,12 @@ def _format_time_interval(seconds: float) -> str:
             return f"{count} {unit}{suffix} ago"
     return "just now"
 
+
 def _fallback_value(dt: Any) -> str:
     if isinstance(dt, str):
         return dt
     return ""
+
 
 def time_ago(dt: Union[datetime.datetime, str, None]) -> str:
     """Convert a datetime object or ISO string to a relative time string.

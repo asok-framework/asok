@@ -16,20 +16,27 @@ from .safestring import SafeString
 # ── Macro parameter parsing ─────────────────────────────────────────
 
 
-def parse_macro_params(raw_params: str) -> tuple[list[str], dict[str, str], Optional[str], Optional[str]]:
+def parse_macro_params(
+    raw_params: str,
+) -> tuple[list[str], dict[str, str], Optional[str], Optional[str]]:
     """Parse ``name, x=1, *args, **kwargs`` style macro params."""
     param_names: list[str] = []
     param_defaults: dict[str, str] = {}
     varargs: Optional[str] = None
     varkw: Optional[str] = None
     for param in (p.strip() for p in raw_params.split(",")):
-        varargs, varkw = _absorb_param(param, param_names, param_defaults, varargs, varkw)
+        varargs, varkw = _absorb_param(
+            param, param_names, param_defaults, varargs, varkw
+        )
     return param_names, param_defaults, varargs, varkw
 
 
 def _absorb_param(
-    param: str, param_names: list[str], param_defaults: dict[str, str],
-    varargs: Optional[str], varkw: Optional[str],
+    param: str,
+    param_names: list[str],
+    param_defaults: dict[str, str],
+    varargs: Optional[str],
+    varkw: Optional[str],
 ) -> tuple[Optional[str], Optional[str]]:
     if not param:
         return varargs, varkw
@@ -48,8 +55,13 @@ def _absorb_param(
 
 
 def bind_macro_args(
-    args: tuple, kwargs: dict, m_params: list[str], m_defaults: dict[str, str],
-    m_varargs: Optional[str], m_varkw: Optional[str], local_ctx: dict,
+    args: tuple,
+    kwargs: dict,
+    m_params: list[str],
+    m_defaults: dict[str, str],
+    m_varargs: Optional[str],
+    m_varkw: Optional[str],
+    local_ctx: dict,
 ) -> set[str]:
     used_kwargs: set[str] = set()
     for i, pname in enumerate(m_params):
@@ -61,18 +73,27 @@ def bind_macro_args(
 
 
 def _bind_var_collectors(
-    args: tuple, kwargs: dict, m_params: list[str],
-    m_varargs: Optional[str], m_varkw: Optional[str], local_ctx: dict,
+    args: tuple,
+    kwargs: dict,
+    m_params: list[str],
+    m_varargs: Optional[str],
+    m_varkw: Optional[str],
+    local_ctx: dict,
 ) -> None:
     if m_varargs:
-        local_ctx[m_varargs] = args[len(m_params):]
+        local_ctx[m_varargs] = args[len(m_params) :]
     if m_varkw:
         local_ctx[m_varkw] = {k: v for k, v in kwargs.items() if k not in m_params}
 
 
 def _bind_param(
-    pname: str, i: int, args: tuple, kwargs: dict, m_defaults: dict[str, str],
-    local_ctx: dict, used_kwargs: set[str],
+    pname: str,
+    i: int,
+    args: tuple,
+    kwargs: dict,
+    m_defaults: dict[str, str],
+    local_ctx: dict,
+    used_kwargs: set[str],
 ) -> None:
     if i < len(args):
         local_ctx[pname] = args[i]
@@ -180,7 +201,9 @@ def read_template_file(path: str, max_size: int = 1_000_000) -> Optional[str]:
 # ── Block range finding (nesting-aware) ─────────────────────────────
 
 
-def find_block_close(text: str, start_pos: int, re_open, re_close) -> Optional[tuple[int, int]]:
+def find_block_close(
+    text: str, start_pos: int, re_open, re_close
+) -> Optional[tuple[int, int]]:
     """Return ``(content_end, end_of_close_tag)`` for the matching endblock."""
     depth = 1
     pos = start_pos
@@ -236,8 +259,11 @@ def extract_child_blocks(text: str, re_open, re_close) -> dict[str, str]:
 
 
 def make_macro(
-    body: str, param_names: list[str], param_defaults: dict[str, str],
-    varargs: Optional[str], varkw: Optional[str],
+    body: str,
+    param_names: list[str],
+    param_defaults: dict[str, str],
+    varargs: Optional[str],
+    varkw: Optional[str],
     sibling_lookup: Optional[dict[str, Any]] = None,
     parent_ctx: Optional[dict[str, Any]] = None,
 ):
@@ -246,14 +272,18 @@ def make_macro(
     ``sibling_lookup`` is updated in place so sibling macros defined in the
     same file resolve at call time (post-parse) rather than at definition time.
     """
+
     def macro_fn(*args: Any, **kwargs: Any) -> SafeString:
         local_ctx = dict(parent_ctx or {})
         if sibling_lookup:
             local_ctx.update(sibling_lookup)
-        bind_macro_args(args, kwargs, param_names, param_defaults, varargs, varkw, local_ctx)
+        bind_macro_args(
+            args, kwargs, param_names, param_defaults, varargs, varkw, local_ctx
+        )
         from .engine import render_template_string
 
         return SafeString(render_template_string(body, local_ctx))
+
     return macro_fn
 
 
@@ -288,9 +318,12 @@ def _inside_description_meta(text_before: str) -> bool:
 
 
 _ORPHAN_PREFIXES = (
-    "{%- extends", "{% extends",
-    "{%- block", "{% block",
-    "{%- endblock", "{% endblock",
+    "{%- extends",
+    "{% extends",
+    "{%- block",
+    "{% block",
+    "{%- endblock",
+    "{% endblock",
 )
 
 

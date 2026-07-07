@@ -21,10 +21,22 @@ class TemplateMixin:
     """Mixin for template rendering, context management and static assets on Request."""
 
     _ASOK_DIRECTIVES = [
-        "asok-state", "asok-on:", "asok-text", "asok-show", "asok-hide",
-        "asok-class:", "asok-bind:", "asok-model", "asok-if", "asok-for",
-        "asok-init", "asok-ref", "asok-teleport", "asok-cloak",
-        "asok-fetch", "asok-fetch-async",
+        "asok-state",
+        "asok-on:",
+        "asok-text",
+        "asok-show",
+        "asok-hide",
+        "asok-class:",
+        "asok-bind:",
+        "asok-model",
+        "asok-if",
+        "asok-for",
+        "asok-init",
+        "asok-ref",
+        "asok-teleport",
+        "asok-cloak",
+        "asok-fetch",
+        "asok-fetch-async",
     ]
 
     def _initial_template_path(self: Any, filepath: str, root: str) -> str:
@@ -40,7 +52,11 @@ class TemplateMixin:
 
     def _swap_extension(path: str) -> str:
         base_path, current_ext = os.path.splitext(path)
-        target = ".asok" if current_ext == ".html" else (".html" if current_ext == ".asok" else None)
+        target = (
+            ".asok"
+            if current_ext == ".html"
+            else (".html" if current_ext == ".asok" else None)
+        )
         if target and os.path.isfile(base_path + target):
             return base_path + target
         return path
@@ -52,11 +68,15 @@ class TemplateMixin:
                 return path + ext
         return TemplateMixin._swap_extension(path)
 
+    def _is_partial_template(normalized: str) -> bool:
+        return any(
+            d in normalized
+            for d in ("/partials/", "/html/", "/components/", "/templates/")
+        )
+
     def _validate_template_name(path: str) -> None:  # noqa: N805
         """Raise ValueError if a page template has an invalid filename."""
-        normalized = path.replace("\\", "/")
-        is_partial = "/partials/" in normalized or "/html/" in normalized or "/components/" in normalized
-        if is_partial:
+        if TemplateMixin._is_partial_template(path.replace("\\", "/")):
             return
         basename = os.path.basename(path)
         if basename not in ("page.html", "page.asok"):
@@ -69,34 +89,42 @@ class TemplateMixin:
                 f"Note: Partials (src/partials/), layouts (src/html/), and components can have any name."
             )
 
-    def _resolve_template(self: Any, filepath: str) -> tuple[str, Any]:
-        """Convert a template path to its content and identify the partials roots.
+    def _search_template_roots(self: Any, root: str, filepath: str) -> str | None:
+        for r in self._template_search_roots(root):
+            cand = os.path.join(r, filepath)
+            if not os.path.isfile(cand):
+                cand = TemplateMixin._try_resolve_extensions(cand)
+            if os.path.isfile(cand):
+                return cand
+        return None
 
-        Returns the search roots as a list when third-party extensions register
-        their own ``templates/`` directory, so ``{% include "..." %}`` and
-        ``{% extends "..." %}`` can pull templates from those directories.
-        """
-        root = self.environ.get("asok.root", os.getcwd())
-        path = self._initial_template_path(filepath, root)
-
-        if not os.path.isfile(path):
-            path = TemplateMixin._try_resolve_extensions(path)
-
-        TemplateMixin._validate_template_name(path)
-
+    def _read_resolved_template(self: Any, path: str) -> str:
         app = self.environ.get("asok.app")
         if app:
-            content = app._read_template(path)
-        else:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
+            return app._read_template(path)
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
 
-        # Proactively scan template content for directives to enable the JS engine
+    def _resolve_template_file_path(self: Any, filepath: str, root: str) -> str:
+        path = self._initial_template_path(filepath, root)
+        if not os.path.isfile(path):
+            path = TemplateMixin._try_resolve_extensions(path)
+        if not os.path.isfile(path):
+            path = self._search_template_roots(root, filepath) or path
+        return path
+
+    def _check_asok_directives(self: Any, content: str) -> None:
         if any(attr in content for attr in TemplateMixin._ASOK_DIRECTIVES):
             self._asok_needs_directives = True
 
-        tpl_root = self._template_search_roots(root)
-        return content, tpl_root
+    def _resolve_template(self: Any, filepath: str) -> tuple[str, Any]:
+        """Convert a template path to its content and identify the partials roots."""
+        root = self.environ.get("asok.root", os.getcwd())
+        path = self._resolve_template_file_path(filepath, root)
+        TemplateMixin._validate_template_name(path)
+        content = self._read_resolved_template(path)
+        self._check_asok_directives(content)
+        return content, self._template_search_roots(root)
 
     def _template_search_roots(self: Any, root: str) -> list[str]:
         """Project's partials dir first, then any extension templates dir."""
@@ -131,11 +159,25 @@ class TemplateMixin:
 
         return app_ref._shared[name], False
 
-    def _resolve_shared_value(self, val: Any) -> Any:
+    def _is_request_factory(self, val: Any) -> bool:
+        try:
+            import inspect
+
+            sig = inspect.signature(val)
+            params = list(sig.parameters.keys())
+            return bool(params and params[0] in ("request", "req"))
+        except Exception:
+            return False
+
+    def _is_form_template(self, val: Any) -> bool:
         from asok.forms import Form
-        if isinstance(val, Form) and getattr(val, "_is_template", False):
+
+        return isinstance(val, Form) and getattr(val, "_is_template", False)
+
+    def _resolve_shared_value(self, val: Any) -> Any:
+        if self._is_form_template(val):
             return val._bind(self)
-        if not isinstance(val, Form) and callable(val):
+        if callable(val) and self._is_request_factory(val):
             return val(self)
         return val
 
@@ -188,6 +230,8 @@ class TemplateMixin:
             "static": self.static,
             "get_flashed_messages": self.get_flashed_messages,
             "meta": self.meta,
+            "csrf_input": getattr(self, "csrf_input", None),
+            "csrf_token": getattr(self, "csrf_token_value", ""),
         }
 
         # -- component() helper ----------------------------------------
@@ -262,16 +306,35 @@ class TemplateMixin:
         ctx.update(context)
         return ctx
 
-    def _render_block_header(self: Any, filepath: str, block_header: str, **context: Any) -> str:
-        names = [b.strip() for b in block_header.split(",")]
-        self._validate_block_names(names)
-        if len(names) == 1:
-            return self.block(filepath, names[0], **context)
+    def _render_multiple_blocks(
+        self: Any, filepath: str, names: list[str], **context: Any
+    ) -> str:
         parts = []
         for name in names:
             content = self.block(filepath, name, **context)
-            parts.append(f'<template data-block="{name}">{content}</template>')
+            # SECURITY: escape block name to prevent XSS via crafted X-Block header.
+            parts.append(
+                f'<template data-block="{html.escape(name, quote=True)}">{content}</template>'
+            )
         return "".join(parts)
+
+    def _render_block_header(
+        self: Any, filepath: str, block_header: str, **context: Any
+    ) -> str:
+        names = [b.strip().lstrip("#") for b in block_header.split(",") if b.strip()]
+        try:
+            self._validate_block_names(names)
+            if len(names) == 1:
+                return self.block(filepath, names[0], **context)
+            return self._render_multiple_blocks(filepath, names, **context)
+        except ValueError:
+            content, tpl_root = self._resolve_template(filepath)
+            return render_template_string(
+                content,
+                self._template_context(context),
+                root_dir=tpl_root,
+                inject_block_markers=True,
+            )
 
     def html(self: Any, filepath: str, **context: Any) -> str:
         """Render an HTML template and return the result as a string."""
@@ -321,6 +384,7 @@ class TemplateMixin:
         try:
             from asok.utils.css import scope_css
             from asok.utils.minify import minify_css
+
             with open(self.scoped_assets["css"], "r", encoding="utf-8") as f:
                 raw_css = f.read()
             scoped_css = scope_css(raw_css, page_id)
@@ -339,6 +403,7 @@ class TemplateMixin:
         try:
             from asok.utils.js import scope_js
             from asok.utils.minify import minify_js
+
             with open(self.scoped_assets["js"], "r", encoding="utf-8") as f:
                 raw_js = f.read()
             scoped_js = scope_js(raw_js, page_id) if page_id else raw_js
@@ -350,7 +415,14 @@ class TemplateMixin:
         except Exception:
             pass
 
-    def _yield_block_item(self: Any, name: str, tpl_source: str, tpl_root: str, is_spa_request: bool, **context: Any) -> Iterator[str]:
+    def _yield_block_item(
+        self: Any,
+        name: str,
+        tpl_source: str,
+        tpl_root: str,
+        is_spa_request: bool,
+        **context: Any,
+    ) -> Iterator[str]:
         """Yield a single rendered block. Uses 'tpl_source' (not 'content') so that
         a view calling stream(..., content=html) can pass 'content' through **context
         as a Jinja2 variable without causing a duplicate-argument TypeError."""
@@ -360,7 +432,8 @@ class TemplateMixin:
         tpl_ctx = self._template_context(context)
         block_html = render_block_string(tpl_source, name, tpl_ctx, root_dir=tpl_root)
         if is_spa_request:
-            yield f'<template data-block="{name}">{block_html}</template>'
+            # SECURITY: escape block name to prevent XSS via crafted X-Block header.
+            yield f'<template data-block="{html.escape(name, quote=True)}">{block_html}</template>'
         else:
             yield block_html
 
@@ -385,7 +458,9 @@ class TemplateMixin:
         is_spa_request = bool(self.environ.get("HTTP_X_BLOCK"))
 
         for name in names:
-            yield from self._yield_block_item(name, tpl_content, tpl_root, is_spa_request, **context)
+            yield from self._yield_block_item(
+                name, tpl_content, tpl_root, is_spa_request, **context
+            )
 
         # CRITICAL: Include scoped CSS/JS in SPA block responses
         yield from self._yield_scoped_assets(is_spa_request)
@@ -451,7 +526,9 @@ class TemplateMixin:
             block_html = render_block_string(content, name, tpl_ctx, root_dir=tpl_root)
 
             if is_spa:
-                parts.append(f'<template data-block="{name}">{block_html}</template>')
+                parts.append(
+                    f'<template data-block="{html.escape(name, quote=True)}">{block_html}</template>'
+                )
             else:
                 parts.append(block_html)
 
@@ -462,7 +539,9 @@ class TemplateMixin:
         candidates = [filepath.rsplit(".", 1)[0] + ".webp", filepath + ".webp"]
         for webp_path in candidates:
             full_parts = os.path.join(root, "src/partials", webp_path.lstrip("/"))
-            full_uploads = os.path.join(root, "src/partials/uploads", webp_path.lstrip("/"))
+            full_uploads = os.path.join(
+                root, "src/partials/uploads", webp_path.lstrip("/")
+            )
             if os.path.isfile(full_parts) or os.path.isfile(full_uploads):
                 return webp_path
         return filepath
@@ -478,14 +557,18 @@ class TemplateMixin:
 
     def _resolve_min_css(filepath: str, root: str) -> str:  # noqa: N805
         """Return the minified CSS path if a .min.css file exists."""
-        if not filepath.endswith(".css") or filepath.endswith((".min.css", ".build.css")):
+        if not filepath.endswith(".css") or filepath.endswith(
+            (".min.css", ".build.css")
+        ):
             return filepath
         min_path = filepath.rsplit(".", 1)[0] + ".min.css"
         if os.path.isfile(os.path.join(root, "src/partials", min_path.lstrip("/"))):
             return min_path
         return filepath
 
-    def _resolve_minified_path(self: Any, filepath: str, app_ref: Any, root: str) -> str:
+    def _resolve_minified_path(
+        self: Any, filepath: str, app_ref: Any, root: str
+    ) -> str:
         if not app_ref or app_ref.config.get("DEBUG"):
             return filepath
         new_path = TemplateMixin._resolve_min_js(filepath, root)
@@ -493,7 +576,9 @@ class TemplateMixin:
             return new_path
         return TemplateMixin._resolve_min_css(filepath, root)
 
-    def _resolve_static_target(self: Any, filepath: str, app_ref: Any, root: str) -> str:
+    def _resolve_static_target(
+        self: Any, filepath: str, app_ref: Any, root: str
+    ) -> str:
         """Resolve the best available static asset path (WebP swap or minified)."""
         if is_image(filepath) and not filepath.endswith(".webp"):
             return self._resolve_webp_path(filepath, root)
@@ -505,6 +590,7 @@ class TemplateMixin:
             return "/" + target_path.lstrip("/")
         try:
             from asok.core.storage import S3Storage, get_storage
+
             storage = get_storage()
             if isinstance(storage, S3Storage):
                 return storage.url(target_path.lstrip("/"))

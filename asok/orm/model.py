@@ -101,7 +101,9 @@ def _create_index_for_field(cls, engine: Any, field_name: str) -> None:
     _execute_index_creation(engine, index_sql, index_name, cls._table, field_name)
 
 
-def _build_create_index_sql(engine: Any, q_index: str, q_table: str, q_field: str) -> str:
+def _build_create_index_sql(
+    engine: Any, q_index: str, q_table: str, q_field: str
+) -> str:
     from .engines import MySQLEngine
 
     # MySQL has no `IF NOT EXISTS` for CREATE INDEX; fall through to try/except.
@@ -121,17 +123,16 @@ def _execute_index_creation(
             return
         logger.error(
             "Failed to create index %s on %s.%s: %s",
-            index_name, table, field_name, e,
+            index_name,
+            table,
+            field_name,
+            e,
         )
 
 
 def _is_duplicate_index_error(e: Exception) -> bool:
     msg = str(e)
-    return (
-        "Duplicate key name" in msg
-        or "already exists" in msg
-        or "1061" in msg
-    )
+    return "Duplicate key name" in msg or "already exists" in msg or "1061" in msg
 
 
 # (Removed _SERIALIZER_FLAGS and _field_type_flag for O(1) lookup performance)
@@ -367,7 +368,9 @@ def _attach_translatable_properties(attrs: dict, fields: dict) -> None:
 
 
 def _detect_translatable_bases(fields: dict) -> set[str]:
-    return {field_name[:-3] for field_name in fields if _is_translatable_field(field_name)}
+    return {
+        field_name[:-3] for field_name in fields if _is_translatable_field(field_name)
+    }
 
 
 def _is_translatable_field(field_name: str) -> bool:
@@ -430,7 +433,15 @@ class Model(metaclass=ModelMeta):
             return cached
         import base64
 
-        derived = hashlib.sha256(secret.encode()).digest()
+        # SECURITY: use PBKDF2-HMAC-SHA256 (600k iterations) instead of a bare
+        # SHA-256 so that offline dictionary attacks against leaked ciphertext
+        # require ~625 000× more work to recover the key.
+        derived = hashlib.pbkdf2_hmac(
+            "sha256",
+            secret.encode(),
+            b"asok:field-encryption-v1",
+            600_000,
+        )
         key = base64.urlsafe_b64encode(derived)
         _ENCRYPTION_KEY_CACHE[secret] = key
         return key
@@ -501,7 +512,9 @@ class Model(metaclass=ModelMeta):
         if _trust:
             self._absorb_extra_kwargs(kwargs)
 
-    def _assign_field(self, name: str, kwargs: dict, _trust: bool, is_new: bool) -> None:
+    def _assign_field(
+        self, name: str, kwargs: dict, _trust: bool, is_new: bool
+    ) -> None:
         field = self._fields[name]
         val = self._resolve_field_value(name, field, kwargs, _trust, is_new)
         if val is not None:
@@ -518,6 +531,13 @@ class Model(metaclass=ModelMeta):
         if name not in kwargs:
             return getattr(self, name, field.default)
         if self._field_blocked_by_protection(field, _trust, is_new):
+            logger.warning(
+                "Mass-assignment blocked on protected field '%s' of model '%s'. "
+                "The value was silently discarded. Use cls.create(_trust=True, ...) "
+                "or model instance attributes to set protected fields.",
+                name,
+                self.__class__.__name__,
+            )
             return field.default
         return kwargs[name]
 
@@ -658,9 +678,7 @@ class Model(metaclass=ModelMeta):
                 f"ALTER TABLE {engine.quote_identifier(cls._table)} ADD COLUMN {def_str}"
             )
         except Exception as e:
-            logger.error(
-                "Failed to migrate %s (adding %s): %s", cls._table, name, e
-            )
+            logger.error("Failed to migrate %s (adding %s): %s", cls._table, name, e)
 
     @classmethod
     def _create_pivot_tables(cls, engine: Any) -> None:
@@ -719,11 +737,18 @@ class Model(metaclass=ModelMeta):
     def update(self, **values: Any) -> Model:
         """Set multiple attributes and save the model in one call.
 
-        Security: prevents mass assignment of protected fields.
+        Security: prevents mass assignment of protected fields and id reassignment.
         """
         for k, v in values.items():
+            # SECURITY: never allow id reassignment — it would redirect save() to a
+            # different row, potentially overwriting another record.
+            if k == "id":
+                continue
             field = self._fields.get(k)
-            if field and field.protected:
+            # Skip unknown keys silently (not part of the schema).
+            if not field:
+                continue
+            if field.protected:
                 continue
             setattr(self, k, v)
         self.save()
@@ -893,7 +918,9 @@ class Model(metaclass=ModelMeta):
             return serializer(self, engine, field, val, f)
         return engine.prepare_value(field, val)
 
-    def _build_persist_sql(self, engine: Any, values: list[Any]) -> tuple[str, list[Any]]:
+    def _build_persist_sql(
+        self, engine: Any, values: list[Any]
+    ) -> tuple[str, list[Any]]:
         cache_key = (self.__class__, engine.__class__)
         cached = _PERSIST_SQL_CACHE.get(cache_key)
         if cached is None:
@@ -909,7 +936,9 @@ class Model(metaclass=ModelMeta):
         fields = self._fields_list
         placeholders = ", ".join("?" for _ in fields)
         quoted_fields = ", ".join(engine.quote_identifier(f) for f in fields)
-        insert_sql = f"INSERT INTO {self._table} ({quoted_fields}) VALUES ({placeholders})"
+        insert_sql = (
+            f"INSERT INTO {self._table} ({quoted_fields}) VALUES ({placeholders})"
+        )
         set_str = ", ".join(f"{engine.quote_identifier(f)} = ?" for f in fields)
         update_sql = f"UPDATE {self._table} SET {set_str} WHERE id = ?"
         return insert_sql, update_sql
@@ -954,6 +983,18 @@ class Model(metaclass=ModelMeta):
         return Query(cls).where_in(column, values)
 
     @classmethod
+    def filter_by(cls: type[T], **kwargs: Any) -> Query[T]:
+        """Start a new query filtered by key-value pairs."""
+        from .query import Query
+
+        return Query(cls).filter_by(**kwargs)
+
+    @classmethod
+    def first_or_fail(cls: type[T], **kwargs: Any) -> T:
+        """Start a new query filtered by key-value pairs and return the first record, or raise ModelError."""
+        return cls.filter_by(**kwargs).first_or_fail()
+
+    @classmethod
     def _soft_delete_where(cls):
         if cls._soft_delete_field:
             return f"{cls._soft_delete_field} IS NULL"
@@ -990,7 +1031,8 @@ class Model(metaclass=ModelMeta):
             wheres.append(sd)
         sql = (
             f"SELECT * FROM {cls._table} WHERE {' AND '.join(wheres)}"
-            if wheres else f"SELECT * FROM {cls._table}"
+            if wheres
+            else f"SELECT * FROM {cls._table}"
         )
         sql += cls._order_by_clause(order_by)
         if limit:
@@ -1033,7 +1075,8 @@ class Model(metaclass=ModelMeta):
             wheres.append(sd)
         sql = (
             f"SELECT COUNT(*) FROM {cls._table} WHERE {' AND '.join(wheres)}"
-            if wheres else f"SELECT COUNT(*) FROM {cls._table}"
+            if wheres
+            else f"SELECT COUNT(*) FROM {cls._table}"
         )
         rows = engine.execute(sql, args)
         return list(rows[0].values())[0] if rows else 0
@@ -1119,9 +1162,8 @@ class Model(metaclass=ModelMeta):
         obj = cls.find(**kwargs)
         if obj:
             return obj
-        data = dict(kwargs)
-        if defaults:
-            data.update(defaults)
+        data = dict(defaults or {})
+        data.update(kwargs)
         return cls.create(**data)
 
     @classmethod
@@ -1130,13 +1172,12 @@ class Model(metaclass=ModelMeta):
         obj = cls.find(**kwargs)
         if obj:
             if defaults:
-                for k, v in defaults.items():
-                    setattr(obj, k, v)
-                obj.save()
+                # SECURITY: delegate to update() so protected fields are respected,
+                # matching the behaviour of Query.update_or_create().
+                obj.update(**defaults)
             return obj
-        data = dict(kwargs)
-        if defaults:
-            data.update(defaults)
+        data = dict(defaults or {})
+        data.update(kwargs)
         return cls.create(**data)
 
     @classmethod
@@ -1178,7 +1219,8 @@ class Model(metaclass=ModelMeta):
                     "SECURITY WARNING: Raw SQL query may contain interpolated values. "
                     "Use parameterized queries with '?' placeholders and pass values via args parameter. "
                     f"Query: {sql[:100]}...",
-                    UserWarning, stacklevel=3,
+                    UserWarning,
+                    stacklevel=3,
                 )
                 return
 
@@ -1375,9 +1417,7 @@ class Model(metaclass=ModelMeta):
         engine.execute(f"DELETE FROM {q_pivot} WHERE {q_pfk} = ?", (self.id,))
         self._insert_synced_pivot_rows(engine, q_pivot, q_pfk, q_pofk, ids)
 
-    def _insert_synced_pivot_rows(
-        self, engine, q_pivot, q_pfk, q_pofk, ids
-    ) -> None:
+    def _insert_synced_pivot_rows(self, engine, q_pivot, q_pfk, q_pofk, ids) -> None:
         if not ids:
             return
         if not isinstance(ids, (list, tuple, set)):
@@ -1472,6 +1512,156 @@ class Model(metaclass=ModelMeta):
         import asyncio
 
         await asyncio.to_thread(self.delete)
+
+    async def update_async(self, **values: Any) -> "Model":
+        """Set multiple attributes and save the model asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.update, **values)
+
+    async def increment_async(self, column: str, amount: int = 1) -> "Model":
+        """Atomically increment a numeric column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.increment, column, amount)
+
+    async def decrement_async(self, column: str, amount: int = 1) -> "Model":
+        """Atomic decrement of a column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.decrement, column, amount)
+
+    async def refresh_async(self) -> "Model":
+        """Reload all attributes from the latest database state asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.refresh)
+
+    async def force_delete_async(self) -> None:
+        """Permanently delete, bypassing soft delete, asynchronously."""
+        import asyncio
+
+        await asyncio.to_thread(self.force_delete)
+
+    async def restore_async(self) -> None:
+        """Un-delete a soft-deleted row asynchronously."""
+        import asyncio
+
+        await asyncio.to_thread(self.restore)
+
+    async def attach_async(self, relation_name: str, ids: Any) -> None:
+        """Insert pivot rows linking self to target ids asynchronously."""
+        import asyncio
+
+        await asyncio.to_thread(self.attach, relation_name, ids)
+
+    async def detach_async(self, relation_name: str, ids: Any = None) -> None:
+        """Remove pivot rows asynchronously. If ids is None, removes all."""
+        import asyncio
+
+        await asyncio.to_thread(self.detach, relation_name, ids)
+
+    async def sync_async(self, relation_name: str, ids: Any) -> None:
+        """Replace all pivot rows for this relation asynchronously."""
+        import asyncio
+
+        await asyncio.to_thread(self.sync, relation_name, ids)
+
+    @classmethod
+    async def count_async(cls, **kwargs: Any) -> int:
+        """Return the total number of records matching criteria asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.count, **kwargs)
+
+    @classmethod
+    async def exists_async(cls, **kwargs: Any) -> bool:
+        """Return True if at least one matching record exists asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.exists, **kwargs)
+
+    @classmethod
+    async def find_or_fail_async(
+        cls: type[T], id: Optional[Any] = None, **kwargs: Any
+    ) -> T:
+        """Find a single record or raise ModelError asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.find_or_fail, id, **kwargs)
+
+    @classmethod
+    async def first_or_fail_async(cls: type[T], **kwargs: Any) -> T:
+        """Return the first matching record or raise ModelError asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.first_or_fail, **kwargs)
+
+    @classmethod
+    async def search_async(
+        cls: type[T], term: str, limit: int = 10, offset: int = 0
+    ) -> "ModelList[T]":
+        """Full-text search asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.search, term, limit, offset)
+
+    @classmethod
+    async def first_or_create_async(
+        cls: type[T], defaults: Optional[dict] = None, **kwargs: Any
+    ) -> T:
+        """Find a row matching kwargs or create one asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.first_or_create, defaults, **kwargs)
+
+    @classmethod
+    async def update_or_create_async(
+        cls: type[T], defaults: Optional[dict] = None, **kwargs: Any
+    ) -> T:
+        """Find + update, or create, asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.update_or_create, defaults, **kwargs)
+
+    @classmethod
+    async def raw_async(
+        cls: type[T], sql: str, args: Optional[list] = None
+    ) -> "ModelList[T]":
+        """Execute raw SQL and return model instances asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.raw, sql, args)
+
+    @classmethod
+    async def destroy_async(cls, **kwargs: Any) -> int:
+        """Delete records matching criteria asynchronously (handles soft delete)."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.destroy, **kwargs)
+
+    @classmethod
+    async def force_destroy_async(cls, **kwargs: Any) -> int:
+        """Permanently delete records asynchronously, bypassing soft delete."""
+        import asyncio
+
+        return await asyncio.to_thread(cls.force_destroy, **kwargs)
+
+    @classmethod
+    async def paginate_async(
+        cls,
+        page: int = 1,
+        per_page: int = 10,
+        order_by: Optional[str] = None,
+        count: bool = True,
+        **kwargs: Any,
+    ) -> dict:
+        """Paginate results matching the given criteria asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            cls.paginate, page, per_page, order_by, count, **kwargs
+        )
 
 
 def close_all_db_connections() -> None:

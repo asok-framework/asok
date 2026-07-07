@@ -18,10 +18,10 @@ _GRAPHIQL_STATIC_DIR = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "api", "static", "graphiql"
 )
 _GRAPHIQL_ASSETS = {
-    "react.min.js":         "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
-    "react-dom.min.js":     "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
-    "graphiql.min.js":      "https://unpkg.com/graphiql@3.0.6/graphiql.min.js",
-    "graphiql.min.css":     "https://unpkg.com/graphiql@3.0.6/graphiql.min.css",
+    "react.min.js": "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+    "react-dom.min.js": "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
+    "graphiql.min.js": "https://unpkg.com/graphiql@3.0.6/graphiql.min.js",
+    "graphiql.min.css": "https://unpkg.com/graphiql@3.0.6/graphiql.min.css",
 }
 
 _TAILWIND_PLATFORMS = {
@@ -130,7 +130,9 @@ def tailwind_install(root: str, verbose: bool = True) -> str:
     return bin_path
 
 
-def _validate_tailwind_paths(root: str, bin_path: str, input_path: str, output_path: str) -> None:
+def _validate_tailwind_paths(
+    root: str, bin_path: str, input_path: str, output_path: str
+) -> None:
     if not os.path.isfile(bin_path):
         raise RuntimeError("Tailwind not installed. Run: asok tailwind --install")
     expected_dir = os.path.join(root, ".asok", "bin")
@@ -430,6 +432,7 @@ def _try_delete_original(path: str, delete_originals: bool) -> None:
 
 def _optimize_single_file(path: str, root: str, delete_originals: bool) -> bool:
     from ..utils.image import is_image, optimize_image
+
     if not is_image(path):
         return False
     if os.path.exists(path + ".webp"):
@@ -437,9 +440,7 @@ def _optimize_single_file(path: str, root: str, delete_originals: bool) -> bool:
         return False
 
     print(f"  Optimizing {os.path.relpath(path, root)}...")
-    return bool(optimize_image(
-        path, root=root, keep_original=not delete_originals
-    ))
+    return bool(optimize_image(path, root=root, keep_original=not delete_originals))
 
 
 def image_optimize_all(root: str, delete_originals: bool = False) -> None:
@@ -548,7 +549,9 @@ def _minify_single_file(bin_path: str, r: str, f: str, folder: str, root: str) -
         return False
 
 
-def _minify_files_in_dir(r: str, files: list[str], folder: str, bin_path: str, root: str) -> int:
+def _minify_files_in_dir(
+    r: str, files: list[str], folder: str, bin_path: str, root: str
+) -> int:
     count = 0
     for f in files:
         if _should_minify_file(f) and _minify_single_file(bin_path, r, f, folder, root):

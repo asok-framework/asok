@@ -274,15 +274,19 @@
             }
         }
 
-        // Refresh CSRF meta
         const newToken = doc.querySelector('meta[name="csrf-token"]')?.content;
         if (newToken) {
             const meta = document.querySelector('meta[name="csrf-token"]');
             if (meta) meta.content = newToken;
+        }
 
-            // Also update all hidden inputs in forms (crucial for persistent banners/modals)
+        const activeToken = document.querySelector('meta[name="csrf-token"]')?.content;
+        if (activeToken) {
+            // Also update all hidden inputs in forms (crucial for persistent banners/modals and form.reset())
             document.querySelectorAll('input[name="csrf_token"]').forEach(input => {
-                input.value = newToken;
+                input.value = activeToken;
+                input.defaultValue = activeToken;
+                input.setAttribute('value', activeToken);
             });
         }
 

@@ -85,14 +85,16 @@ class MigrationAutodetector:
 
         # Generate AlterField operations
         common_fields = hist_fields & curr_fields
-        self._detect_altered_fields(model_name, hist_model, curr_model, common_fields, ops)
+        self._detect_altered_fields(
+            model_name, hist_model, curr_model, common_fields, ops
+        )
 
     def _handle_interactive_renaming(
         self,
         model_name: str,
         removed_fields: set[str],
         added_fields: set[str],
-        ops: List[BaseOperation]
+        ops: List[BaseOperation],
     ) -> None:
         if len(removed_fields) == 1 and len(added_fields) == 1:
             old_name = list(removed_fields)[0]
@@ -102,13 +104,19 @@ class MigrationAutodetector:
                 removed_fields.clear()
                 added_fields.clear()
 
-    def _ask_rename_confirmation(self, model_name: str, old_name: str, new_name: str) -> bool:
+    def _ask_rename_confirmation(
+        self, model_name: str, old_name: str, new_name: str
+    ) -> bool:
         if not sys.stdout.isatty():
             return False
         try:
-            ans = input(
-                f"Did you rename field '{old_name}' to '{new_name}' in model '{model_name}'? [y/N]: "
-            ).strip().lower()
+            ans = (
+                input(
+                    f"Did you rename field '{old_name}' to '{new_name}' in model '{model_name}'? [y/N]: "
+                )
+                .strip()
+                .lower()
+            )
             return ans in ("y", "yes")
         except (KeyboardInterrupt, EOFError):
             return False
@@ -119,7 +127,7 @@ class MigrationAutodetector:
         hist_model: Any,
         curr_model: Any,
         common_fields: set[str],
-        ops: List[BaseOperation]
+        ops: List[BaseOperation],
     ) -> None:
         for f_name in sorted(common_fields):
             h_f = hist_model.fields[f_name]

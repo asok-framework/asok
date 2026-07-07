@@ -9,14 +9,28 @@ from . import render
 from .utils import Renderable, _merge_attrs
 
 _LENGTH_ATTR_TYPES = {
-    "text", "email", "password", "url", "search", "tel", "textarea",
+    "text",
+    "email",
+    "password",
+    "url",
+    "search",
+    "tel",
+    "textarea",
 }
 _RANGE_ATTR_TYPES = {
-    "number", "range", "date", "datetime-local", "time", "month", "week",
+    "number",
+    "range",
+    "date",
+    "datetime-local",
+    "time",
+    "month",
+    "week",
 }
 _PATTERN_TYPES = {"text", "email", "password", "url", "search", "tel"}
 _HTML5_VALIDATABLE_TYPES = (
-    _LENGTH_ATTR_TYPES | _RANGE_ATTR_TYPES | {"select", "checkbox", "radio", "file", "color"}
+    _LENGTH_ATTR_TYPES
+    | _RANGE_ATTR_TYPES
+    | {"select", "checkbox", "radio", "file", "color"}
 )
 
 
@@ -67,7 +81,9 @@ class FormField:
         self.value: Any = ""
         self._error: str = ""
 
-    def _parse_messages(self, messages: Optional[Union[str, dict[str, str]]], rules: str) -> dict[str, str]:
+    def _parse_messages(
+        self, messages: Optional[Union[str, dict[str, str]]], rules: str
+    ) -> dict[str, str]:
         if not isinstance(messages, str):
             return messages or {}
         return self._parse_string_messages(messages, rules)
@@ -175,8 +191,6 @@ class FormField:
         time_parts = val_str.split(":")
         return ":".join(time_parts[:2]) if len(time_parts) >= 2 else val_str
 
-        return val_str
-
     def _render_readonly(self, val: str) -> str:
         display = val if val else "—"
         return f'<div class="readonly-value">{display}</div>'
@@ -187,13 +201,17 @@ class FormField:
             attrs["value"] = val
         return f"<input{_render_attrs(attrs)}>"
 
-    def _apply_min_max_attr(self, range_key: str, length_key: str, val: str, attrs: dict[str, Any]) -> None:
+    def _apply_min_max_attr(
+        self, range_key: str, length_key: str, val: str, attrs: dict[str, Any]
+    ) -> None:
         if self.type in _LENGTH_ATTR_TYPES:
             attrs[length_key] = val
         elif self.type in _RANGE_ATTR_TYPES:
             attrs[range_key] = val
 
-    def _apply_ranged_rule_attr(self, name: str, arg: str, attrs: dict[str, Any]) -> None:
+    def _apply_ranged_rule_attr(
+        self, name: str, arg: str, attrs: dict[str, Any]
+    ) -> None:
         if name == "min":
             self._apply_min_max_attr("min", "minlength", arg, attrs)
         elif name == "max":
@@ -210,13 +228,17 @@ class FormField:
             return True
         return False
 
-    def _apply_regex_rule_attr(self, name: str, arg: str, attrs: dict[str, Any]) -> bool:
+    def _apply_regex_rule_attr(
+        self, name: str, arg: str, attrs: dict[str, Any]
+    ) -> bool:
         if name == "regex" and arg and self.type in _PATTERN_TYPES:
             attrs.setdefault("pattern", arg)
             return True
         return False
 
-    def _apply_single_rule_attr(self, name: str, arg: str, attrs: dict[str, Any]) -> None:
+    def _apply_single_rule_attr(
+        self, name: str, arg: str, attrs: dict[str, Any]
+    ) -> None:
         if name == "required":
             attrs["required"] = True
         elif self._apply_accepted_rule_attr(name, attrs):
@@ -240,7 +262,6 @@ class FormField:
             name, _, arg = raw.strip().partition(":")
             self._apply_single_rule_attr(name.strip(), arg.strip(), attrs)
         return attrs
-
 
     def render_input(self, **overrides: Any) -> str:
         """Internal method for rendering the HTML input element (input, select, or textarea)."""

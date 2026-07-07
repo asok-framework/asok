@@ -137,7 +137,9 @@ def _recv_frame(sock: socket.socket) -> tuple[Optional[int], Optional[bytes]]:
     return opcode, payload
 
 
-def _read_frame_payload(sock: socket.socket, masked: int, length: int) -> Optional[bytes]:
+def _read_frame_payload(
+    sock: socket.socket, masked: int, length: int
+) -> Optional[bytes]:
     mask_key = _read_mask_key(sock, masked)
     if mask_key is None:
         return None

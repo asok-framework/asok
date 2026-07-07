@@ -58,13 +58,23 @@ def _find_project_root(start=None) -> str | None:
     return None
 
 
-_IGNORE_DIRS = {".git", "__pycache__", "venv", ".venv", "node_modules", "uploads", ".asok", "deployment"}
+_IGNORE_DIRS = {
+    ".git",
+    "__pycache__",
+    "venv",
+    ".venv",
+    "node_modules",
+    "uploads",
+    ".asok",
+    "deployment",
+}
 _WATCH_EXTS = (".py", ".html", ".asok", ".json", ".css", ".js")
 
 
 def _collect_watch_dirs() -> list[str]:
     """Collect directories to watch: current dir plus any local editable packages."""
     import importlib
+
     watch_dirs = ["."]
     for pkg in ("asok", "asok_lucide"):
         try:
@@ -215,6 +225,7 @@ def _find_wsgi_path(root: str = None) -> str | None:
 
 def _configure_debug_logging() -> None:
     import logging
+
     console = logging.StreamHandler()
     console.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
@@ -269,10 +280,14 @@ def _start_server(port: int) -> int | None:
     return pid
 
 
-def _handle_change(port: int, pid: int, tw_proc: Any, last_mtime: float, current_mtime: float) -> tuple[int | None, float, bool]:
+def _handle_change(
+    port: int, pid: int, tw_proc: Any, last_mtime: float, current_mtime: float
+) -> tuple[int | None, float, bool]:
     py_changed = _has_py_changed(last_mtime)
     if py_changed:
-        print(f"  {Style.YELLOW}↻{Style.RESET} {Style.DIM}Python change, restarting...{Style.RESET}")
+        print(
+            f"  {Style.YELLOW}↻{Style.RESET} {Style.DIM}Python change, restarting...{Style.RESET}"
+        )
         _kill_child(pid)
         new_pid = _start_server(port)
         if new_pid is None:
@@ -281,7 +296,9 @@ def _handle_change(port: int, pid: int, tw_proc: Any, last_mtime: float, current
             return None, current_mtime, True
         return new_pid, current_mtime, False
     else:
-        print(f"  {Style.CYAN}⚡{Style.RESET} {Style.DIM}Asset change, reloading...{Style.RESET}")
+        print(
+            f"  {Style.CYAN}⚡{Style.RESET} {Style.DIM}Asset change, reloading...{Style.RESET}"
+        )
         return pid, current_mtime, False
 
 
@@ -301,7 +318,9 @@ def _run_dev_loop(port: int, pid: int, tw_proc: Any) -> None:
             time.sleep(1)
             current_mtime = get_last_mtime()
             if current_mtime > last_mtime:
-                pid, last_mtime, should_stop = _handle_change(port, pid, tw_proc, last_mtime, current_mtime)
+                pid, last_mtime, should_stop = _handle_change(
+                    port, pid, tw_proc, last_mtime, current_mtime
+                )
                 if should_stop:
                     return
     except KeyboardInterrupt:
@@ -312,7 +331,9 @@ def _get_dev_port(port_arg: int | None) -> int | None:
     requested_port = port_arg or int(os.environ.get("ASOK_PORT", "8000"))
     port = _find_free_port(requested_port)
     if port is None:
-        print(f"Error: No free port found between {requested_port} and {requested_port + 100}")
+        print(
+            f"Error: No free port found between {requested_port} and {requested_port + 100}"
+        )
         return None
     if port != requested_port:
         Style.warn(f"Port {requested_port} is in use, using {port} instead")
@@ -322,10 +343,16 @@ def _get_dev_port(port_arg: int | None) -> int | None:
 
 def _print_dev_banner(port: int, tw_proc: Any) -> None:
     Style.heading("DEVELOPMENT SERVER")
-    print(f"  {Style.DIM}Reloader {Style.RESET}{Style.GREEN}●{Style.RESET}{Style.DIM} Active (PID: {os.getpid()}){Style.RESET}")
-    print(f"  {Style.DIM}URL      {Style.RESET}{Style.BOLD}http://127.0.0.1:{port}{Style.RESET}")
+    print(
+        f"  {Style.DIM}Reloader {Style.RESET}{Style.GREEN}●{Style.RESET}{Style.DIM} Active (PID: {os.getpid()}){Style.RESET}"
+    )
+    print(
+        f"  {Style.DIM}URL      {Style.RESET}{Style.BOLD}http://127.0.0.1:{port}{Style.RESET}"
+    )
     if tw_proc:
-        print(f"  {Style.DIM}Tailwind {Style.RESET}{Style.GREEN}●{Style.RESET}{Style.DIM} Watching...{Style.RESET}")
+        print(
+            f"  {Style.DIM}Tailwind {Style.RESET}{Style.GREEN}●{Style.RESET}{Style.DIM} Watching...{Style.RESET}"
+        )
     print()
 
 
@@ -371,6 +398,7 @@ def _prepare_preview_env() -> None:
 
 def _build_preview_assets() -> None:
     from .tools import _esbuild_binary_path, assets_minify, tailwind_build
+
     root = os.getcwd()
     es_bin = _esbuild_binary_path(root)
     if os.path.exists(es_bin):
@@ -396,7 +424,9 @@ def _get_preview_port(port_arg: int | None) -> int | None:
 
 def _run_preview_server(port: int, app: Any) -> None:
     Style.heading("PREVIEW SERVER (PRODUCTION MODE)")
-    print(f"  {Style.DIM}URL  {Style.RESET}{Style.BOLD}http://127.0.0.1:{port}{Style.RESET}")
+    print(
+        f"  {Style.DIM}URL  {Style.RESET}{Style.BOLD}http://127.0.0.1:{port}{Style.RESET}"
+    )
     Style.info("No auto-reload — restart manually after changes\n")
 
     WSGIServer.allow_reuse_address = True

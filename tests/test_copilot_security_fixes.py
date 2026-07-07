@@ -33,11 +33,15 @@ class DummyApp:
     def _sign(self, value):
         import hashlib
         import hmac
+
         key = self.config["SECRET_KEY"].encode()
-        return f"{value}.{hmac.new(key, str(value).encode(), hashlib.sha256).hexdigest()}"
+        return (
+            f"{value}.{hmac.new(key, str(value).encode(), hashlib.sha256).hexdigest()}"
+        )
 
     def _unsign(self, signed_value):
         import hmac
+
         if not signed_value or "." not in signed_value:
             return None
         val, sig = signed_value.rsplit(".", 1)
@@ -125,7 +129,9 @@ def test_websocket_server_stolen_cookie_revocation():
     CopilotMockUser.create_table()
     user = CopilotMockUser.create(username="bob", password="password123")
 
-    server = WebSocketServer(app=app, secret_key=app.config["SECRET_KEY"], auth_model="CopilotMockUser")
+    server = WebSocketServer(
+        app=app, secret_key=app.config["SECRET_KEY"], auth_model="CopilotMockUser"
+    )
 
     # Generate a valid session-linked cookie
     environ = {

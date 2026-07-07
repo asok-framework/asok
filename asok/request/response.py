@@ -24,7 +24,10 @@ class ResponseMixin:
         Returns:
             The Request instance for chaining.
         """
-        self.response_headers.append((name, value))
+        # SECURITY: sanitize header name and value to prevent HTTP response splitting
+        clean_name = str(name).replace("\r", "").replace("\n", "")
+        clean_value = str(value).replace("\r", "").replace("\n", "")
+        self.response_headers.append((clean_name, clean_value))
         return self
 
     def json(self: Any, data: Any) -> str:
@@ -120,6 +123,7 @@ class ResponseMixin:
 
     def _extract_filepath_parts(self: Any, filepath: str) -> list[str]:
         from pathlib import Path as _Path
+
         p = _Path(filepath)
         parts = []
         for part in p.parts:
@@ -127,8 +131,11 @@ class ResponseMixin:
                 parts.append(part)
         return parts
 
-    def _resolve_and_check_relative(self: Any, base_dir: "Path", parts: list[str]) -> tuple["Path | None", str]:
+    def _resolve_and_check_relative(
+        self: Any, base_dir: "Path", parts: list[str]
+    ) -> tuple["Path | None", str]:
         from pathlib import Path as _Path
+
         try:
             full_path = (base_dir / _Path(*parts)).resolve(strict=False)
         except (ValueError, OSError, RuntimeError):
@@ -148,9 +155,7 @@ class ResponseMixin:
             return None, "<h1>403 Forbidden</h1>"
         return self._resolve_and_check_relative(base_dir, parts)
 
-    def _check_symlinks(
-        self: Any, full_path: "Path", base_dir: "Path"
-    ) -> bool:
+    def _check_symlinks(self: Any, full_path: "Path", base_dir: "Path") -> bool:
         """Return True if any path component is a symlink (disallowed)."""
         current = full_path
         while current != base_dir:
@@ -161,7 +166,9 @@ class ResponseMixin:
                 break
         return False
 
-    def _check_file_validity(self: Any, full_path: "Path", base_dir: "Path") -> Optional[str]:
+    def _check_file_validity(
+        self: Any, full_path: "Path", base_dir: "Path"
+    ) -> Optional[str]:
         if self._check_symlinks(full_path, base_dir):
             self.status = "403 Forbidden"
             return "<h1>403 Forbidden: Symlinks not allowed</h1>"
@@ -175,7 +182,13 @@ class ResponseMixin:
             return "<h1>413 Payload Too Large</h1>"
         return None
 
-    def _set_download_headers(self: Any, full_path: "Path", filename: Optional[str], as_attachment: bool, mimetype: Optional[str]) -> None:
+    def _set_download_headers(
+        self: Any,
+        full_path: "Path",
+        filename: Optional[str],
+        as_attachment: bool,
+        mimetype: Optional[str],
+    ) -> None:
         fname = secure_filename(filename or full_path.name)
         disposition = "attachment" if as_attachment else "inline"
         file_size = full_path.stat().st_size
@@ -199,18 +212,26 @@ class ResponseMixin:
         filepath: str,
         filename: Optional[str] = None,
         as_attachment: bool = True,
+        base_dir: Optional[str] = None,
     ) -> str:
         """Return a file download response.
 
         Args:
-            filepath:      Path to the file (absolute or relative to project root).
+            filepath:      Path to the file (relative to base_dir).
             filename:      Download filename (defaults to basename).
-            as_attachment:  If True, browser downloads; if False, inline display.
+            as_attachment: If True, browser downloads; if False, inline display.
+            base_dir:      Absolute directory to resolve filepath against.
+                           Defaults to <project_root>/src/partials/uploads.
 
         SECURITY: Enhanced path traversal protection using pathlib.
         """
         root = Path(self.environ.get("asok.root", os.getcwd()))
-        base_dir = (root / "src/partials/uploads").resolve()
+        resolved_base = (
+            Path(base_dir).resolve()
+            if base_dir is not None
+            else (root / "src/partials/uploads").resolve()
+        )
+        base_dir = resolved_base
 
         full_path, error = self._validate_send_path(filepath, base_dir)
         if full_path is None:

@@ -60,6 +60,7 @@ class HelperViewsMixin:
 
     def _format_col_string(self, field: Any, v: Any) -> str:
         import enum
+
         if isinstance(v, enum.Enum):
             v = v.value
         if field and getattr(field, "wysiwyg", False):
@@ -127,7 +128,9 @@ class HelperViewsMixin:
         except Exception:
             return None
 
-    def _apply_text_search(self, query: Any, model: Any, searchable_fields: list[str], q: str) -> Any:
+    def _apply_text_search(
+        self, query: Any, model: Any, searchable_fields: list[str], q: str
+    ) -> Any:
         placeholders = []
         search_args = []
         for f in searchable_fields:
@@ -139,7 +142,9 @@ class HelperViewsMixin:
             query._args.extend(search_args)
         return query
 
-    def _apply_search_filter(self, query: Any, model: Any, entry: dict[str, Any], q: str) -> Any:
+    def _apply_search_filter(
+        self, query: Any, model: Any, entry: dict[str, Any], q: str
+    ) -> Any:
         v_field = entry.get("vector_search_field")
         if v_field:
             vector = self._try_vector_search(model, v_field, q)
@@ -147,7 +152,9 @@ class HelperViewsMixin:
                 return query.nearest(v_field, vector)
         return self._apply_text_search(query, model, entry["searchable"], q)
 
-    def _apply_list_filters(self, query: Any, request: Any, entry: dict[str, Any]) -> Any:
+    def _apply_list_filters(
+        self, query: Any, request: Any, entry: dict[str, Any]
+    ) -> Any:
         for f in entry["list_filter"]:
             val = request.args.get(f"filter_{f}")
             if val not in (None, "", "__all__"):
@@ -188,7 +195,9 @@ class HelperViewsMixin:
             return False
         return f.startswith("is_") or f.startswith("has_")
 
-    def _build_filter_options(self, field: Any, f: str, values: list[Any], current: str) -> list[dict[str, Any]]:
+    def _build_filter_options(
+        self, field: Any, f: str, values: list[Any], current: str
+    ) -> list[dict[str, Any]]:
         is_all_selected = bool(current == "")
         options = [{"value": "", "label": "All", "selected": is_all_selected}]
         is_bool = self._is_boolean_like(field, f)

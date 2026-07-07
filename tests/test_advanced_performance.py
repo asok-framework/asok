@@ -175,7 +175,10 @@ def test_worker_failure_exhausts_retries_and_sends_to_dlq(mock_redis) -> None:
         mock_redis.lpush.assert_called_with(
             "asok:dlq",
             pytest.approx_json_contains(
-                {"id": "test-exhausted-uuid", "error": "ValueError: Something went wrong"}
+                {
+                    "id": "test-exhausted-uuid",
+                    "error": "ValueError: Something went wrong",
+                }
             ),
         )
 
@@ -253,7 +256,6 @@ def test_worker_status_command_output(mock_redis, capsys) -> None:
 
 # Custom pytest helper to approx match JSON strings in mock assertions
 class ApproxJsonContains:
-
     def __init__(self, expected_dict):
         self.expected = expected_dict
 

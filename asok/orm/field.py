@@ -26,6 +26,8 @@ class Field:
         **kwargs,
     ):
         self.sql_type: str = sql_type
+        if isinstance(default, enum.Enum):
+            default = default.value
         self.default: Any = default
         self.unique: bool = unique
         self.nullable: bool = nullable

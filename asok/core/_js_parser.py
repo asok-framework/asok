@@ -67,7 +67,9 @@ def _process_paren_match(
     return None
 
 
-def find_matching_forward(s: str, start_idx: int, open_char: str, close_char: str) -> int:
+def find_matching_forward(
+    s: str, start_idx: int, open_char: str, close_char: str
+) -> int:
     depth = 0
     for i, char in iter_structural_chars(s, start_idx):
         if char == open_char:
@@ -292,7 +294,9 @@ def _is_single_equal(s: str, i: int) -> bool:
     return not (i + 1 < len(s) and s[i + 1] == "=")
 
 
-def _scan_ternary_left(s: str, q_idx: int) -> tuple[list[tuple[str, int]], dict[int, list[int]]]:
+def _scan_ternary_left(
+    s: str, q_idx: int
+) -> tuple[list[tuple[str, int]], dict[int, list[int]]]:
     stack: list[tuple[str, int]] = []
     delimiters: dict[int, list[int]] = {}
     for i, char in iter_structural_chars(s):
@@ -305,7 +309,9 @@ def _scan_ternary_left(s: str, q_idx: int) -> tuple[list[tuple[str, int]], dict[
 def _scan_left_char(
     stack: list[tuple[str, int]],
     delimiters: dict[int, list[int]],
-    s: str, i: int, char: str,
+    s: str,
+    i: int,
+    char: str,
 ) -> None:
     if char in ("(", "[", "{"):
         stack.append((char, i))
@@ -372,7 +378,9 @@ def _is_ternary_break(s: str, i: int, char: str) -> bool:
     return char == "=" and _is_single_equal(s, i)
 
 
-def _assemble_ternary(s: str, cond_start: int, q_idx: int, c_idx: int, expr2_end: int) -> str:
+def _assemble_ternary(
+    s: str, cond_start: int, q_idx: int, c_idx: int, expr2_end: int
+) -> str:
     cond = s[cond_start:q_idx].strip()
     expr1 = s[q_idx + 1 : c_idx].strip()
     expr2 = s[c_idx + 1 : expr2_end].strip()

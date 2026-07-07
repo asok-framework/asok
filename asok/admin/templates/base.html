@@ -165,10 +165,13 @@
       </nav>
 
       <div class="sidebar-foot" style="margin-top:auto">
-        <a href="{{ admin_prefix }}/logout" class="nav-item nav-item--logout">
-          {{ icon('logout', 14) }}
-          <span>{{ t('Logout') }}</span>
-        </a>
+        <form method="post" action="{{ admin_prefix }}/logout" style="margin:0;padding:0">
+          <input type="hidden" name="_csrf_token" value="{{ request.csrf_token_value }}">
+          <button type="submit" class="nav-item nav-item--logout" style="background:none;border:none;width:100%;cursor:pointer;text-align:left">
+            {{ icon('logout', 14) }}
+            <span>{{ t('Logout') }}</span>
+          </button>
+        </form>
       </div>
     </aside>
 

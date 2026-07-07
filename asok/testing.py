@@ -55,7 +55,9 @@ class TestClient:
             cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
             environ["HTTP_COOKIE"] = cookie_str
 
-    def _apply_headers(self, environ: dict[str, Any], headers: Optional[dict[str, str]]) -> None:
+    def _apply_headers(
+        self, environ: dict[str, Any], headers: Optional[dict[str, str]]
+    ) -> None:
         for key, value in (headers or {}).items():
             wsgi_key = "HTTP_" + key.upper().replace("-", "_")
             environ[wsgi_key] = value

@@ -10,11 +10,15 @@ from .base import BaseEngine
 
 logger = logging.getLogger("asok.orm")
 
-_RE_AUTOINCREMENT_1 = re.compile(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', re.IGNORECASE)
-_RE_AUTOINCREMENT_2 = re.compile(r'id\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', re.IGNORECASE)
+_RE_AUTOINCREMENT_1 = re.compile(
+    r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", re.IGNORECASE
+)
+_RE_AUTOINCREMENT_2 = re.compile(
+    r"id\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", re.IGNORECASE
+)
 _RE_VIRTUAL_TABLE = re.compile(
     r'CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?(\w+)"?)\s+USING\s+fts5\((.*?)\)',
-    re.IGNORECASE | re.DOTALL
+    re.IGNORECASE | re.DOTALL,
 )
 _RE_CONTENT_MATCH = re.compile(r"content\s*=\s*'([^']+)'")
 _RE_KEY_VIOLATION = re.compile(r"Key \((.*?)\)=")
@@ -148,14 +152,8 @@ class PostgresEngine(BaseEngine):
     def _translate_autoincrement(self, sql: str) -> str:
         if "AUTOINCREMENT" not in sql:
             return sql
-        sql = _RE_AUTOINCREMENT_1.sub(
-            'SERIAL PRIMARY KEY',
-            sql
-        )
-        return _RE_AUTOINCREMENT_2.sub(
-            'id SERIAL PRIMARY KEY',
-            sql
-        )
+        sql = _RE_AUTOINCREMENT_1.sub("SERIAL PRIMARY KEY", sql)
+        return _RE_AUTOINCREMENT_2.sub("id SERIAL PRIMARY KEY", sql)
 
     def _translate_sqlite_fts(self, sql: str) -> str:
         if "CREATE VIRTUAL TABLE" in sql and "fts5" in sql:
@@ -194,20 +192,19 @@ class PostgresEngine(BaseEngine):
         idx_name = f"idx_{target_table}_fts"
         return (
             f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{target_table}" '
-            f'USING gin(to_tsvector(\'simple\', {col_exprs}))'
+            f"USING gin(to_tsvector('simple', {col_exprs}))"
         )
 
     def _extract_fts_cols(self, params_str: str) -> List[str]:
         cols: List[str] = []
-        for param in params_str.split(','):
+        for param in params_str.split(","):
             param = param.strip()
             if not param:
                 continue
-            if any(kw in param.lower() for kw in ('content=', 'content_rowid=')):
+            if any(kw in param.lower() for kw in ("content=", "content_rowid=")):
                 continue
             cols.append(param.strip('"`[]'))
         return cols
-
 
     def _detect_pg_type_attrs(self, field: Any) -> str | None:
         """Check field type attributes and return PostgreSQL type, or None for standard mapping."""
@@ -311,12 +308,14 @@ class PostgresEngine(BaseEngine):
     def _get_psycopg(self) -> Any:
         try:
             import psycopg
+
             return psycopg
         except ImportError:
             return None
 
     def _handle_unique_violation_pg(self, e: Any) -> Exception:
         from ..exceptions import ModelError
+
         detail = getattr(e.diag, "message_detail", "") or ""
         m = _RE_KEY_VIOLATION.search(detail)
         field = m.group(1) if m else "field"
@@ -324,6 +323,7 @@ class PostgresEngine(BaseEngine):
 
     def _handle_not_null_violation_pg(self, e: Any) -> Exception:
         from ..exceptions import ModelError
+
         col = getattr(e.diag, "column_name", "") or "field"
         return ModelError(f"{col} is required", field=col, original=e)
 
@@ -338,6 +338,7 @@ class PostgresEngine(BaseEngine):
             if sqlstate == "23502":
                 return self._handle_not_null_violation_pg(e)
             from ..exceptions import ModelError
+
             return ModelError(str(e), original=e)
         return e
 

@@ -117,7 +117,9 @@ class MediaViewsMixin:
         except ValueError as e:
             return False, f"{file.filename}: {str(e)}"
 
-    def _flash_upload_results(self, request: Any, count: int, errors: list[str]) -> None:
+    def _flash_upload_results(
+        self, request: Any, count: int, errors: list[str]
+    ) -> None:
         if errors:
             for err in errors:
                 request.flash("error", err)

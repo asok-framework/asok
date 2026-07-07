@@ -32,7 +32,9 @@ def test_resolve_redirect_referer_safe_url():
         "HTTP_REFERER": "http://localhost:8000/admin/dashboard",
     }
     req = Request(environ)
-    assert admin._resolve_redirect_referer(req) == "http://localhost:8000/admin/dashboard"
+    assert (
+        admin._resolve_redirect_referer(req) == "http://localhost:8000/admin/dashboard"
+    )
 
     # 2. Referer on an external domain (unsafe) -> redirects to prefix
     environ = {

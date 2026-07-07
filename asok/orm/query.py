@@ -61,6 +61,32 @@ def _group_pivot_targets(pivot_rows, pfk, pofk, targets) -> dict:
     return parent_to_targets
 
 
+def _extract_nulls_suffix(item: str) -> tuple[str, str]:
+    item_upper = item.upper()
+    for sfx in (" NULLS FIRST", " NULLS LAST"):
+        if item_upper.endswith(sfx):
+            suffix = item[len(item) - len(sfx) :]
+            return item[:-len(sfx)].strip(), suffix
+    return item, ""
+
+
+def _invert_order_item(item: str) -> str:
+    item, suffix = _extract_nulls_suffix(item)
+
+    words = item.split()
+    if len(words) > 1 and words[-1].upper() in ("ASC", "DESC"):
+        direction = words[-1].upper()
+        new_direction = "ASC" if direction == "DESC" else "DESC"
+        base = " ".join(words[:-1])
+        result = f"{base} {new_direction}"
+    else:
+        result = f"{item} DESC"
+
+    if suffix:
+        result = f"{result}{suffix}"
+    return result
+
+
 class Query(Generic[T]):
     """Chainable SQL query builder for a specific Model.
 
@@ -121,7 +147,9 @@ class Query(Generic[T]):
         from .router import database_router_context
 
         with database_router_context(op="write", shard=self._shard):
-            obj = self.model(_trust=True, _shard=self._shard, **kwargs)
+            # SECURITY: _trust=False so protected fields (role, is_verified, etc.)
+            # are blocked against mass-assignment from user-supplied kwargs.
+            obj = self.model(_trust=False, _shard=self._shard, **kwargs)
             obj.save()
             return obj
 
@@ -158,9 +186,7 @@ class Query(Generic[T]):
         self._cache_key = key
         return self
 
-    _AGG_RE = re.compile(
-        r"^(COUNT|SUM|AVG|MIN|MAX)\((.*?)\)(?:\s+AS\s+(\w+))?$", re.I
-    )
+    _AGG_RE = re.compile(r"^(COUNT|SUM|AVG|MIN|MAX)\((.*?)\)(?:\s+AS\s+(\w+))?$", re.I)
 
     def select(self, *columns: str) -> Query[T]:
         """Set specific columns to select (useful for aggregates or partial loads)."""
@@ -265,6 +291,16 @@ class Query(Generic[T]):
         self._args.append(val)
         return self
 
+    def filter_by(self, **kwargs: Any) -> Query[T]:
+        """Filter the query by key-value pairs.
+
+        Example:
+            User.query().filter_by(name="Alice", age=25).get()
+        """
+        for column, val in kwargs.items():
+            self.where(column, val)
+        return self
+
     def where_in(self, column: str, values) -> Query[T]:
         """Filter by a list of values or a subquery.
 
@@ -289,8 +325,10 @@ class Query(Generic[T]):
         return self._where_in_values(column, values)
 
     def _where_in_subquery(self, column: str, subquery: "Query") -> "Query[T]":
-        self._wheres.append(f"{column} IN ({subquery._build()})")
-        self._args.extend(subquery._args)
+        sq = subquery.clone()
+        sq._apply_global_scopes()
+        self._wheres.append(f"{column} IN ({sq._build()})")
+        self._args.extend(sq._collect_all_args())
         return self
 
     def _where_in_values(self, column: str, values) -> "Query[T]":
@@ -524,7 +562,9 @@ class Query(Generic[T]):
             cached = clone._maybe_return_cached(sql, all_args)
             if cached is not None:
                 return cached
-        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(sql, all_args)
+        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         results = clone._instantiate_results(rows, sql, all_args)
         if clone._eager and results:
             clone._load_eager(results)
@@ -542,7 +582,8 @@ class Query(Generic[T]):
     def _instantiate_results(self, rows, sql: str, all_args: list[Any]) -> ModelList[T]:
         return ModelList(
             (self._instantiate_row(row) for row in rows),
-            sql=sql, args=all_args,
+            sql=sql,
+            args=all_args,
         )
 
     def _instantiate_row(self, row):
@@ -550,7 +591,9 @@ class Query(Generic[T]):
         obj._shard = self._shard
         return obj
 
-    def _maybe_return_cached(self, sql: str, all_args: list[Any]) -> Optional[ModelList[T]]:
+    def _maybe_return_cached(
+        self, sql: str, all_args: list[Any]
+    ) -> Optional[ModelList[T]]:
         from ..cache import default_cache
 
         cache_key = self._resolve_cache_key(sql, all_args)
@@ -573,7 +616,9 @@ class Query(Generic[T]):
             return
         from ..cache import default_cache
 
-        default_cache.set(self._resolve_cache_key(sql, all_args), rows, ttl=self._cache_ttl)
+        default_cache.set(
+            self._resolve_cache_key(sql, all_args), rows, ttl=self._cache_ttl
+        )
 
     def _load_eager(self, results):
         """Batch load relations to avoid N+1 queries supporting nesting and polymorphism."""
@@ -601,7 +646,11 @@ class Query(Generic[T]):
 
     def _attach_morph_targets(self, target_model, rel_name, active_subs, pairs) -> None:
         t_ids = list({p[1] for p in pairs})
-        targets = self._build_relation_query(target_model, active_subs).where_in("id", t_ids).get()
+        targets = (
+            self._build_relation_query(target_model, active_subs)
+            .where_in("id", t_ids)
+            .get()
+        )
         by_id = {t.id: t for t in targets}
         for r, t_id in pairs:
             r.__dict__[f"_eager_{rel_name}"] = by_id.get(t_id)
@@ -627,7 +676,9 @@ class Query(Generic[T]):
         return target, fk, ids
 
     def _fetch_has_children(self, target, active_subs, fk, ids) -> dict:
-        children = self._build_relation_query(target, active_subs).where_in(fk, ids).get()
+        children = (
+            self._build_relation_query(target, active_subs).where_in(fk, ids).get()
+        )
         grouped: dict = {}
         for c in children:
             grouped.setdefault(getattr(c, fk), []).append(c)
@@ -644,7 +695,11 @@ class Query(Generic[T]):
         if ctx is None:
             return
         target, fk, parent_ids = ctx
-        parents = self._build_relation_query(target, active_subs).where_in("id", parent_ids).get()
+        parents = (
+            self._build_relation_query(target, active_subs)
+            .where_in("id", parent_ids)
+            .get()
+        )
         by_id = {p.id: p for p in parents}
         for r in results:
             r.__dict__[f"_eager_{rel_name}"] = by_id.get(getattr(r, fk))
@@ -702,7 +757,8 @@ class Query(Generic[T]):
         for r in results:
             r.__dict__[f"_eager_{rel_name}"] = ModelList(
                 parent_to_targets.get(r.id, []),
-                sql=targets.sql, args=targets.args,
+                sql=targets.sql,
+                args=targets.args,
             )
 
     def _fetch_pivot_rows(self, pivot, pfk, pofk, ids):
@@ -714,8 +770,7 @@ class Query(Generic[T]):
         )
         placeholders = ", ".join(["?"] * len(ids))
         sql = (
-            f"SELECT {q_pfk}, {q_pofk} FROM {q_pivot} "
-            f"WHERE {q_pfk} IN ({placeholders})"
+            f"SELECT {q_pfk}, {q_pofk} FROM {q_pivot} WHERE {q_pfk} IN ({placeholders})"
         )
         return engine.execute(sql, ids)
 
@@ -724,7 +779,9 @@ class Query(Generic[T]):
         if ctx is None:
             return
         target, fk_id, fk_type, ids = ctx
-        grouped = self._fetch_morph_many_children(target, active_subs, fk_id, fk_type, ids)
+        grouped = self._fetch_morph_many_children(
+            target, active_subs, fk_id, fk_type, ids
+        )
         for r in results:
             r.__dict__[f"_eager_{rel_name}"] = grouped.get(r.id, [])
 
@@ -738,7 +795,9 @@ class Query(Generic[T]):
             return None
         return target, f"{rel.foreign_key}_id", f"{rel.foreign_key}_type", ids
 
-    def _fetch_morph_many_children(self, target, active_subs, fk_id, fk_type, ids) -> dict:
+    def _fetch_morph_many_children(
+        self, target, active_subs, fk_id, fk_type, ids
+    ) -> dict:
         children = (
             self._build_relation_query(target, active_subs)
             .where_in(fk_id, ids)
@@ -762,13 +821,68 @@ class Query(Generic[T]):
         rows = self.get()
         return rows[0] if rows else None
 
+    def last(self) -> Optional[T]:
+        """Execute the query and return the last matching record or None.
+
+        Reverses the current sort direction (or defaults to sorting by 'id DESC'
+        if no order is defined).
+        """
+        clone = self.clone()
+        if clone._order:
+            parts = []
+            for item in clone._order.split(","):
+                item_stripped = item.strip()
+                if item_stripped:
+                    parts.append(_invert_order_item(item_stripped))
+            clone._order = ", ".join(parts)
+        else:
+            clone._order = "id DESC"
+        return clone.first()
+
+    def first_or_fail(self) -> T:
+        """Execute the query and return the first matching record, or raise ModelError."""
+        obj = self.first()
+        if not obj:
+            from .exceptions import ModelError
+
+            raise ModelError(f"{self.model.__name__} not found")
+        return obj
+
+    def first_or_create(
+        self, defaults: Optional[dict[str, Any]] = None, **kwargs: Any
+    ) -> T:
+        """Get the first record matching kwargs, or create a new one with defaults."""
+        clone = self.clone().filter_by(**kwargs)
+        obj = clone.first()
+        if obj:
+            return obj
+        params = dict(defaults or {})
+        params.update(kwargs)
+        return self.create(**params)
+
+    def update_or_create(
+        self, defaults: Optional[dict[str, Any]] = None, **kwargs: Any
+    ) -> T:
+        """Get the first record matching kwargs and update it, or create a new one."""
+        clone = self.clone().filter_by(**kwargs)
+        obj = clone.first()
+        if obj:
+            if defaults:
+                obj.update(**defaults)
+            return obj
+        params = dict(defaults or {})
+        params.update(kwargs)
+        return self.create(**params)
+
     def count(self) -> int:
         """Return the number of records matching the query."""
         clone = self.clone()
         clone._apply_global_scopes()
         sql = clone._build_count_sql()
         all_args = clone._args_for_set_ops()
-        res = clone.model.get_engine(op="read", shard=clone._shard).execute(sql, all_args)
+        res = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         return list(res[0].values())[0] if res else 0
 
     def _build_count_sql(self) -> str:
@@ -794,7 +908,9 @@ class Query(Generic[T]):
         clone._apply_global_scopes()
         sql = clone._build_aggregate_sql(func, column)
         all_args = clone._args_for_set_ops()
-        res = clone.model.get_engine(op="read", shard=clone._shard).execute(sql, all_args)
+        res = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         result = list(res[0].values())[0] if res else None
         return result if result is not None else 0
 
@@ -827,7 +943,9 @@ class Query(Generic[T]):
         clone._apply_global_scopes()
         sql = clone._build_pluck_sql(column)
         all_args = clone._args_for_set_ops()
-        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(sql, all_args)
+        rows = clone.model.get_engine(op="read", shard=clone._shard).execute(
+            sql, all_args
+        )
         return [list(row.values())[0] for row in rows]
 
     def _build_pluck_sql(self, column: str) -> str:
@@ -939,6 +1057,121 @@ class Query(Generic[T]):
             "current_page": page,
         }
 
+    # ── Async terminal methods ────────────────────────────────────────────────
+
+    async def get_async(self) -> "ModelList[T]":
+        """Execute the query and return all matching records asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.get)
+
+    async def first_async(self) -> Optional[T]:
+        """Return the first matching record asynchronously, or None."""
+        import asyncio
+
+        return await asyncio.to_thread(self.first)
+
+    async def last_async(self) -> Optional[T]:
+        """Return the last matching record asynchronously, or None."""
+        import asyncio
+
+        return await asyncio.to_thread(self.last)
+
+    async def first_or_fail_async(self) -> T:
+        """Return the first matching record or raise ModelError asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.first_or_fail)
+
+    async def first_or_create_async(
+        self, defaults: Optional[dict[str, Any]] = None, **kwargs: Any
+    ) -> T:
+        """Get the first matching record or create one asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.first_or_create, defaults, **kwargs)
+
+    async def update_or_create_async(
+        self, defaults: Optional[dict[str, Any]] = None, **kwargs: Any
+    ) -> T:
+        """Get the first matching record and update it, or create one asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.update_or_create, defaults, **kwargs)
+
+    async def create_async(self, **kwargs: Any) -> T:
+        """Create and persist a new record via this query asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.create, **kwargs)
+
+    async def count_async(self) -> int:
+        """Return the number of records matching the query asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.count)
+
+    async def exists_async(self) -> bool:
+        """Return True if at least one record matches the query asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.exists)
+
+    async def sum_async(self, column: str) -> Union[int, float]:
+        """Return the sum of a column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.sum, column)
+
+    async def avg_async(self, column: str) -> float:
+        """Return the average of a column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.avg, column)
+
+    async def min_async(self, column: str) -> Any:
+        """Return the minimum value of a column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.min, column)
+
+    async def max_async(self, column: str) -> Any:
+        """Return the maximum value of a column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.max, column)
+
+    async def pluck_async(self, column: str) -> list[Any]:
+        """Return a flat list of values for a single column asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.pluck, column)
+
+    async def update_async(self, **values: Any) -> int:
+        """Update all matching records asynchronously and return the row count."""
+        import asyncio
+
+        return await asyncio.to_thread(self.update, **values)
+
+    async def delete_async(self) -> int:
+        """Delete all matching records asynchronously and return the row count."""
+        import asyncio
+
+        return await asyncio.to_thread(self.delete)
+
+    async def force_delete_async(self) -> int:
+        """Permanently delete all matching records asynchronously, bypassing soft delete."""
+        import asyncio
+
+        return await asyncio.to_thread(self.force_delete)
+
+    async def paginate_async(
+        self, page: int = 1, per_page: int = 10, count: bool = True
+    ) -> dict[str, Any]:
+        """Paginate the query results asynchronously."""
+        import asyncio
+
+        return await asyncio.to_thread(self.paginate, page, per_page, count)
 
 
 _EAGER_LOADERS = {

@@ -138,7 +138,9 @@ def _is_acceptable_venv(p: str, existing: list[str], found: list[str]) -> bool:
 
 
 def _looks_like_venv(p: str) -> bool:
-    return os.path.isdir(os.path.join(p, "lib")) or os.path.isdir(os.path.join(p, "Lib"))
+    return os.path.isdir(os.path.join(p, "lib")) or os.path.isdir(
+        os.path.join(p, "Lib")
+    )
 
 
 def _add_venv_site_packages_to_path(venv_path: str) -> None:
@@ -176,6 +178,7 @@ def load_extension_commands(subparsers: argparse._SubParsersAction) -> None:
 def _import_metadata():
     if sys.version_info >= (3, 10):
         from importlib import metadata
+
         return metadata
     try:
         import importlib_metadata as metadata  # type: ignore
@@ -320,7 +323,10 @@ def _register_basic_commands(subparsers, sub_parsers: dict) -> None:
     subparsers.add_parser("test").add_argument("path", nargs="?", default=None)
     worker_parser = subparsers.add_parser("worker")
     worker_parser.add_argument(
-        "action", nargs="?", choices=["run", "status"], default="run",
+        "action",
+        nargs="?",
+        choices=["run", "status"],
+        default="run",
         help="'run' (default) starts the worker, 'status' shows queue status.",
     )
 
@@ -351,12 +357,17 @@ def _register_tooling_commands(subparsers, sub_parsers: dict) -> None:
     sub_parsers["assets"] = assets_parser
 
     graphql_parser = subparsers.add_parser("graphql")
-    graphql_parser.add_argument("--install", action="store_true", help="Download GraphiQL playground assets for offline use")
+    graphql_parser.add_argument(
+        "--install",
+        action="store_true",
+        help="Download GraphiQL playground assets for offline use",
+    )
     sub_parsers["graphql"] = graphql_parser
 
     deploy_parser = subparsers.add_parser("deploy")
     deploy_parser.add_argument(
-        "--prod-dir", default=None,
+        "--prod-dir",
+        default=None,
         help="Target directory on the production server (defaults to /var/www/<app_name>)",
     )
     build_parser = subparsers.add_parser("build")
@@ -513,7 +524,9 @@ def _cmd_deploy(args, sub_parsers) -> None:
 def _cmd_build(args, sub_parsers) -> None:
     root = _require_project_root()
     if root:
-        run_build(root, keep_source=args.keep_source, with_db=args.with_db, output=args.output)
+        run_build(
+            root, keep_source=args.keep_source, with_db=args.with_db, output=args.output
+        )
 
 
 def _cmd_dev(args, sub_parsers) -> None:
@@ -526,9 +539,13 @@ def _cmd_preview(args, sub_parsers) -> None:
 
 def _cmd_migrate(args, sub_parsers) -> None:
     run_migrate(
-        rollback=args.rollback, status=args.status, fake=args.fake,
-        database=args.database, to_migration=args.to,
-        steps=args.steps, reset=args.reset,
+        rollback=args.rollback,
+        status=args.status,
+        fake=args.fake,
+        database=args.database,
+        to_migration=args.to,
+        steps=args.steps,
+        reset=args.reset,
     )
 
 

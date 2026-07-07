@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import secrets
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
@@ -23,7 +22,9 @@ class CsrfMixin:
         """Verify Origin/Referer header for HTTPS requests. Raises SecurityError on failure."""
         origin = self.headers.get("Origin") or self.headers.get("Referer")
         if not origin:
-            raise SecurityError("Strict CSRF: Origin or Referer header required for HTTPS.")
+            raise SecurityError(
+                "Strict CSRF: Origin or Referer header required for HTTPS."
+            )
         parsed_origin, parsed_req = self._parse_csrf_origins(origin)
 
         if parsed_origin.scheme != parsed_req.scheme:
@@ -36,7 +37,9 @@ class CsrfMixin:
             )
         self._verify_csrf_port_if_strict(parsed_origin, parsed_req)
 
-    def _verify_csrf_port_if_strict(self: Any, parsed_origin: Any, parsed_req: Any) -> None:
+    def _verify_csrf_port_if_strict(
+        self: Any, parsed_origin: Any, parsed_req: Any
+    ) -> None:
         app_ref = self.environ.get("asok.app")
         if not (app_ref and app_ref.config.get("STRICT_CSRF_PORT")):
             return
@@ -94,6 +97,12 @@ class CsrfMixin:
         """Verify the CSRF token from headers, form data, or JSON body.
 
         Raises SecurityError if validation fails.
+
+        NOTE: The token is intentionally NOT rotated after each validation.
+        Per-request rotation desynchronises the cookie (updated) from the
+        rendered HTML form (still holds the old token), causing a 403 on
+        every second submission.  Token rotation is already performed on
+        login and logout (see auth.py) which is the appropriate boundary.
         """
         if self._csrf_verified:
             return
@@ -112,10 +121,6 @@ class CsrfMixin:
 
         self._csrf_verified = True
 
-        # SECURITY: Rotate CSRF token after successful validation
-        # to prevent token reuse attacks
-        self.csrf_token_value = secrets.token_hex(32)
-
     def _sign(self: Any, value: Union[str, int]) -> str:
         """Sign a value using the application's secret key."""
         app_ref: Optional[Any] = self.environ.get("asok.app")
@@ -123,6 +128,7 @@ class CsrfMixin:
             return app_ref._sign(value)
         # Fallback for tests that build Request without a full app context
         import os as _os
+
         key = _os.environ.get("SECRET_KEY", "").encode()
         if not key:
             raise RuntimeError("SECRET_KEY is not configured")

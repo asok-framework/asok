@@ -1,6 +1,22 @@
-from __future__ import annotations
-
+import enum
 from typing import Any, Dict, List, Optional
+
+
+def _safe_repr(obj: Any) -> str:
+    def _clean(item: Any) -> Any:
+        if isinstance(item, enum.Enum):
+            return item.value
+        if hasattr(item, "value") and not isinstance(item, (type, type(None))):
+            return item.value
+        if isinstance(item, dict):
+            return {k: _clean(v) for k, v in item.items()}
+        if isinstance(item, list):
+            return [_clean(v) for v in item]
+        if isinstance(item, tuple):
+            return tuple(_clean(v) for v in item)
+        return item
+
+    return repr(_clean(obj))
 
 
 class BaseOperation:
@@ -42,6 +58,7 @@ class CreateModel(BaseOperation):
 
     def state_forwards(self, state: Any) -> None:
         from .state import VirtualModelState
+
         state.models[self.name] = VirtualModelState(
             name=self.name,
             table=self.table,
@@ -61,7 +78,7 @@ class CreateModel(BaseOperation):
             f"operations.CreateModel(\n"
             f"        name={repr(self.name)},\n"
             f"        table={repr(self.table)},\n"
-            f"        fields={repr(self.fields)},\n"
+            f"        fields={_safe_repr(self.fields)},\n"
             f"        relations={repr(self.relations)},\n"
             f"        search_fields={repr(self.search_fields)},\n"
             f"    )"
@@ -107,7 +124,7 @@ class DeleteModel(BaseOperation):
             f"operations.DeleteModel(\n"
             f"        name={repr(self.name)},\n"
             f"        table={repr(self.table)},\n"
-            f"        fields={repr(self.fields)},\n"
+            f"        fields={_safe_repr(self.fields)},\n"
             f"        relations={repr(self.relations)},\n"
             f"        search_fields={repr(self.search_fields)},\n"
             f"    )"
@@ -137,7 +154,7 @@ class AddField(BaseOperation):
             f"operations.AddField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        field={repr(self.field)},\n"
+            f"        field={_safe_repr(self.field)},\n"
             f"    )"
         )
 
@@ -145,7 +162,9 @@ class AddField(BaseOperation):
 class RemoveField(BaseOperation):
     """Operation to drop a column from a table."""
 
-    def __init__(self, model_name: str, name: str, field: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, model_name: str, name: str, field: Optional[Dict[str, Any]] = None
+    ):
         self.model_name = model_name
         self.name = name
         self.field = field or {}
@@ -165,7 +184,7 @@ class RemoveField(BaseOperation):
             f"operations.RemoveField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        field={repr(self.field)},\n"
+            f"        field={_safe_repr(self.field)},\n"
             f"    )"
         )
 
@@ -190,18 +209,22 @@ class AlterField(BaseOperation):
         model.fields[self.name] = self.new_field
 
     def database_forwards(self, schema_editor: Any) -> None:
-        schema_editor.alter_column(self.model_name, self.name, self.old_field, self.new_field)
+        schema_editor.alter_column(
+            self.model_name, self.name, self.old_field, self.new_field
+        )
 
     def database_backwards(self, schema_editor: Any) -> None:
-        schema_editor.alter_column(self.model_name, self.name, self.new_field, self.old_field)
+        schema_editor.alter_column(
+            self.model_name, self.name, self.new_field, self.old_field
+        )
 
     def deconstruct(self) -> str:
         return (
             f"operations.AlterField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        old_field={repr(self.old_field)},\n"
-            f"        new_field={repr(self.new_field)},\n"
+            f"        old_field={_safe_repr(self.old_field)},\n"
+            f"        new_field={_safe_repr(self.new_field)},\n"
             f"    )"
         )
 

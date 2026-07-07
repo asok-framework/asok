@@ -11,9 +11,208 @@ _RE_DOTTED = re.compile(
 _RE_FILTER_CHAIN = re.compile(
     r"(\b[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)((?:\s*\|\s*\w+(?:\([^)]*\))?)+)"
 )
+# Compiled once at module level — was incorrectly compiled inside the inner loop
+# on every call to _resolve_expr(), causing unnecessary overhead.
+_RE_IS_TEST = re.compile(
+    r"([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*|\[[^\]]+\])*)\s+is\s+(not\s+)?(\w+)"
+)
 
 
 _UNARY_OPS = {ast.USub: "-", ast.UAdd: "+", ast.Not: "not "}
+
+_SPECIAL_NAMES = frozenset(
+    {
+        "True",
+        "False",
+        "None",
+        "and",
+        "or",
+        "not",
+        "in",
+        "is",
+        "if",
+        "else",
+        "elif",
+        "for",
+        "while",
+        "lambda",
+        "yield",
+        "async",
+        "await",
+        "str",
+        "int",
+        "float",
+        "len",
+        "range",
+        "dict",
+        "list",
+        "bool",
+        "abs",
+        "min",
+        "max",
+        "sum",
+        "sorted",
+        "reversed",
+        "enumerate",
+    }
+)
+
+
+def _update_quote(in_quote: Optional[str], ch: str, is_escaped: bool) -> Optional[str]:
+    if is_escaped:
+        return in_quote
+    if in_quote:
+        return None if ch == in_quote else in_quote
+    return ch if ch in ('"', "'") else None
+
+
+def _update_depth_left(ch: str, open_ch: str, close_ch: str, depth: int) -> int:
+    if ch == close_ch:
+        return depth + 1
+    return depth - 1 if ch == open_ch else depth
+
+
+def _find_tilde_pos(expr: str) -> int:
+    in_q = None
+    for i, ch in enumerate(expr):
+        esc = i > 0 and expr[i - 1] == "\\"
+        in_q = _update_quote(in_q, ch, esc)
+        if not in_q and ch == "~":
+            return i
+    return -1
+
+
+def _scan_left_delimited(expr: str, start: int, close_ch: str) -> int:
+    open_ch = {")": "(", "]": "[", "}": "{"}[close_ch]
+    depth, curr, in_q = 1, start - 1, None
+    while curr >= 0 and depth > 0:
+        c = expr[curr]
+        esc = curr > 0 and expr[curr - 1] == "\\"
+        in_q = _update_quote(in_q, c, esc)
+        if not in_q:
+            depth = _update_depth_left(c, open_ch, close_ch, depth)
+        curr -= 1
+    return curr + 1
+
+
+def _scan_left_unbounded(expr: str, start: int) -> int:
+    curr, in_q = start, None
+    stop_chars = (
+        ",",
+        ";",
+        "+",
+        "-",
+        "*",
+        "/",
+        "%",
+        "=",
+        "<",
+        ">",
+        "!",
+        "&",
+        "|",
+        "^",
+        "(",
+        "[",
+        "{",
+    )
+    while curr >= 0:
+        c = expr[curr]
+        esc = curr > 0 and expr[curr - 1] == "\\"
+        in_q = _update_quote(in_q, c, esc)
+        if not in_q and c in stop_chars:
+            break
+        curr -= 1
+    return curr + 1
+
+
+def _find_left_operand(expr: str, tilde_pos: int) -> tuple[int, str]:
+    left_end = tilde_pos - 1
+    while left_end >= 0 and expr[left_end].isspace():
+        left_end -= 1
+    if left_end < 0:
+        return -1, ""
+    if expr[left_end] in (")", "]", "}"):
+        start = _scan_left_delimited(expr, left_end, expr[left_end])
+    else:
+        start = _scan_left_unbounded(expr, left_end)
+    return start, expr[start:tilde_pos].strip()
+
+
+def _scan_right_delimited(expr: str, start: int, open_ch: str) -> int:
+    close_ch = {"(": ")", "[": "]", "{": "}"}[open_ch]
+    depth, curr, in_q = 1, start + 1, None
+    while curr < len(expr) and depth > 0:
+        c = expr[curr]
+        esc = curr > 0 and expr[curr - 1] == "\\"
+        in_q = _update_quote(in_q, c, esc)
+        if not in_q:
+            depth = _update_depth_left(c, close_ch, open_ch, depth)
+        curr += 1
+    return curr
+
+
+def _scan_right_unbounded(expr: str, start: int) -> int:
+    curr, in_q = start, None
+    stop_chars = (
+        ",",
+        ";",
+        "+",
+        "-",
+        "*",
+        "/",
+        "%",
+        "=",
+        "<",
+        ">",
+        "!",
+        "&",
+        "|",
+        "^",
+        ")",
+        "]",
+        "}",
+    )
+    while curr < len(expr):
+        c = expr[curr]
+        esc = curr > 0 and expr[curr - 1] == "\\"
+        in_q = _update_quote(in_q, c, esc)
+        if not in_q and c in stop_chars:
+            break
+        curr += 1
+    return curr
+
+
+def _find_right_operand(expr: str, tilde_pos: int) -> tuple[int, str]:
+    right_start = tilde_pos + 1
+    while right_start < len(expr) and expr[right_start].isspace():
+        right_start += 1
+    if right_start >= len(expr):
+        return -1, ""
+    if expr[right_start] in ("(", "[", "{"):
+        end = _scan_right_delimited(expr, right_start, expr[right_start])
+    else:
+        end = _scan_right_unbounded(expr, right_start)
+    return end, expr[right_start:end].strip()
+
+
+def _replace_tilde_op(expr: str) -> str:
+    """Replace Jinja binary `~` string concatenation operator with `(str(left) + str(right))`."""
+    if "~" not in expr:
+        return expr
+    tilde_pos = _find_tilde_pos(expr)
+    if tilde_pos == -1:
+        return expr
+    left_start, left_op = _find_left_operand(expr, tilde_pos)
+    if left_start < 0:
+        return expr
+    right_end, right_op = _find_right_operand(expr, tilde_pos)
+    if right_end < 0:
+        return expr
+    prefix = expr[:left_start]
+    suffix = expr[right_end:]
+    replacement = f"(str({left_op}) + str({right_op}))"
+    return _replace_tilde_op(prefix + replacement + suffix)
 
 
 def _unparse(node: Optional[ast.AST]) -> str:
@@ -90,6 +289,9 @@ def _resolve_dotted(
     if len(expr) > 5_000:
         return '""'
 
+    if "~" in expr:
+        expr = _replace_tilde_op(expr)
+
     def replace_match(m: re.Match[str]) -> str:
         if m.group(1):  # It's a string literal
             return m.group(1)
@@ -101,29 +303,7 @@ def _resolve_dotted(
             if chain in (locals_set or set()):
                 return chain
             # Literals or special names
-            if (
-                chain
-                in (
-                    "True",
-                    "False",
-                    "None",
-                    "and",
-                    "or",
-                    "not",
-                    "in",
-                    "is",
-                    "if",
-                    "else",
-                    "elif",
-                    "for",
-                    "while",
-                    "lambda",
-                    "yield",
-                    "async",
-                    "await",
-                )
-                or chain.isdigit()
-            ):
+            if chain in _SPECIAL_NAMES or chain.isdigit():
                 return chain
 
             # Check for keyword argument (name followed by '=' but not '==')
@@ -140,30 +320,7 @@ def _resolve_dotted(
         suffix = chain[match_start.start() :]
 
         # Resolve base name
-        if (
-            base in (locals_set or set())
-            or base
-            in (
-                "True",
-                "False",
-                "None",
-                "and",
-                "or",
-                "not",
-                "in",
-                "is",
-                "if",
-                "else",
-                "elif",
-                "for",
-                "while",
-                "lambda",
-                "yield",
-                "async",
-                "await",
-            )
-            or base.isdigit()
-        ):
+        if base in (locals_set or set()) or base in _SPECIAL_NAMES or base.isdigit():
             current = base
         else:
             current = f'_res(context, "{base}", _debug)'
@@ -230,9 +387,7 @@ def _normalize_filter_parts(filters_str: str) -> list[str]:
     return out
 
 
-def _apply_one_filter(
-    val_expr: str, filter_part: str, locals_set, _debug: bool
-) -> str:
+def _apply_one_filter(val_expr: str, filter_part: str, locals_set, _debug: bool) -> str:
     if "(" not in filter_part:
         return f"__filters['{filter_part}']({val_expr})"
     fname, fargs = filter_part.split("(", 1)
@@ -322,10 +477,7 @@ def _resolve_expr(
                         break
                 # Apply is test pattern to this non-string segment
                 segment = text[i:next_quote]
-                is_test_pattern = re.compile(
-                    r"([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*|\[[^\]]+\])*)\s+is\s+(not\s+)?(\w+)"
-                )
-                segment = is_test_pattern.sub(replace_is_test, segment)
+                segment = _RE_IS_TEST.sub(replace_is_test, segment)
                 result_parts.append(segment)
                 i = next_quote
         return "".join(result_parts)

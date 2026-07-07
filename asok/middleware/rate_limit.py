@@ -57,11 +57,10 @@ def rate_limit_middleware(request: Any, next_handler: Callable) -> Any:
     current_minute = int(time.time() // 60)
     key = f"rate_limit:{request.ip}:{current_minute}"
 
-    # Get current count
-    count = default_cache.get(key, 0)
-
-    if count >= rate_limit:
-        # Rate limit exceeded
+    # Atomic increment operation (cross-process safe when using Redis cache)
+    # to prevent TOCTOU race conditions.
+    count = default_cache.incr(key, ttl=60)
+    if count > rate_limit:
         request.status_code(429)
         return request.text(
             f"Too many requests. Limit: {rate_limit} requests per minute. "
@@ -69,8 +68,4 @@ def rate_limit_middleware(request: Any, next_handler: Callable) -> Any:
             status=429,
         )
 
-    # Increment counter with 60s TTL
-    default_cache.set(key, count + 1, ttl=60)
-
-    # Process request
     return next_handler(request)

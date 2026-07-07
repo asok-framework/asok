@@ -113,8 +113,10 @@ def _process_tag_match(match: re.Match, result: list[str]) -> None:
                 result.append(f"<{tag}>")
 
 
-def _add_text_before_tag(html: str, pos: int, match_start: int, result: list[str]) -> None:
-    text_before = html[pos : match_start]
+def _add_text_before_tag(
+    html: str, pos: int, match_start: int, result: list[str]
+) -> None:
+    text_before = html[pos:match_start]
     if text_before:
         result.append(escape(text_before))
 
@@ -204,7 +206,9 @@ def _get_allowed_attributes(tag: str, attrs: str) -> set[str] | None:
     return ALLOWED_ATTRIBUTES[tag]
 
 
-def _process_attr_match(match: re.Match, allowed: set[str], sanitized: list[str]) -> None:
+def _process_attr_match(
+    match: re.Match, allowed: set[str], sanitized: list[str]
+) -> None:
     attr_name = match.group(1).lower()
     if attr_name not in allowed:
         return
@@ -274,7 +278,9 @@ def _clean_url_html(url: str) -> str:
 
 
 def _is_dangerous_protocol_html(clean_url: str, allow_data_images: bool) -> bool:
-    if any(clean_url.startswith(proto) for proto in ["javascript:", "data:", "vbscript:"]):
+    if any(
+        clean_url.startswith(proto) for proto in ["javascript:", "data:", "vbscript:"]
+    ):
         if allow_data_images and clean_url.startswith("data:image/"):
             return False
         return True

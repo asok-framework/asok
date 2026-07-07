@@ -11,10 +11,32 @@ from asok.utils.image import is_image, optimize_image
 _RE_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 _DANGEROUS_EXTS = {
-    "php", "phtml", "php3", "php4", "php5", "phps", "pht",
-    "exe", "com", "bat", "cmd", "sh", "bash", "zsh", "csh",
-    "pl", "py", "rb", "js", "jsp", "asp", "aspx", "cgi",
-    "dll", "so", "dylib",
+    "php",
+    "phtml",
+    "php3",
+    "php4",
+    "php5",
+    "phps",
+    "pht",
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "sh",
+    "bash",
+    "zsh",
+    "csh",
+    "pl",
+    "py",
+    "rb",
+    "js",
+    "jsp",
+    "asp",
+    "aspx",
+    "cgi",
+    "dll",
+    "so",
+    "dylib",
 }
 
 
@@ -132,7 +154,9 @@ class UploadedFile:
         """Return a file-like BytesIO stream of the content."""
         return io.BytesIO(self.content)
 
-    def _lookup_riff_type(self, riff_type: bytes) -> tuple[str, list] | tuple[None, None]:
+    def _lookup_riff_type(
+        self, riff_type: bytes
+    ) -> tuple[str, list] | tuple[None, None]:
         if riff_type == b"WEBP":
             return "image/webp", [".webp"]
         if riff_type == b"WAVE":
@@ -158,9 +182,11 @@ class UploadedFile:
         ftyp_start = self.content.find(b"ftyp")
         if ftyp_start == -1 or len(self.content) < ftyp_start + 8:
             return None
-        return self.content[ftyp_start + 4: ftyp_start + 8]
+        return self.content[ftyp_start + 4 : ftyp_start + 8]
 
-    def _lookup_ftyp_brand(self, ftyp_brand: bytes) -> tuple[str, list] | tuple[None, None]:
+    def _lookup_ftyp_brand(
+        self, ftyp_brand: bytes
+    ) -> tuple[str, list] | tuple[None, None]:
         if ftyp_brand.startswith(b"M4A"):
             return "audio/mp4", [".m4a"]
         if ftyp_brand.startswith(b"3gp"):
@@ -197,9 +223,13 @@ class UploadedFile:
         if mime:
             return mime, exts
         all_mimes = ", ".join({m for m, _ in self._MAGIC_BYTES.values()})
-        raise ValueError(f"Unknown or unsupported file type. Supported types: {all_mimes}")
+        raise ValueError(
+            f"Unknown or unsupported file type. Supported types: {all_mimes}"
+        )
 
-    def _check_allowed_types(self, detected_mime: str, allowed_types: Optional[list[str]]) -> None:
+    def _check_allowed_types(
+        self, detected_mime: str, allowed_types: Optional[list[str]]
+    ) -> None:
         """Raise ValueError if detected_mime is not in allowed_types."""
         if allowed_types and detected_mime not in allowed_types:
             raise ValueError(
@@ -261,9 +291,11 @@ class UploadedFile:
         """Generate a safe filename (UUID-based or sanitized original)."""
         if secure_filename:
             import uuid
+
             _, ext = os.path.splitext(self.filename)
             return f"{uuid.uuid4()}{ext.lower()}"
         from asok.utils.security import secure_filename as sanitize_filename
+
         return sanitize_filename(self.filename)
 
     def _is_svg_file(self, safe_name: str) -> bool:
@@ -276,13 +308,16 @@ class UploadedFile:
         except Exception:
             return False
 
-    def _sanitize_svg_content(self, content: bytes, safe_name: str, validate: bool, logger) -> bytes:
+    def _sanitize_svg_content(
+        self, content: bytes, safe_name: str, validate: bool, logger
+    ) -> bytes:
         """Sanitize SVG content if the file is an SVG and validation is enabled."""
         if not validate:
             return content
 
         if self._is_svg_file(safe_name):
             from asok.utils.svg_sanitizer import sanitize_svg
+
             try:
                 sanitized = sanitize_svg(content)
                 logger.debug("SVG file sanitized: %s", safe_name)
@@ -291,9 +326,12 @@ class UploadedFile:
                 raise ValueError(f"SVG sanitization failed: {e}")
         return content
 
-    def _save_to_s3(self, destination: str, secure_filename: bool, private: bool, validate: bool) -> str:
+    def _save_to_s3(
+        self, destination: str, secure_filename: bool, private: bool, validate: bool
+    ) -> str:
         """Upload file to S3 storage and return the URL."""
         from asok.core.storage import get_storage
+
         logger = logging.getLogger(__name__)
 
         safe_name = self._build_safe_name(secure_filename)
@@ -303,8 +341,12 @@ class UploadedFile:
         else:
             upload_to = os.path.dirname(destination).strip("/\\")
 
-        content_to_upload = self._sanitize_svg_content(self.content, safe_name, validate, logger)
-        url = get_storage().save(safe_name, content_to_upload, upload_to, private=private)
+        content_to_upload = self._sanitize_svg_content(
+            self.content, safe_name, validate, logger
+        )
+        url = get_storage().save(
+            safe_name, content_to_upload, upload_to, private=private
+        )
         self.filename = safe_name
         return url
 
@@ -320,7 +362,9 @@ class UploadedFile:
             return os.path.join(dest, safe_name)
         return os.path.join(os.path.dirname(dest), safe_name)
 
-    def _validate_local_dest_safety(self, dest: str, base_dir: str, destination: str) -> None:
+    def _validate_local_dest_safety(
+        self, dest: str, base_dir: str, destination: str
+    ) -> None:
         try:
             resolved_dest = os.path.realpath(dest)
             resolved_base = os.path.realpath(base_dir)
@@ -364,7 +408,9 @@ class UploadedFile:
             keep = os.environ.get("IMAGE_KEEP_ORIGINAL", "true").lower() != "false"
             optimize_image(dest, keep_original=keep)
 
-    def _save_local(self, destination: str, secure_filename: bool, private: bool, validate: bool) -> str:
+    def _save_local(
+        self, destination: str, secure_filename: bool, private: bool, validate: bool
+    ) -> str:
         """Save the file to the local filesystem and return the absolute path."""
         logger = logging.getLogger("asok.upload")
         safe_name = self._build_safe_name(secure_filename)
@@ -373,14 +419,18 @@ class UploadedFile:
 
         logger.debug("Saving uploaded file to: %s", dest)
 
-        content_to_write = self._sanitize_svg_content(self.content, dest, validate, logger)
+        content_to_write = self._sanitize_svg_content(
+            self.content, dest, validate, logger
+        )
         self._write_local_file(dest, content_to_write, private)
         self._maybe_optimize_image(dest)
 
         self.filename = os.path.basename(dest)
         return dest
 
-    def _validate_before_save(self, validate: bool, allowed_types: Optional[list[str]]) -> None:
+    def _validate_before_save(
+        self, validate: bool, allowed_types: Optional[list[str]]
+    ) -> None:
         if validate and allowed_types is None:
             self._warn_no_allowed_types()
 

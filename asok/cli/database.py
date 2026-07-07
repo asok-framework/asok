@@ -180,8 +180,12 @@ def _status_mark(is_applied: bool) -> str:
 
 
 def _plan_migration_action(
-    applied: list[str], mig_files: list[str], rollback: bool, reset: bool,
-    to_migration: str | None, steps: int | None,
+    applied: list[str],
+    mig_files: list[str],
+    rollback: bool,
+    reset: bool,
+    to_migration: str | None,
+    steps: int | None,
 ):
     if reset:
         return _plan_reset(applied)
@@ -226,7 +230,7 @@ def _matches_target_name(name: str, target: str) -> bool:
 
 def _plan_rollback_to(applied: list[str], target_mig: str):
     idx = applied.index(target_mig)
-    to_rollback = applied[idx + 1:]
+    to_rollback = applied[idx + 1 :]
     if not to_rollback:
         Style.success(f"Database is already at migration '{target_mig}'.")
         return None
@@ -314,6 +318,7 @@ def _get_schema_editor(conn, engine):
         return MySQLSchemaEditor(conn, engine)
     else:
         from asok.orm.migrations.schema import BaseSchemaEditor
+
         return BaseSchemaEditor(conn, engine)
 
 
@@ -371,7 +376,9 @@ def _rollback_functional_migration(conn, mod, name: str, fake: bool) -> None:
         conn.commit()
 
 
-def _run_applies(conn, engine, mig_dir: str, names: list[str], batch: int, fake: bool) -> None:
+def _run_applies(
+    conn, engine, mig_dir: str, names: list[str], batch: int, fake: bool
+) -> None:
     for name in names:
         _apply_one(conn, engine, mig_dir, name, batch, fake)
 
@@ -398,7 +405,9 @@ def _apply_declarative_migration(conn, engine, migration_cls, fake: bool) -> Non
     editor = _get_schema_editor(conn, engine)
     txn = getattr(engine, "transaction", None)
     context = txn() if txn else None
-    _execute_ops_forwards_with_context(context, getattr(migration, "operations", []), editor)
+    _execute_ops_forwards_with_context(
+        context, getattr(migration, "operations", []), editor
+    )
     conn.commit()
 
 
@@ -581,7 +590,6 @@ def _attach_user_to_role(user, admin_role) -> None:
     )
 
 
-
 def _load_models(root: str) -> None:
     """Load models dynamically to register them in MODELS_REGISTRY."""
     _enter_project_root(root)
@@ -675,7 +683,11 @@ def _collect_fixtures(target_models: dict) -> list:
         model_cls = target_models[name]
         for record in model_cls.all():
             fixtures.append(
-                {"model": name, "pk": record.id, "fields": _serialize_record_fields(model_cls, record)}
+                {
+                    "model": name,
+                    "pk": record.id,
+                    "fields": _serialize_record_fields(model_cls, record),
+                }
             )
     return fixtures
 
@@ -852,13 +864,13 @@ def _upsert_fixture_instance(matched_cls, pk, processed_fields: dict) -> None:
 
 
 def _row_with_pk_exists(engine, q_table: str, q_id: str, pk) -> bool:
-    rows = engine.execute(
-        f"SELECT 1 FROM {q_table} WHERE {q_id} = ? LIMIT 1", (pk,)
-    )
+    rows = engine.execute(f"SELECT 1 FROM {q_table} WHERE {q_id} = ? LIMIT 1", (pk,))
     return bool(rows)
 
 
-def _insert_new_fixture(matched_cls, pk, processed_fields: dict, engine, q_table: str, q_id: str) -> None:
+def _insert_new_fixture(
+    matched_cls, pk, processed_fields: dict, engine, q_table: str, q_id: str
+) -> None:
     instance = matched_cls(_trust=True, **processed_fields)
     instance.id = pk
     instance._fire_pre_save_hooks()
@@ -962,7 +974,9 @@ def _print_sqlite_table(engine, table: str) -> None:
 def _print_sqlite_column(col) -> None:
     pk_str = " (PK)" if col["pk"] else ""
     notnull_str = " NOT NULL" if col["notnull"] else ""
-    default_str = f" DEFAULT {col['dflt_value']}" if col["dflt_value"] is not None else ""
+    default_str = (
+        f" DEFAULT {col['dflt_value']}" if col["dflt_value"] is not None else ""
+    )
     print(f"  - {col['name']}: {col['type']}{pk_str}{notnull_str}{default_str}")
 
 

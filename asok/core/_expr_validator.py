@@ -54,12 +54,9 @@ _DANGEROUS_PATTERNS = (
     r"\bdocument\.createElement\b",
     r"\.innerHTML\s*=",
     # Constructor-based eval bypasses
-    r"\bconstructor\.constructor\b",
-    r'\bconstructor\s*\[\s*[\'"]constructor[\'"]\s*\]',
-    r'\[\s*[\'"]constructor[\'"]\s*\]\s*\[\s*[\'"]constructor[\'"]\s*\]',
-    r"\.concat\.constructor\b",
+    r"\bconstructor\b",
+    r"\bprototype\b",
     r"\bFunction\s*\(",
-    r"\.prototype\b",
     # Template literals with interpolation
     r"`.*\$\{.*\}.*`",
     # Extra client-side restrictions
@@ -73,39 +70,147 @@ _DANGEROUS_PATTERNS = (
     r"\balert\b",
 )
 
-_ALLOWED_AST_NODES = frozenset({
-    ast.Expression, ast.Module, ast.Expr, ast.Load, ast.Store,
-    ast.Name, ast.Constant, ast.Attribute, ast.Subscript,
-    ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.IfExp,
-    ast.List, ast.Tuple, ast.Dict, ast.Set, ast.Call,
-    ast.Index, ast.Slice, ast.Assign, ast.AugAssign, ast.AnnAssign,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
-    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
-    ast.And, ast.Or, ast.Not, ast.UAdd, ast.USub,
-    ast.In, ast.NotIn, ast.Is, ast.IsNot,
-    ast.Lambda, ast.arguments, ast.arg, ast.Await,
-})
+_ALLOWED_AST_NODES = frozenset(
+    {
+        ast.Expression,
+        ast.Module,
+        ast.Expr,
+        ast.Load,
+        ast.Store,
+        ast.Name,
+        ast.Constant,
+        ast.Attribute,
+        ast.Subscript,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Compare,
+        ast.BoolOp,
+        ast.IfExp,
+        ast.List,
+        ast.Tuple,
+        ast.Dict,
+        ast.Set,
+        ast.Call,
+        ast.Index,
+        ast.Slice,
+        ast.Assign,
+        ast.AugAssign,
+        ast.AnnAssign,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+        ast.And,
+        ast.Or,
+        ast.Not,
+        ast.UAdd,
+        ast.USub,
+        ast.In,
+        ast.NotIn,
+        ast.Is,
+        ast.IsNot,
+        ast.Lambda,
+        ast.arguments,
+        ast.arg,
+        ast.Await,
+    }
+)
 
-_ALLOWED_AST_OPS = frozenset({
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
-    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
-    ast.And, ast.Or, ast.Not, ast.UAdd, ast.USub,
-    ast.In, ast.NotIn, ast.Is, ast.IsNot,
-})
+_ALLOWED_AST_OPS = frozenset(
+    {
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+        ast.And,
+        ast.Or,
+        ast.Not,
+        ast.UAdd,
+        ast.USub,
+        ast.In,
+        ast.NotIn,
+        ast.Is,
+        ast.IsNot,
+    }
+)
 
-_FORBIDDEN_NAMES = frozenset({
-    "eval", "exec", "compile", "__import__",
-    "__builtins__", "__dict__", "__class__",
-    "__bases__", "__subclasses__",
-})
+_FORBIDDEN_NAMES = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "__builtins__",
+        "__dict__",
+        "__class__",
+        "__bases__",
+        "__subclasses__",
+        # JavaScript browser globals
+        "window",
+        "location",
+        "globalThis",
+        "XMLHttpRequest",
+    }
+)
 
-_DANGEROUS_FUNCTIONS = frozenset({
-    "eval", "exec", "compile", "__import__",
-    "open", "file", "input", "raw_input", "execfile", "reload",
-    "vars", "locals", "globals", "dir",
-    "getattr", "setattr", "delattr", "hasattr",
-    "Function", "alert",
-})
+_BLOCKED_JS_PROPERTIES = frozenset(
+    {
+        "constructor",
+        "prototype",
+        "getPrototypeOf",
+        "getOwnPropertyDescriptor",
+        "getOwnPropertyNames",
+        "__proto__",
+        # JavaScript browser globals
+        "window",
+        "location",
+        "globalThis",
+        "XMLHttpRequest",
+    }
+)
+
+_DANGEROUS_FUNCTIONS = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "open",
+        "file",
+        "input",
+        "raw_input",
+        "execfile",
+        "reload",
+        "vars",
+        "locals",
+        "globals",
+        "dir",
+        "getattr",
+        "setattr",
+        "delattr",
+        "hasattr",
+        "Function",
+        "alert",
+    }
+)
 
 
 @functools.lru_cache(maxsize=2048)
@@ -181,7 +286,8 @@ def _normalize_js_keywords(expr: str) -> str:
     expr = re.sub(r"\btypeof\s*\(", "_asok_typeof(", expr)
     expr = re.sub(
         r"([a-zA-Z0-9_$]+)\s+instanceof\s+([a-zA-Z0-9_$]+)",
-        r"_asok_instanceof(\1, \2)", expr,
+        r"_asok_instanceof(\1, \2)",
+        expr,
     )
     expr = re.sub(r"\bvoid\s+([a-zA-Z0-9_$]+|\d+)", "None", expr)
     return re.sub(r"\bvoid\s*\(.*?\)", "None", expr)
@@ -234,7 +340,19 @@ def _is_node_allowed(node: ast.AST) -> bool:
         return False
     if not _are_node_ops_allowed(node):
         return False
-    return _is_call_allowed(node) and _is_name_allowed(node) and _is_attribute_allowed(node)
+    return _is_node_structures_allowed(node)
+
+
+def _is_node_structures_allowed(node: ast.AST) -> bool:
+    if not _is_call_allowed(node):
+        return False
+    if not _is_name_allowed(node):
+        return False
+    if not _is_attribute_allowed(node):
+        return False
+    if not _is_constant_allowed(node):
+        return False
+    return _is_subscript_allowed(node)
 
 
 def _is_name_allowed(node: ast.AST) -> bool:
@@ -269,7 +387,53 @@ def _is_call_allowed(node: ast.AST) -> bool:
 def _is_attribute_allowed(node: ast.AST) -> bool:
     if not isinstance(node, ast.Attribute):
         return True
-    return not (node.attr.startswith("__") and node.attr.endswith("__"))
+    attr = node.attr
+    if attr in _BLOCKED_JS_PROPERTIES:
+        return False
+    return not (attr.startswith("__") and attr.endswith("__"))
+
+
+def _is_constant_allowed(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Constant):
+        return True
+    return _is_constant_val_allowed(node.value)
+
+
+def _is_constant_val_allowed(val: object) -> bool:
+    if not isinstance(val, str):
+        return True
+    if val in _BLOCKED_JS_PROPERTIES or val in _FORBIDDEN_NAMES:
+        return False
+    return not (val.startswith("__") and val.endswith("__"))
+
+
+def _is_str_constant(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _is_string_concat(node: ast.AST) -> bool:
+    if not isinstance(node, ast.BinOp):
+        return False
+    if not isinstance(node.op, ast.Add):
+        return False
+    return _check_concat_operands(node.left, node.right)
+
+
+def _check_concat_operands(left: ast.AST, right: ast.AST) -> bool:
+    if _is_str_constant(left) or _is_str_constant(right):
+        return True
+    return _is_string_concat(left) or _is_string_concat(right)
+
+
+def _is_subscript_allowed(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Subscript):
+        return True
+    slice_node = node.slice
+    if isinstance(slice_node, ast.Index):  # Python < 3.9 compatibility
+        slice_node = slice_node.value
+    if _is_string_concat(slice_node):
+        return False
+    return True
 
 
 # ── Async detection ──────────────────────────────────────────────────

@@ -286,7 +286,7 @@ def test_graphql_query_complexity(fresh_app):
     fresh_app.config["GRAPHQL_MAX_COMPLEXITY"] = 10
     # Complexity is: 1 (qlusers) + (10 (default limit) * (1 (name) + 1 (posts) + (10 (default posts limit) * 1 (title)))) = 121
     res = client.post("/graphql", json_body={"query": query})
-    assert res.status_code == 200   # GraphQL errors always return 200 per the spec
+    assert res.status_code == 200  # GraphQL errors always return 200 per the spec
     assert "errors" in res.json
     assert "complexity" in res.json["errors"][0]["message"]
 
@@ -335,7 +335,7 @@ def test_graphql_query_depth_limit(fresh_app):
     query = f"query {{ qlusers {{ {nested_part} id {closing_braces} }} }}"
 
     res = client.post("/graphql", json_body={"query": query})
-    assert res.status_code == 200   # GraphQL errors always return 200 per the spec
+    assert res.status_code == 200  # GraphQL errors always return 200 per the spec
     assert "errors" in res.json
     assert "depth" in res.json["errors"][0]["message"].lower()
 
@@ -366,6 +366,7 @@ def test_graphql_authorize_ws_hook(fresh_app):
     conn = MockWebsocketConn(server)
 
     from asok.request import Request
+
     environ = {
         "REQUEST_METHOD": "GET",
         "PATH_INFO": "/graphql",
@@ -391,14 +392,18 @@ def test_graphql_disable_introspection(fresh_app):
     # 1. By default, in DEBUG=True mode, introspection is allowed
     fresh_app.config["DEBUG"] = True
     fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = None
-    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    res = client.post(
+        "/graphql", json_body={"query": "{ __schema { types { name } } }"}
+    )
     assert res.status_code == 200
     assert "errors" not in res.json
     assert "__schema" in res.json["data"]
 
     # 2. In non-DEBUG mode, introspection is disabled by default
     fresh_app.config["DEBUG"] = False
-    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    res = client.post(
+        "/graphql", json_body={"query": "{ __schema { types { name } } }"}
+    )
     assert res.status_code == 200
     assert "errors" in res.json
     assert "disabled" in res.json["errors"][0]["message"].lower()
@@ -406,14 +411,18 @@ def test_graphql_disable_introspection(fresh_app):
     # 3. Can explicitly disable introspection even in DEBUG mode
     fresh_app.config["DEBUG"] = True
     fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = True
-    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    res = client.post(
+        "/graphql", json_body={"query": "{ __schema { types { name } } }"}
+    )
     assert res.status_code == 200
     assert "errors" in res.json
 
     # 4. Can explicitly enable introspection even in production
     fresh_app.config["DEBUG"] = False
     fresh_app.config["GRAPHQL_DISABLE_INTROSPECTION"] = False
-    res = client.post("/graphql", json_body={"query": "{ __schema { types { name } } }"})
+    res = client.post(
+        "/graphql", json_body={"query": "{ __schema { types { name } } }"}
+    )
     assert res.status_code == 200
     assert "errors" not in res.json
 
@@ -422,5 +431,3 @@ def test_graphql_disable_introspection(fresh_app):
     res = client.post("/graphql", json_body={"query": "{ __typename }"})
     assert res.status_code == 200
     assert "errors" not in res.json
-
-

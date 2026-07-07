@@ -315,7 +315,9 @@ def _is_dangerous_attribute_svg(attr_name_clean: str, attr_value: str) -> bool:
     return False
 
 
-def _process_attribute_svg(element: ET.Element, attr_name: str, attr_value: str) -> bool:
+def _process_attribute_svg(
+    element: ET.Element, attr_name: str, attr_value: str
+) -> bool:
     """Returns True if the attribute should be removed, False otherwise."""
     attr_name_clean = _strip_namespace(attr_name)
 

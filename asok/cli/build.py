@@ -17,8 +17,17 @@ def _minify_html(html: str) -> str:
 
 
 _DEFAULT_IGNORE = (
-    "build", "dist", "venv", ".venv", ".asok", ".git", ".env",
-    "__pycache__", "*.pyc", ".DS_Store", "tests",
+    "build",
+    "dist",
+    "venv",
+    ".venv",
+    ".asok",
+    ".git",
+    ".env",
+    "__pycache__",
+    "*.pyc",
+    ".DS_Store",
+    "tests",
 )
 
 
@@ -61,7 +70,8 @@ def _clone_project_tree(
     if app_name not in ignore_list:
         ignore_list.append(app_name)
     shutil.copytree(
-        root, build_root,
+        root,
+        build_root,
         ignore=shutil.ignore_patterns(*ignore_list),
         dirs_exist_ok=True,
     )
@@ -133,18 +143,19 @@ def _write_directives_registry(app, build_root: str, registry: dict) -> None:
     registry_js = _build_registry_js(app, registry)
     js_dir = os.path.join(build_root, "src/partials/js")
     os.makedirs(js_dir, exist_ok=True)
-    with open(os.path.join(js_dir, "directives_registry.js"), "w", encoding="utf-8") as f:
+    with open(
+        os.path.join(js_dir, "directives_registry.js"), "w", encoding="utf-8"
+    ) as f:
         f.write(registry_js)
-    Style.success(
-        f"Generated static directives registry with {len(registry)} entries."
-    )
+    Style.success(f"Generated static directives registry with {len(registry)} entries.")
 
 
 def _build_registry_js(app, registry: dict) -> str:
     entries = [_format_registry_entry(app, h, expr) for h, expr in registry.items()]
     return (
         "window.__asok_registry = Object.assign(window.__asok_registry || {}, {\n"
-        + ",\n".join(entries) + "\n});\n"
+        + ",\n".join(entries)
+        + "\n});\n"
     )
 
 
@@ -189,7 +200,8 @@ def _run_tailwind_compile(root: str, build_root: str, bin_path: str) -> None:
     output_path = os.path.join(build_root, "src/partials/css/base.build.css")
     res = subprocess.run(
         [bin_path, "-i", input_path, "-o", output_path, "--minify"],
-        cwd=root, capture_output=True,
+        cwd=root,
+        capture_output=True,
     )
     if res.returncode != 0:
         Style.error(f"Tailwind build failed: {res.stderr.decode()}")
@@ -252,7 +264,8 @@ def _minify_one_asset(
     print(f"  {Style.DIM}Optimizing {rel_path}...{Style.RESET}")
     res = subprocess.run(
         [bin_path, path, "--minify", f"--outfile={path}", "--allow-overwrite"],
-        cwd=root, capture_output=True,
+        cwd=root,
+        capture_output=True,
     )
     if res.returncode != 0:
         Style.warn(f"Minify failed for {filename}: {res.stderr.decode()}")
@@ -311,8 +324,7 @@ def _is_migrations_dir(path: str) -> bool:
 
 def _compile_py_files_in_dir(r: str, files, keep_source: bool) -> int:
     return sum(
-        1 for f in files
-        if f.endswith(".py") and _compile_one_py(r, f, keep_source)
+        1 for f in files if f.endswith(".py") and _compile_one_py(r, f, keep_source)
     )
 
 
@@ -383,8 +395,10 @@ def _optimize_images_in_tree(build_root: str, is_image, optimize_image) -> int:
 
 def _optimize_images_in_dir(r: str, files, is_image, optimize_image) -> int:
     return sum(
-        1 for f in files
-        if is_image(f) and not f.endswith(".webp")
+        1
+        for f in files
+        if is_image(f)
+        and not f.endswith(".webp")
         and _optimize_one_image(os.path.join(r, f), optimize_image)
     )
 

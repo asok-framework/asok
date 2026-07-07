@@ -31,4 +31,6 @@ def test_admin_static_font_serving():
     binary_resp = request.environ.get("asok.binary_response")
     assert binary_resp is not None, "Font content should be set as binary response"
     assert len(binary_resp) > 0, "Font content should not be empty"
-    assert request.content_type == "font/woff2", f"Content-Type should be font/woff2, got {request.content_type}"
+    assert request.content_type == "font/woff2", (
+        f"Content-Type should be font/woff2, got {request.content_type}"
+    )

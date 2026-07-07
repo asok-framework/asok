@@ -22,15 +22,21 @@ class DummyField:
         self.is_time = field_data.get("is_time", False)
         self.is_vector = field_data.get("is_vector", False)
         self.dimensions = field_data.get("dimensions", None)
-        self.is_foreign_key = field_data.get("type") == "ForeignKey" or field_data.get("is_foreign_key", False)
-        self.is_decimal = field_data.get("type") == "Decimal" or field_data.get("is_decimal", False)
+        self.is_foreign_key = field_data.get("type") == "ForeignKey" or field_data.get(
+            "is_foreign_key", False
+        )
+        self.is_decimal = field_data.get("type") == "Decimal" or field_data.get(
+            "is_decimal", False
+        )
 
 
 class DummyModelClass:
     def __init__(self, op: CreateModel):
         self._table = op.table
         self._search_fields = op.search_fields
-        self._fields = {f_name: DummyField(f_data) for f_name, f_data in op.fields.items()}
+        self._fields = {
+            f_name: DummyField(f_data) for f_name, f_data in op.fields.items()
+        }
 
     def _valid_column(self, name: str) -> None:
         if name not in self._fields:
@@ -49,19 +55,22 @@ class BaseSchemaEditor:
 
     def _get_table_name(self, model_name: str) -> str:
         from .. import MODELS_REGISTRY
+
         if model_name in MODELS_REGISTRY:
             return MODELS_REGISTRY[model_name]._table
 
         # Fallback to standard convention (snake_case + pluralize)
-        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', model_name)
-        snake = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
-        if snake.endswith('y'):
-            return snake[:-1] + 'ies'
-        if snake.endswith('s'):
+        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", model_name)
+        snake = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+        if snake.endswith("y"):
+            return snake[:-1] + "ies"
+        if snake.endswith("s"):
             return snake
-        return snake + 's'
+        return snake + "s"
 
-    def _build_column_sql(self, name: str, field_data: Dict[str, Any], include_constraints: bool = True) -> str:
+    def _build_column_sql(
+        self, name: str, field_data: Dict[str, Any], include_constraints: bool = True
+    ) -> str:
         dummy = DummyField(field_data)
         col_type = self.engine.get_column_type(dummy)
         q_name = self.engine.quote_identifier(name)
@@ -87,7 +96,9 @@ class BaseSchemaEditor:
 
     def create_table(self, operation: CreateModel) -> None:
         q_table = self.engine.quote_identifier(operation.table)
-        pk_def = getattr(self.engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT")
+        pk_def = getattr(
+            self.engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
+        )
 
         fields_sql = []
         if "id" not in operation.fields:
@@ -107,7 +118,9 @@ class BaseSchemaEditor:
         q_table = self.engine.quote_identifier(table)
         self.execute(f"DROP TABLE IF EXISTS {q_table}")
 
-    def add_column(self, model_name: str, col_name: str, field_data: Dict[str, Any]) -> None:
+    def add_column(
+        self, model_name: str, col_name: str, field_data: Dict[str, Any]
+    ) -> None:
         table = self._get_table_name(model_name)
         q_table = self.engine.quote_identifier(table)
         col_sql = self._build_column_sql(col_name, field_data)
@@ -127,7 +140,11 @@ class BaseSchemaEditor:
         self.execute(f"ALTER TABLE {q_table} RENAME COLUMN {q_old} TO {q_new}")
 
     def alter_column(
-        self, model_name: str, col_name: str, old_field: Dict[str, Any], new_field: Dict[str, Any]
+        self,
+        model_name: str,
+        col_name: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
     ) -> None:
         raise NotImplementedError()
 
@@ -136,7 +153,11 @@ class PostgresSchemaEditor(BaseSchemaEditor):
     """PostgreSQL SQL Schema Compiler."""
 
     def alter_column(
-        self, model_name: str, col_name: str, old_field: Dict[str, Any], new_field: Dict[str, Any]
+        self,
+        model_name: str,
+        col_name: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
     ) -> None:
         table = self._get_table_name(model_name)
         q_table = self.engine.quote_identifier(table)
@@ -151,15 +172,27 @@ class PostgresSchemaEditor(BaseSchemaEditor):
             self.execute(f"ALTER TABLE {q_table} {', '.join(clauses)}")
 
     def _collect_type_alteration(
-        self, q_col: str, old_field: Dict[str, Any], new_field: Dict[str, Any], clauses: list[str]
+        self,
+        q_col: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
+        clauses: list[str],
     ) -> None:
-        if old_field.get("sql_type") != new_field.get("sql_type") or old_field.get("type") != new_field.get("type"):
+        if old_field.get("sql_type") != new_field.get("sql_type") or old_field.get(
+            "type"
+        ) != new_field.get("type"):
             dummy = DummyField(new_field)
             col_type = self.engine.get_column_type(dummy)
-            clauses.append(f"ALTER COLUMN {q_col} TYPE {col_type} USING {q_col}::{col_type}")
+            clauses.append(
+                f"ALTER COLUMN {q_col} TYPE {col_type} USING {q_col}::{col_type}"
+            )
 
     def _collect_nullability_alteration(
-        self, q_col: str, old_field: Dict[str, Any], new_field: Dict[str, Any], clauses: list[str]
+        self,
+        q_col: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
+        clauses: list[str],
     ) -> None:
         if old_field.get("nullable") != new_field.get("nullable"):
             if new_field.get("nullable"):
@@ -168,23 +201,31 @@ class PostgresSchemaEditor(BaseSchemaEditor):
                 clauses.append(f"ALTER COLUMN {q_col} SET NOT NULL")
 
     def _collect_default_alteration(
-        self, q_col: str, old_field: Dict[str, Any], new_field: Dict[str, Any], clauses: list[str]
+        self,
+        q_col: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
+        clauses: list[str],
     ) -> None:
         if old_field.get("default") != new_field.get("default"):
             default = new_field.get("default")
             if default is None:
                 clauses.append(f"ALTER COLUMN {q_col} DROP DEFAULT")
             else:
-                clauses.append(f"ALTER COLUMN {q_col} SET DEFAULT {self._format_default_value(default)}")
-
-
+                clauses.append(
+                    f"ALTER COLUMN {q_col} SET DEFAULT {self._format_default_value(default)}"
+                )
 
 
 class MySQLSchemaEditor(BaseSchemaEditor):
     """MySQL SQL Schema Compiler."""
 
     def alter_column(
-        self, model_name: str, col_name: str, old_field: Dict[str, Any], new_field: Dict[str, Any]
+        self,
+        model_name: str,
+        col_name: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
     ) -> None:
         table = self._get_table_name(model_name)
         q_table = self.engine.quote_identifier(table)
@@ -204,10 +245,15 @@ class SQLiteSchemaEditor(BaseSchemaEditor):
         super().delete_table_by_name(table)
 
     def alter_column(
-        self, model_name: str, col_name: str, old_field: Dict[str, Any], new_field: Dict[str, Any]
+        self,
+        model_name: str,
+        col_name: str,
+        old_field: Dict[str, Any],
+        new_field: Dict[str, Any],
     ) -> None:
         # SQLite doesn't support easy ALTER COLUMN. We output warning and proceed.
         import logging
+
         logger = logging.getLogger("asok.orm")
         logger.warning(
             "SQLite does not support altering columns directly. "

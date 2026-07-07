@@ -3,11 +3,13 @@ from __future__ import annotations
 import datetime
 import html
 import importlib.util
+import logging
 import os
 import threading
 import time
 from typing import Any
 
+from ..cache import default_cache
 from ..exceptions import RedirectException
 from ..forms import Form
 from ..orm import MODELS_REGISTRY, ModelError, Relation
@@ -24,6 +26,10 @@ from .translations import LOCALES, MESSAGES, translate
 from .utils import _decrypt_totp_secret, _display
 from .views import ViewsMixin
 from .widgets import WidgetMixin
+
+logger = logging.getLogger("asok.admin")
+
+_export_lock = threading.Lock()
 
 _NO_EARLY = object()
 
@@ -65,13 +71,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         else:
             self._login_limit_max = None
             self._login_limit_window = 0
-        self._login_buckets = {}
-        self._login_lock = threading.Lock()
         # CSV export rate limit: max 5 exports per hour per user
         self._export_limit_max = 5
         self._export_limit_window = 3600  # 1 hour in seconds
-        self._export_buckets = {}  # {user_id: [timestamps]}
-        self._export_lock = threading.Lock()
         self._ensure_auth_models()
         self._ensure_role_pivot()
         self._ensure_2fa_columns()
@@ -99,16 +101,20 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return False
         return attr is not _Model and attr not in self.app.models
 
-    def _write_default_model_if_missing(self, filename: str, class_name: str, source: str) -> str:
+    def _write_default_model_if_missing(
+        self, filename: str, class_name: str, source: str
+    ) -> str:
         model_dir = os.path.join(self.app.root_dir, "src/models")
         os.makedirs(model_dir, exist_ok=True)
         path = os.path.join(model_dir, filename)
         if not os.path.isfile(path):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(source)
-            print(
-                f"  [admin] Created src/models/{filename} — run "
-                f"`asok make migration add_{class_name.lower()}` then `asok migrate`."
+            logger.info(
+                "[admin] Created src/models/%s — run "
+                "`asok make migration add_%s` then `asok migrate`.",
+                filename,
+                class_name.lower(),
             )
         return path
 
@@ -121,7 +127,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             spec.loader.exec_module(mod)
             return mod
         except Exception as e:
-            print(f"  [admin] Warning: could not load src/models/{filename}: {e}")
+            logger.warning("[admin] Could not load src/models/%s: %s", filename, e)
             return None
 
     def _ensure_model_file(self, filename: str, class_name: str, source: str) -> Any:
@@ -136,6 +142,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if mod is None:
             return None
         from ..orm import Model as _Model
+
         self._register_imported_model(mod, _Model)
         return MODELS_REGISTRY.get(class_name)
 
@@ -256,13 +263,18 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     @staticmethod
     def _default_searchable(model: Any) -> list[str]:
         return [
-            k for k, f in model._fields.items()
+            k
+            for k, f in model._fields.items()
             if f.sql_type == "TEXT" and not getattr(f, "is_password", False)
         ]
 
     @staticmethod
     def _should_skip_default_col(f: Any) -> bool:
-        if getattr(f, "is_password", False) or getattr(f, "hidden", False) or getattr(f, "protected", False):
+        if (
+            getattr(f, "is_password", False)
+            or getattr(f, "hidden", False)
+            or getattr(f, "protected", False)
+        ):
             return True
         return bool(getattr(f, "is_soft_delete", False))
 
@@ -290,8 +302,16 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         with open(path, "r", encoding="utf-8") as f:
             return f.read(), TPL_DIR
 
-    _ADMIN_INTERNAL_STATIC = ("admin.css", "admin.js", "logo.svg", "quill.js", "quill.snow.css")
-    _ADMIN_FULL_PAGE_BLOCKS = frozenset({"page-body", "#page-body", "model_table", "#model_table"})
+    _ADMIN_INTERNAL_STATIC = (
+        "admin.css",
+        "admin.js",
+        "logo.svg",
+        "quill.js",
+        "quill.snow.css",
+    )
+    _ADMIN_FULL_PAGE_BLOCKS = frozenset(
+        {"page-body", "#page-body", "model_table", "#model_table"}
+    )
 
     def _render(self, request: Any, name: str, **ctx: Any) -> Any:
         content, root = self._read_template(name)
@@ -446,13 +466,17 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return f'{sep}<a href="{safe_url}" data-spa>{label}</a>'
         return f"{sep}<span>{label}</span>"
 
-    def _render_block_response(self, content: str, root: str, ctx: dict, block_header: str):
+    def _render_block_response(
+        self, content: str, root: str, ctx: dict, block_header: str
+    ):
         names = [b.strip() for b in block_header.split(",")]
         if len(names) == 1 and names[0] in self._ADMIN_FULL_PAGE_BLOCKS:
             return render_template_string(content, ctx, root_dir=root)
         return self._render_block_fragments(content, root, ctx, names)
 
-    def _render_block_fragments(self, content: str, root: str, ctx: dict, names: list[str]):
+    def _render_block_fragments(
+        self, content: str, root: str, ctx: dict, names: list[str]
+    ):
         result_parts = []
         for bname in names:
             fragment = self._render_one_block_fragment(content, root, ctx, bname)
@@ -475,7 +499,8 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _render_flash_oob(content: str, root: str, ctx: dict) -> str:
         flashes_html = render_template_string(
             "{%- from 'macros.html' import flashes -%}{{ flashes() }}",
-            ctx, root_dir=root,
+            ctx,
+            root_dir=root,
         )
         return f'<template data-block="#flash-zone">{flashes_html}</template>'
 
@@ -606,27 +631,27 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         ua_hash = hashlib.sha256(user_agent.encode()).hexdigest()[:16]
         return f"{ip}:{ua_hash}"
 
-    def _get_active_login_bucket(self, key: str, now: float) -> dict | None:
-        with self._login_lock:
-            for k in list(self._login_buckets.keys()):
-                if self._login_buckets[k]["reset"] <= now:
-                    del self._login_buckets[k]
-            return self._login_buckets.get(key)
-
     def _login_rate_check(self, request: Any) -> tuple[bool, int]:
         """Return (allowed, remaining_seconds). Read-only check; failures
-
         are recorded separately via _login_rate_record_failure().
         """
         if self._login_limit_max is None:
             return True, 0
         now = time.time()
-        key = self._login_rate_key(request)
-        bucket = self._get_active_login_bucket(key, now)
-        if not bucket:
+        base_key = self._login_rate_key(request)
+        count_key = f"admin_login_count:{base_key}"
+        reset_key = f"admin_login_reset:{base_key}"
+
+        count = default_cache.get(count_key, 0)
+        reset_ts = default_cache.get(reset_key, 0)
+
+        remaining = max(0, int(reset_ts - now))
+        if remaining == 0:
+            default_cache.forget(count_key)
+            default_cache.forget(reset_key)
             return True, 0
-        remaining = max(0, int(bucket["reset"] - now))
-        allowed = bucket["count"] < self._login_limit_max
+
+        allowed = count < self._login_limit_max
         return allowed, remaining
 
     def _login_rate_record_failure(self, request: Any) -> None:
@@ -634,42 +659,42 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if self._login_limit_max is None:
             return
         now = time.time()
-        key = self._login_rate_key(request)
-        with self._login_lock:
-            bucket = self._login_buckets.get(key)
-            if not bucket or bucket["reset"] <= now:
-                bucket = {"count": 0, "reset": now + self._login_limit_window}
-                self._login_buckets[key] = bucket
-            bucket["count"] += 1
+        base_key = self._login_rate_key(request)
+        count_key = f"admin_login_count:{base_key}"
+        reset_key = f"admin_login_reset:{base_key}"
+
+        reset_ts = default_cache.get(reset_key)
+        if not reset_ts or reset_ts <= now:
+            reset_ts = now + self._login_limit_window
+            default_cache.set(reset_key, reset_ts, ttl=self._login_limit_window)
+
+        ttl = max(1, int(reset_ts - now))
+        default_cache.incr(count_key, amount=1, ttl=ttl)
 
     def _login_rate_reset(self, request: Any) -> None:
         if self._login_limit_max is None:
             return
-        with self._login_lock:
-            self._login_buckets.pop(self._login_rate_key(request), None)
-
-    def _update_export_timestamps(self, user_id, now: float) -> list[float]:
-        with self._export_lock:
-            if user_id not in self._export_buckets:
-                return []
-            cutoff = now - self._export_limit_window
-            ts_list = [ts for ts in self._export_buckets[user_id] if ts > cutoff]
-            self._export_buckets[user_id] = ts_list
-            return ts_list
+        base_key = self._login_rate_key(request)
+        default_cache.forget(f"admin_login_count:{base_key}")
+        default_cache.forget(f"admin_login_reset:{base_key}")
 
     def _export_rate_check(self, request: Any) -> tuple[bool, int]:
         """Check if user can export CSV. Returns (allowed, remaining_seconds).
 
         Rate limit: max 5 exports per hour per user.
         """
-        user_id = getattr(request.user, "id", None) if request.user else None
+        user = getattr(request, "user", None)
+        user_id = getattr(user, "id", None)
         if not user_id:
             return True, 0
 
         now = time.time()
-        timestamps = self._update_export_timestamps(user_id, now)
+        key = f"admin_export:{user_id}"
+        timestamps = default_cache.get(key, [])
+        cutoff = now - self._export_limit_window
+        # SECURITY: use >= to avoid boundary bias allowing 6 exports per hour
+        timestamps = [ts for ts in timestamps if ts >= cutoff]
         if len(timestamps) >= self._export_limit_max:
-            # Rate limit exceeded
             oldest = min(timestamps)
             remaining = max(0, int(oldest + self._export_limit_window - now))
             return False, remaining
@@ -678,15 +703,20 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _export_rate_record(self, request: Any) -> None:
         """Record an export action for rate limiting."""
-        user_id = getattr(request.user, "id", None) if request.user else None
+        user = getattr(request, "user", None)
+        user_id = getattr(user, "id", None)
         if not user_id:
             return
 
-        now = time.time()
-        with self._export_lock:
-            if user_id not in self._export_buckets:
-                self._export_buckets[user_id] = []
-            self._export_buckets[user_id].append(now)
+        with _export_lock:
+            now = time.time()
+            key = f"admin_export:{user_id}"
+            timestamps = default_cache.get(key, [])
+            cutoff = now - self._export_limit_window
+            # SECURITY: use >= to avoid boundary bias allowing 6 exports per hour
+            timestamps = [ts for ts in timestamps if ts >= cutoff]
+            timestamps.append(now)
+            default_cache.set(key, timestamps, ttl=self._export_limit_window)
 
     def _slug_for_model(self, model: Any) -> str | None:
         """Return the registered admin slug for a model class, or None."""
@@ -793,9 +823,13 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         conf = form._fields["confirm_password"].value
         return cur or "", new or "", conf or ""
 
-    def _apply_password_change_if_valid(self, form: Any, me: Any, changed: dict, cur: str, new: str, conf: str) -> None:
+    def _apply_password_change_if_valid(
+        self, form: Any, me: Any, changed: dict, cur: str, new: str, conf: str
+    ) -> None:
         pw_field = "password" if "password" in me._fields else None
-        error_target, error_msg = self._password_change_error(me, pw_field, cur, new, conf)
+        error_target, error_msg = self._password_change_error(
+            me, pw_field, cur, new, conf
+        )
         if error_target:
             form._fields[error_target]._error = error_msg
             return
@@ -809,7 +843,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         self._apply_password_change_if_valid(form, me, changed, cur, new, conf)
 
     @staticmethod
-    def _password_change_basic_error(me, pw_field, cur: str) -> tuple[str | None, str | None]:
+    def _password_change_basic_error(
+        me, pw_field, cur: str
+    ) -> tuple[str | None, str | None]:
         if not pw_field:
             return "new_password", "User model has no password field"
         if not cur:
@@ -829,7 +865,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return "new_password", "Password must be at least 6 characters"
         return None, None
 
-    def _log_me_update(self, request: Any, me: Any, auth_name: str, changed: dict) -> None:
+    def _log_me_update(
+        self, request: Any, me: Any, auth_name: str, changed: dict
+    ) -> None:
         if not changed:
             return
         self._log(request, "self_update", auth_name, entity_id=me.id, changes=changed)
@@ -837,7 +875,8 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _render_me_page(self, request: Any, form: Any, me: Any, errors_global) -> Any:
         _, twofa_enabled = self._get_user_2fa(me.id)
         return self._render(
-            request, "me.html",
+            request,
+            "me.html",
             form=form,
             twofa_enabled=twofa_enabled,
             errors_global=errors_global,
@@ -850,7 +889,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     # ── Cross-model search ───────────────────────────────────
 
-    def _build_search_placeholders(self, model: Any, searchable: list[str], q: str, query: Any) -> list[str]:
+    def _build_search_placeholders(
+        self, model: Any, searchable: list[str], q: str, query: Any
+    ) -> list[str]:
         placeholders = []
         for f in searchable:
             if model._valid_column(f):
@@ -866,7 +907,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         """Run a search query against one registered model. Returns hit list or None."""
         model = entry["model"]
         query = model.query()
-        placeholders = self._build_search_placeholders(model, entry["searchable"], q, query)
+        placeholders = self._build_search_placeholders(
+            model, entry["searchable"], q, query
+        )
         if not placeholders:
             return None
         query._wheres.append("(" + " OR ".join(placeholders) + ")")
@@ -913,7 +956,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def dispatch(self, request: Any) -> Any:
         self._maybe_apply_impersonation(request)
-        path = request.path[len(self.prefix):] or "/"
+        path = request.path[len(self.prefix) :] or "/"
         method = request.method
         early = self._handle_public_admin_routes(request, path)
         if early is not _NO_EARLY:
@@ -971,7 +1014,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         request.session["user_id"] = impersonator_id
         request.flash("error", self.t(request, "Unauthorized impersonation."))
 
-    def _set_impersonation_target(self, request: Any, impersonator, impersonator_id) -> None:
+    def _set_impersonation_target(
+        self, request: Any, impersonator, impersonator_id
+    ) -> None:
         target_id = request.session.get("user_id")
         if not target_id or target_id == impersonator_id:
             return
@@ -995,12 +1040,16 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _handle_public_admin_routes(self, request: Any, path: str):
         if path.startswith("/static/"):
-            return self._serve_static(request, path[len("/static/"):])
+            return self._serve_static(request, path[len("/static/") :])
         if path == "/login":
             return self._login(request)
         return self._handle_auth_action_routes(request, path)
 
     def _handle_logout(self, request: Any):
+        # SECURITY: reject GET-based logout to prevent CSRF logout via <img> tags.
+        if request.method != "POST":
+            raise RedirectException(self.prefix)
+        request.verify_csrf()
         request.logout()
         try:
             request.session.pop("pending_2fa_uid", None)
@@ -1010,7 +1059,10 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         raise RedirectException(self.prefix + "/login")
 
     def _enforce_admin_csrf(self, request: Any, path: str) -> None:
-        if request.method in ("POST", "PUT", "PATCH", "DELETE") and path not in ("/login", "/lang"):
+        if request.method in ("POST", "PUT", "PATCH", "DELETE") and path not in (
+            "/login",
+            "/lang",
+        ):
             request.verify_csrf()
 
     def _handle_authenticated_admin_routes(self, request: Any, path: str, method: str):
@@ -1025,7 +1077,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _handle_impersonate_start(self, request: Any, path: str) -> Any:
         if not getattr(request.user, "is_admin", False):
             return self._forbid(request)
-        return self._impersonate(request, path[len("/impersonate/"):])
+        return self._impersonate(request, path[len("/impersonate/") :])
 
     def _handle_impersonate_routes(self, request: Any, path: str, method: str):
         if method != "POST":
@@ -1053,7 +1105,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _handle_media_delete_route(self, request: Any, path: str) -> Any:
         if not self._can(request, "assets", "delete"):
             return self._forbid(request)
-        return self._delete_media(request, path[len("/media/delete/"):])
+        return self._delete_media(request, path[len("/media/delete/") :])
 
     def _handle_media_view_route(self, request: Any) -> Any:
         if not self._can(request, "assets", "view"):
@@ -1090,7 +1142,8 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _render_page_not_found(self, request: Any):
         return self._render_error(
-            request, 404,
+            request,
+            404,
             self.t(request, "Page Not Found"),
             self.t(
                 request,
@@ -1115,7 +1168,8 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _render_export_rate_limit(self, request: Any, remaining: int):
         minutes = (remaining + 59) // 60  # Round up to minutes
         return self._render_error(
-            request, 429,
+            request,
+            429,
             self.t(request, "Too Many Requests"),
             self.t(
                 request,
@@ -1132,7 +1186,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return None, self._render_item_not_found(request)
         return item, None
 
-    def _dispatch_entry_action(self, request: Any, entry: dict, parts: list[str], slug: str, method: str):
+    def _dispatch_entry_action(
+        self, request: Any, entry: dict, parts: list[str], slug: str, method: str
+    ):
         action = parts[1]
         bulk = self._dispatch_bulk_actions(request, entry, action, slug, method)
         if bulk is not _NO_EARLY:
@@ -1142,12 +1198,16 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if error_res:
             return error_res
         if len(parts) == 3:
-            sub_result = self._dispatch_item_subaction(request, entry, item, slug, parts[2], method, obj_id)
+            sub_result = self._dispatch_item_subaction(
+                request, entry, item, slug, parts[2], method, obj_id
+            )
             if sub_result is not _NO_EARLY:
                 return sub_result
         return self._dispatch_item_edit_view(request, entry, item, slug, method)
 
-    def _dispatch_csv_and_new_actions(self, request: Any, entry: dict, action: str, slug: str, method: str):
+    def _dispatch_csv_and_new_actions(
+        self, request: Any, entry: dict, action: str, slug: str, method: str
+    ):
         if action == "import":
             if not self._can(request, slug, "add"):
                 return self._forbid(request, "adding disabled")
@@ -1156,17 +1216,23 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return self._dispatch_new_form(request, entry, slug, method)
         return _NO_EARLY
 
-    def _dispatch_trash_or_bulk(self, request: Any, entry: dict, action: str, method: str):
+    def _dispatch_trash_or_bulk(
+        self, request: Any, entry: dict, action: str, method: str
+    ):
         if action == "trash":
             return self._trash(request, entry)
         if action == "bulk" and method == "POST":
             return self._bulk_action(request, entry)
         return _NO_EARLY
 
-    def _dispatch_bulk_actions(self, request: Any, entry: dict, action: str, slug: str, method: str):
+    def _dispatch_bulk_actions(
+        self, request: Any, entry: dict, action: str, slug: str, method: str
+    ):
         if action == "lookup":
             return self._lookup(request, entry)
-        csv_new = self._dispatch_csv_and_new_actions(request, entry, action, slug, method)
+        csv_new = self._dispatch_csv_and_new_actions(
+            request, entry, action, slug, method
+        )
         if csv_new is not _NO_EARLY:
             return csv_new
         return self._dispatch_trash_or_bulk(request, entry, action, method)
@@ -1188,7 +1254,8 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _render_invalid_id(self, request: Any):
         return self._render_error(
-            request, 404,
+            request,
+            404,
             self.t(request, "Invalid ID"),
             self.t(request, "The requested item could not be found."),
         )
@@ -1201,12 +1268,15 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _render_item_not_found(self, request: Any):
         return self._render_error(
-            request, 404,
+            request,
+            404,
             self.t(request, "Item Not Found"),
             self.t(request, "The requested item does not exist or has been deleted."),
         )
 
-    def _dispatch_item_post_subaction(self, request, entry, item, slug: str, sub: str, obj_id: int):
+    def _dispatch_item_post_subaction(
+        self, request, entry, item, slug: str, sub: str, obj_id: int
+    ):
         if sub == "delete":
             return self._handle_admin_delete(request, entry, item, slug, obj_id)
         if sub == "restore":
@@ -1216,7 +1286,14 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         return _NO_EARLY
 
     def _dispatch_item_subaction(
-        self, request: Any, entry: dict, item, slug: str, sub: str, method: str, obj_id: int
+        self,
+        request: Any,
+        entry: dict,
+        item,
+        slug: str,
+        sub: str,
+        method: str,
+        obj_id: int,
     ):
         if sub == "view":
             if not self._can(request, slug, "view"):
@@ -1225,14 +1302,18 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if sub == "history":
             return self._history(request, entry, item)
         if method == "POST":
-            return self._dispatch_item_post_subaction(request, entry, item, slug, sub, obj_id)
+            return self._dispatch_item_post_subaction(
+                request, entry, item, slug, sub, obj_id
+            )
         return _NO_EARLY
 
     def _handle_admin_delete(self, request, entry, item, slug, obj_id):
         if not entry["can_delete"] or not self._can(request, slug, "delete"):
             return self._forbid(request)
         if self._is_self(request, entry, item):
-            request.flash("error", self.t(request, "You cannot delete your own account."))
+            request.flash(
+                "error", self.t(request, "You cannot delete your own account.")
+            )
             raise RedirectException(self.prefix + "/" + slug)
         item.delete()
         self._log(request, "delete", entry["model"].__name__, entity_id=obj_id)
@@ -1254,7 +1335,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if not self._can(request, slug, "delete"):
             return self._forbid(request)
         if self._is_self(request, entry, item):
-            request.flash("error", self.t(request, "You cannot delete your own account."))
+            request.flash(
+                "error", self.t(request, "You cannot delete your own account.")
+            )
             raise RedirectException(self.prefix + "/" + slug + "/trash")
         item.force_delete()
         self._log(request, "force_delete", entry["model"].__name__, entity_id=obj_id)
@@ -1324,7 +1407,10 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         auth_name = self.app.config.get("AUTH_MODEL", "User")
         User = MODELS_REGISTRY.get(auth_name)
         user_cache: dict = {}
-        return [self._enrich_log(log, User, user_cache) for log in self._recent_logs(limit=10)]
+        return [
+            self._enrich_log(log, User, user_cache)
+            for log in self._recent_logs(limit=10)
+        ]
 
     @staticmethod
     def _enrich_log(log, User, user_cache: dict):
@@ -1353,7 +1439,8 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         can_view_logs = self._can(request, "logs", "view")
         recent_logs = self._collect_recent_logs() if can_view_logs else []
         return self._render(
-            request, "dashboard.html",
+            request,
+            "dashboard.html",
             stats=stats,
             recent_logs=recent_logs,
             can_view_logs=can_view_logs,

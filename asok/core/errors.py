@@ -14,7 +14,9 @@ logger = logging.getLogger("asok.errors")
 class ErrorRendererMixin:
     """Mixin class for Asok that handles rendering of custom error pages or fallback headings."""
 
-    def _setup_error_request(self, request: Any, code: int, message: Optional[str], error_file: str) -> None:
+    def _setup_error_request(
+        self, request: Any, code: int, message: Optional[str], error_file: str
+    ) -> None:
         """Configure the request object for rendering an error page."""
         request._current_page_file = error_file
         request.environ["asok.page_dir"] = os.path.dirname(error_file)
@@ -29,7 +31,9 @@ class ErrorRendererMixin:
             if os.path.isfile(p):
                 request.scoped_assets[a_ext] = p
 
-    def _render_error_template(self, request: Any, error_file: str, message: Optional[str]) -> str:
+    def _render_error_template(
+        self, request: Any, error_file: str, message: Optional[str]
+    ) -> str:
         """Render a template-based error page."""
         content = self._read_template(error_file)
         ctx = {
@@ -66,7 +70,9 @@ class ErrorRendererMixin:
                 return self._render_py_error(request, error_file)
             return self._render_error_template(request, error_file, message)
         except Exception as e:
-            logger.error(f"Error rendering custom {code} page: {e}\n{traceback.format_exc()}")
+            logger.error(
+                f"Error rendering custom {code} page: {e}\n{traceback.format_exc()}"
+            )
         return None
 
     def _render_error_page(
@@ -79,7 +85,9 @@ class ErrorRendererMixin:
                 self.root_dir, self.dirs["PAGES"], str(code), self.config["INDEX"] + ext
             )
             if os.path.isfile(error_file):
-                result = self._try_render_error_file(request, code, message, error_file, ext)
+                result = self._try_render_error_file(
+                    request, code, message, error_file, ext
+                )
                 if result is not None:
                     return result
 

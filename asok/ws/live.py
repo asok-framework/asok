@@ -93,19 +93,22 @@ def _is_valid_room_payload(conn, room) -> bool:
 
 
 def _send_room_join_error(conn, room: str) -> None:
-    conn.send_json({
-        "op": "broadcast",
-        "type": "error",
-        "room": room,
-        "message": f"Unauthorized or invalid room join request for {room}",
-    })
+    conn.send_json(
+        {
+            "op": "broadcast",
+            "type": "error",
+            "room": room,
+            "message": f"Unauthorized or invalid room join request for {room}",
+        }
+    )
 
 
 def _validate_model_room(conn, room: str) -> bool:
     user = getattr(conn, "user", None)
     if not user:
         logger.warning(
-            "Rejected model room subscription without authenticated user: %s", room,
+            "Rejected model room subscription without authenticated user: %s",
+            room,
         )
         return False
     if getattr(user, "is_admin", False):
@@ -128,18 +131,22 @@ def _check_model_room_user_owns(user, model_name, object_id, room) -> bool:
     user_model_name = user.__class__.__name__
     if model_name != user_model_name:
         logger.warning(
-            "Rejected cross-model subscription: user=%s room=%s", user_model_name, room,
+            "Rejected cross-model subscription: user=%s room=%s",
+            user_model_name,
+            room,
         )
         return False
     if object_id is None:
         logger.warning(
-            "Rejected broad model room subscription for non-admin user: %s", room,
+            "Rejected broad model room subscription for non-admin user: %s",
+            room,
         )
         return False
     if str(getattr(user, "id", "")) != object_id:
         logger.warning(
             "Rejected foreign model room subscription: user=%s room=%s",
-            getattr(user, "id", None), room,
+            getattr(user, "id", None),
+            room,
         )
         return False
     return True
@@ -149,10 +156,10 @@ def _check_model_room_user_owns(user, model_name, object_id, room) -> bool:
 
 
 def _handle_get_presence(server, conn, data, cid) -> None:
-    online_users = server.get_online_users() if hasattr(server, "get_online_users") else []
-    conn.send_json(
-        {"op": "broadcast", "type": "presence_list", "users": online_users}
+    online_users = (
+        server.get_online_users() if hasattr(server, "get_online_users") else []
     )
+    conn.send_json({"op": "broadcast", "type": "presence_list", "users": online_users})
 
 
 def _handle_typing(server, conn, data, cid) -> None:
@@ -318,7 +325,8 @@ def _resolve_exposed_method(comp, method_name):
     if not _is_exposed_method(method):
         logger.warning(
             "Attempted to call unexposed method '%s' on component '%s'",
-            method_name, comp.__class__.__name__,
+            method_name,
+            comp.__class__.__name__,
         )
         return None
     return method
@@ -351,7 +359,8 @@ def _is_syncable_prop(comp, prop) -> bool:
     if prop not in getattr(comp.__class__, "_bindable", []):
         logger.warning(
             "Blocked sync of non-bindable prop '%s' on '%s' (not in whitelist)",
-            prop, comp.__class__.__name__,
+            prop,
+            comp.__class__.__name__,
         )
         return False
     return True
@@ -399,15 +408,17 @@ def _send_render(server, conn, comp, cid) -> None:
         registry_js = {}
     else:
         new_html, registry_js = registry_js
-    conn.send_json({
-        "op": "render",
-        "cid": cid,
-        "name": comp.__class__.__name__,
-        "html": new_html,
-        "registry": registry_js,
-        "state": comp._get_state(),
-        "invalidate_cache": True,
-    })
+    conn.send_json(
+        {
+            "op": "render",
+            "cid": cid,
+            "name": comp.__class__.__name__,
+            "html": new_html,
+            "registry": registry_js,
+            "state": comp._get_state(),
+            "invalidate_cache": True,
+        }
+    )
 
 
 def _precompile_component_registry(server, new_html: str):

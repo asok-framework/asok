@@ -94,7 +94,9 @@ class DeveloperToolbar:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def _render_sql_row(self, i: int, entry: dict, row_class: str, tc_warn: str, tc_normal: str) -> str:
+    def _render_sql_row(
+        self, i: int, entry: dict, row_class: str, tc_warn: str, tc_normal: str
+    ) -> str:
         query = entry.get("sql", "")
         params = entry.get("params", "")
         duration = entry.get("duration", 0)
@@ -131,16 +133,22 @@ class DeveloperToolbar:
             f"</td></tr>"
         )
         for i, entry in enumerate(redir_sql):
-            html += self._render_sql_row(i, entry, "asok-redir-row", "asok-time-slow", "asok-time-warn")
+            html += self._render_sql_row(
+                i, entry, "asok-redir-row", "asok-time-slow", "asok-time-warn"
+            )
         return html
 
-    def _build_sql_rows(self, redir_sql: list, current_sql: list, redir_stats: Optional[dict]) -> str:
+    def _build_sql_rows(
+        self, redir_sql: list, current_sql: list, redir_stats: Optional[dict]
+    ) -> str:
         sql_rows = ""
         if redir_sql and redir_stats:
             sql_rows += self._build_redir_sql_rows(redir_sql, redir_stats)
 
         for i, entry in enumerate(current_sql):
-            sql_rows += self._render_sql_row(i, entry, "", "asok-time-slow", "asok-time-fast")
+            sql_rows += self._render_sql_row(
+                i, entry, "", "asok-time-slow", "asok-time-fast"
+            )
 
         if not sql_rows:
             sql_rows = (
@@ -298,8 +306,8 @@ class DeveloperToolbar:
             "[[session_data]]": session_data,
             "[[session_keys]]": str(session_keys),
             "[[request_data]]": request_data,
-            "[[method]]": self.request.method,
-            "[[path]]": self.request.path,
+            "[[method]]": _html.escape(self.request.method),
+            "[[path]]": _html.escape(self.request.path),
             "[[tpl_data]]": tpl_data,
             "[[tpl_json]]": tpl_json,
             "[[redir_info_html]]": redir_info_html,

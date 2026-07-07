@@ -3,6 +3,7 @@ Tests for the cache module.
 Uses the actual Cache API: Cache(backend, path) and set/get/delete methods.
 """
 
+import json
 import time
 
 import pytest
@@ -47,6 +48,12 @@ class TestMemoryCache:
         cache.set("list_key", [1, 2, 3])
         assert cache.get("list_key") == [1, 2, 3]
 
+    def test_incr(self, cache):
+        assert cache.incr("counter") == 1
+        assert cache.incr("counter") == 2
+        assert cache.incr("counter", amount=5) == 7
+        assert cache.get("counter") == 7
+
 
 class TestFileCache:
     @pytest.fixture
@@ -69,6 +76,12 @@ class TestFileCache:
         data = {"a": 1, "b": [1, 2, 3]}
         cache.set("fc_complex", data)
         assert cache.get("fc_complex") == data
+
+    def test_incr(self, cache):
+        assert cache.incr("fc_counter") == 1
+        assert cache.incr("fc_counter") == 2
+        assert cache.incr("fc_counter", amount=5) == 7
+        assert cache.get("fc_counter") == 7
 
 
 class TestRedisCache:
@@ -120,12 +133,53 @@ class TestRedisCache:
                 if match is None or fnmatch.fnmatch(k, match):
                     yield k.encode("utf-8") if isinstance(k, str) else k
 
+        def mock_incrby(key, amount=1):
+            if isinstance(key, bytes):
+                key = key.decode("utf-8")
+            val_str = store.get(key)
+            val = json.loads(val_str) if val_str else 0
+            new_val = val + amount
+            store[key] = json.dumps(new_val)
+            return new_val
+
+        def mock_expire(key, seconds):
+            pass
+
+        def mock_pipeline():
+            mock_pipe = MagicMock()
+            commands = []
+
+            def pipe_incrby(key, amount=1):
+                commands.append(("incrby", key, amount))
+                return mock_pipe
+
+            def pipe_ttl(key):
+                commands.append(("ttl", key))
+                return mock_pipe
+
+            def pipe_execute():
+                results = []
+                for cmd in commands:
+                    if cmd[0] == "incrby":
+                        results.append(mock_incrby(cmd[1], cmd[2]))
+                    elif cmd[0] == "ttl":
+                        results.append(-1)
+                return results
+
+            mock_pipe.incrby.side_effect = pipe_incrby
+            mock_pipe.ttl.side_effect = pipe_ttl
+            mock_pipe.execute.side_effect = pipe_execute
+            return mock_pipe
+
         mock_client.get.side_effect = mock_get
         mock_client.set.side_effect = mock_set
         mock_client.setex.side_effect = mock_setex
         mock_client.delete.side_effect = mock_delete
         mock_client.keys.side_effect = mock_keys
         mock_client.scan_iter.side_effect = mock_scan_iter
+        mock_client.incrby.side_effect = mock_incrby
+        mock_client.expire.side_effect = mock_expire
+        mock_client.pipeline.side_effect = mock_pipeline
         return mock_client
 
     @pytest.fixture
@@ -163,6 +217,13 @@ class TestRedisCache:
         cache.flush()
         assert cache.get("key1") is None
         assert cache.get("key2") is None
+
+    def test_incr(self, cache, mock_redis):
+        assert cache.incr("counter", ttl=60) == 1
+        assert cache.incr("counter") == 2
+        assert cache.get("counter") == 2
+        mock_redis.incrby.assert_called_with("test_ns:test_pfx:counter", 1)
+        mock_redis.expire.assert_called_with("test_ns:test_pfx:counter", 60)
 
 
 class TestCachePageDecorator:

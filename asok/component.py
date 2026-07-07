@@ -43,6 +43,7 @@ def _has_file_attr(module: Optional[Any]) -> bool:
 
 def _find_sys_module(cls_module: str) -> Optional[Any]:
     import sys
+
     for m in sys.modules.values():
         if hasattr(m, "__name__") and m.__name__.endswith(cls_module):
             return m
@@ -77,6 +78,7 @@ def _verify_state_timestamp(state: dict[str, Any]) -> bool:
     ts = state.pop("_ts", 0)
     if time.time() - ts > 3600:
         import logging
+
         logging.getLogger(__name__).warning(
             "Expired state signature (age: %d seconds)", time.time() - ts
         )
@@ -130,6 +132,7 @@ class Component(metaclass=ComponentMeta):
 
     def _find_dir_path(self) -> str:
         import inspect
+
         module = inspect.getmodule(self.__class__)
         if not _has_file_attr(module):
             module = _find_sys_module(self.__class__.__module__)

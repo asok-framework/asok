@@ -14,6 +14,7 @@ import os
 import re
 from typing import Any
 
+from ..exceptions import SecurityError
 from ..utils.css import scope_css
 from ..utils.js import scope_js
 from ..utils.minify import minify_css, minify_js
@@ -22,31 +23,74 @@ logger = logging.getLogger("asok.assets")
 
 
 _DIRECTIVE_MARKERS = (
-    "asok-state", "asok-on:", "asok-text", "asok-show", "asok-hide",
-    "asok-class:", "asok-bind:", "asok-model", "asok-if", "asok-for",
-    "asok-init", "asok-ref", "asok-teleport", "asok-cloak",
-    "asok-fetch", "asok-fetch-async", "asok-toggle",
-    "asok-state-ref", "asok-on-ref:", "asok-text-ref", "asok-show-ref",
-    "asok-hide-ref", "asok-class-ref:", "asok-bind-ref:", "asok-model-ref",
-    "asok-if-ref", "asok-for-ref", "asok-init-ref", "asok-fetch-async-ref",
+    "asok-state",
+    "asok-on:",
+    "asok-text",
+    "asok-show",
+    "asok-hide",
+    "asok-class:",
+    "asok-bind:",
+    "asok-model",
+    "asok-if",
+    "asok-for",
+    "asok-init",
+    "asok-ref",
+    "asok-teleport",
+    "asok-cloak",
+    "asok-fetch",
+    "asok-fetch-async",
+    "asok-toggle",
+    "asok-state-ref",
+    "asok-on-ref:",
+    "asok-text-ref",
+    "asok-show-ref",
+    "asok-hide-ref",
+    "asok-class-ref:",
+    "asok-bind-ref:",
+    "asok-model-ref",
+    "asok-if-ref",
+    "asok-for-ref",
+    "asok-init-ref",
+    "asok-fetch-async-ref",
 )
 
 _JS_FEATURE_MARKERS = (
-    "asok-state", "asok-on:", "asok-text", "asok-show", "asok-hide",
-    "asok-class:", "asok-bind:", "asok-model", "asok-if", "asok-for",
+    "asok-state",
+    "asok-on:",
+    "asok-text",
+    "asok-show",
+    "asok-hide",
+    "asok-class:",
+    "asok-bind:",
+    "asok-model",
+    "asok-if",
+    "asok-for",
 )
 
 _DATA_MARKERS = ("data-block", "data-sse", "data-url", "data-method")
 
 _WIDGET_MARKERS = (
-    "Asok.", "asok-dropdown", "asok-table", "asok-toggle",
-    "asok-badge", "asok-pagination",
+    "Asok.",
+    "asok-dropdown",
+    "asok-table",
+    "asok-toggle",
+    "asok-badge",
+    "asok-pagination",
 )
 
-_DIRECTIVE_EXPR_ATTRS = frozenset({
-    "asok-text", "asok-html", "asok-show", "asok-hide",
-    "asok-if", "asok-elif", "asok-state", "asok-init", "asok-fetch-async",
-})
+_DIRECTIVE_EXPR_ATTRS = frozenset(
+    {
+        "asok-text",
+        "asok-html",
+        "asok-show",
+        "asok-hide",
+        "asok-if",
+        "asok-elif",
+        "asok-state",
+        "asok-init",
+        "asok-fetch-async",
+    }
+)
 
 _DIRECTIVE_PREFIXES = ("asok-on:", "asok-class:", "asok-bind:")
 
@@ -64,14 +108,14 @@ def precompile_directives(app, html: str) -> tuple[str, dict[str, str]]:
 
     # 1. Mask non-directive content so the regex below cannot match inside it.
     _MASK_RE = re.compile(
-        r'<(code|pre|script)(\s[^>]*)?>.*?</\1>',
+        r"<(code|pre|script)(\s[^>]*)?>.*?</\1>",
         re.DOTALL | re.IGNORECASE,
     )
 
     def _mask(m: re.Match) -> str:
         idx = len(_masks)
         _masks.append(m.group(0))
-        return f'\x00ASOK_MASK_{idx}\x00'
+        return f"\x00ASOK_MASK_{idx}\x00"
 
     masked_html = _MASK_RE.sub(_mask, html)
 
@@ -81,12 +125,14 @@ def precompile_directives(app, html: str) -> tuple[str, dict[str, str]]:
 
     processed = re.sub(
         r'(?<![a-zA-Z0-9-])(asok-[a-zA-Z0-9:.\-]+)=([\'"])(.*?)\2',
-        replacer, masked_html, flags=re.DOTALL,
+        replacer,
+        masked_html,
+        flags=re.DOTALL,
     )
 
     # 3. Restore masked blocks.
     for i, original in enumerate(_masks):
-        processed = processed.replace(f'\x00ASOK_MASK_{i}\x00', original)
+        processed = processed.replace(f"\x00ASOK_MASK_{i}\x00", original)
 
     return processed, registry
 
@@ -149,8 +195,14 @@ class AssetInjector:
     """Wraps a single _inject_assets invocation in a stateful, testable object."""
 
     def __init__(
-        self, app: Any, request: Any, content: str, nonce: str,
-        stream: bool, include_scripts: bool, only_scripts: bool,
+        self,
+        app: Any,
+        request: Any,
+        content: str,
+        nonce: str,
+        stream: bool,
+        include_scripts: bool,
+        only_scripts: bool,
     ) -> None:
         self.app = app
         self.request = request
@@ -214,9 +266,7 @@ class AssetInjector:
             meta_html += f"    <title>{_html.escape(str(meta_obj._title))}</title>\n"
         if meta_obj._description:
             self._strip_existing_description()
-            meta_html += (
-                f'    <meta name="description" content="{_html.escape(str(meta_obj._description))}">\n'
-            )
+            meta_html += f'    <meta name="description" content="{_html.escape(str(meta_obj._description))}">\n'
         for item in meta_obj._items:
             meta_html += self._render_meta_item(item, meta_obj)
         return meta_html
@@ -233,7 +283,9 @@ class AssetInjector:
     def _strip_existing_description(self) -> None:
         self.content = re.sub(
             r'<meta\s+name=["\']description["\']\s+content=["\'].*?["\']\s*/?>',
-            "", self.content, flags=re.IGNORECASE,
+            "",
+            self.content,
+            flags=re.IGNORECASE,
         )
 
     @classmethod
@@ -255,9 +307,7 @@ class AssetInjector:
 
     @staticmethod
     def _render_meta_link(ikey, ival, ikwargs) -> str:
-        extra = " ".join(
-            f'{k}="{_html.escape(str(v))}"' for k, v in ikwargs.items()
-        )
+        extra = " ".join(f'{k}="{_html.escape(str(v))}"' for k, v in ikwargs.items())
         return f'    <link rel="{_html.escape(ikey)}" href="{_html.escape(ival)}" {extra}>\n'
 
     def _inject_into_head(self, html_chunk: str) -> None:
@@ -305,8 +355,11 @@ class AssetInjector:
         marker = f"<!-- page-id:{page_id} -->\n"
         if "</body>" in self.content.lower():
             self.content = re.sub(
-                r"(</body>)", lambda m: marker + m.group(1),
-                self.content, flags=re.I, count=1,
+                r"(</body>)",
+                lambda m: marker + m.group(1),
+                self.content,
+                flags=re.I,
+                count=1,
             )
         else:
             self.content += marker
@@ -343,8 +396,11 @@ class AssetInjector:
     def _inject_style_into_head(self, style_tag: str) -> None:
         if "</head>" in self.content.lower():
             self.content = re.sub(
-                r"(</head>)", lambda m: style_tag + m.group(1),
-                self.content, flags=re.I, count=1,
+                r"(</head>)",
+                lambda m: style_tag + m.group(1),
+                self.content,
+                flags=re.I,
+                count=1,
             )
         else:
             self.content = style_tag + self.content
@@ -391,8 +447,11 @@ class AssetInjector:
             request._asok_styles_done = True
             request._asok_pending_styles = ""
             self.content = re.sub(
-                r"(</head>)", lambda m: styles + m.group(1),
-                self.content, flags=re.I, count=1,
+                r"(</head>)",
+                lambda m: styles + m.group(1),
+                self.content,
+                flags=re.I,
+                count=1,
             )
         elif not self.stream:
             request._asok_styles_done = True
@@ -409,8 +468,11 @@ class AssetInjector:
         if "<head>" not in self.content.lower():
             return
         self.content = re.sub(
-            r"(<head.*?>)", lambda m: m.group(1) + "\n" + csrf_meta,
-            self.content, flags=re.I, count=1,
+            r"(<head.*?>)",
+            lambda m: m.group(1) + "\n" + csrf_meta,
+            self.content,
+            flags=re.I,
+            count=1,
         )
         self.request._asok_csrf_done = True
 
@@ -428,7 +490,9 @@ class AssetInjector:
     def _is_admin_request(self) -> bool:
         admin = getattr(self.app, "_admin", None)
         if admin:
-            return self.request.path == admin.prefix or self.request.path.startswith(admin.prefix + "/")
+            return self.request.path == admin.prefix or self.request.path.startswith(
+                admin.prefix + "/"
+            )
         return self.request.path.startswith("/admin")
 
     def _needs_security_utils(self) -> bool:
@@ -442,7 +506,9 @@ class AssetInjector:
         content = self.content
         if any(s in content for s in self._JS_TRIGGER_SUBSTRINGS):
             return True
-        return self._content_uses_data_markers() or self._content_uses_directive_markers()
+        return (
+            self._content_uses_data_markers() or self._content_uses_directive_markers()
+        )
 
     def _content_uses_directive_markers(self) -> bool:
         return any(attr in self.content for attr in _JS_FEATURE_MARKERS)
@@ -484,7 +550,9 @@ class AssetInjector:
     def _is_reactive_blocked(self) -> bool:
         if self._is_admin_request():
             return True
-        return bool(self.is_block or getattr(self.request, "_asok_reactive_done", False))
+        return bool(
+            self.is_block or getattr(self.request, "_asok_reactive_done", False)
+        )
 
     def _needs_reactive(self) -> bool:
         if self._is_reactive_blocked():
@@ -525,11 +593,13 @@ class AssetInjector:
             attrs = m.group(2)
             if 'nonce="' in attrs.lower():
                 return re.sub(r'(?i)nonce=".*?"', f'nonce="{nonce}"', m.group(0))
-            return f"<{m.group(1)}{attrs} nonce=\"{nonce}\">"
+            return f'<{m.group(1)}{attrs} nonce="{nonce}">'
 
         self.content = re.sub(
             r"<(script|style|link)\b([^>]*?)>",
-            inject_nonce_attr, self.content, flags=re.IGNORECASE,
+            inject_nonce_attr,
+            self.content,
+            flags=re.IGNORECASE,
         )
 
     # ── 10. directives precompilation + runtime ────────────────
@@ -540,6 +610,13 @@ class AssetInjector:
         if self._has_precompiled_registry_file():
             self._inject_precompiled_directives()
         else:
+            if self.app.config.get(
+                "STRICT_STATIC_TEMPLATES", False
+            ) and not self.app.config.get("DEBUG", False):
+                raise SecurityError(
+                    "STRICT_STATIC_TEMPLATES is enabled. Dynamic directive compilation is "
+                    "forbidden in production. Please run 'asok build' to precompile."
+                )
             self._inject_runtime_directives()
 
     def _needs_directives(self) -> bool:
@@ -586,9 +663,14 @@ class AssetInjector:
         registry_js = self._build_registry_js()
         if getattr(self.request, "_asok_directives_done", False) or self.is_block:
             if registry_js:
-                self.request._asok_pending_scripts += (
-                    f'<script nonce="{self.nonce}">\n{registry_js}</script>\n'
-                )
+                if self.is_block:
+                    self.content += (
+                        f'\n<script nonce="{self.nonce}">\n{registry_js}</script>\n'
+                    )
+                else:
+                    self.request._asok_pending_scripts += (
+                        f'<script nonce="{self.nonce}">\n{registry_js}</script>\n'
+                    )
             return
         self._inject_directives_full(registry_js)
 
@@ -598,7 +680,8 @@ class AssetInjector:
         entries = [self._registry_entry(h, expr) for h, expr in self.registry.items()]
         return (
             "window.__asok_registry = Object.assign(window.__asok_registry || {}, {\n"
-            + ",\n".join(entries) + "\n});\n"
+            + ",\n".join(entries)
+            + "\n});\n"
         )
 
     def _registry_entry(self, h: str, expr: str) -> str:
@@ -721,8 +804,11 @@ class AssetInjector:
         if "</head>" in self.content.lower():
             self.request._asok_pending_styles = ""
             self.content = re.sub(
-                r"(</head>)", lambda m: styles + m.group(1),
-                self.content, flags=re.I, count=1,
+                r"(</head>)",
+                lambda m: styles + m.group(1),
+                self.content,
+                flags=re.I,
+                count=1,
             )
         elif not self.stream:
             self.request._asok_pending_styles = ""
@@ -748,8 +834,11 @@ class AssetInjector:
         self.request._asok_scripts_done = True
         self.request._asok_pending_scripts = ""
         self.content = re.sub(
-            r"(</body>)", lambda m: scripts + m.group(1),
-            self.content, flags=re.I, count=1,
+            r"(</body>)",
+            lambda m: scripts + m.group(1),
+            self.content,
+            flags=re.I,
+            count=1,
         )
 
     def _inject_scripts_no_body(self, scripts: str) -> None:

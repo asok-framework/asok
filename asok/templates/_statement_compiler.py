@@ -10,7 +10,12 @@ from __future__ import annotations
 from ._compiler_state import CompilerState
 
 END_STATEMENTS = {
-    "endif", "endfor", "endset", "endwith", "endcall", "endcache",
+    "endif",
+    "endfor",
+    "endset",
+    "endwith",
+    "endcall",
+    "endcache",
 }
 
 
@@ -103,7 +108,9 @@ def compile_with(state: CompilerState, stmt: str) -> None:
     state.open_block("with", None, scope=new_scope)
 
 
-def _emit_with_assignment(state: CompilerState, assignment: str, new_scope: set[str]) -> None:
+def _emit_with_assignment(
+    state: CompilerState, assignment: str, new_scope: set[str]
+) -> None:
     if "=" not in assignment:
         return
     var_name, expr = assignment.split("=", 1)

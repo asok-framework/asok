@@ -739,3 +739,15 @@ def test_spa_popstate_listener_registered():
     assert "popstate" in spa_min_js
 
 
+def test_spa_csrf_default_value_updated():
+    """Verify that SPA JS updates input.defaultValue and attribute when updating CSRF tokens."""
+    app = Asok()
+    spa_js = app.get_asset("asok_spa.js")
+    spa_min_js = app.get_asset("asok_spa.min.js")
+
+    assert (
+        "input.defaultValue = token" in spa_js
+        or "input.defaultValue = c" in spa_js
+        or "defaultValue" in spa_js
+    )
+    assert "defaultValue" in spa_min_js

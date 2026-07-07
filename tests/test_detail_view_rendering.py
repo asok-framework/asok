@@ -10,8 +10,10 @@ from asok.templates import SafeString
 class MockRenderable:
     def __init__(self, html):
         self.html = html
+
     def __str__(self):
         return SafeString(self.html)
+
     def __call__(self, **kwargs):
         attrs = " ".join(f'{k}="{v}"' for k, v in kwargs.items())
         if attrs:
@@ -162,7 +164,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Description",
                         value=item.description,
-                        input_html='<textarea name="description">This is a multiline\ndescription field.</textarea>'
+                        input_html='<textarea name="description">This is a multiline\ndescription field.</textarea>',
                     ),
                     "m": {
                         "name": "description",
@@ -173,9 +175,7 @@ def test_detail_template_rendering(tmp_path):
                 # WYSIWYG Field
                 {
                     "f": MockFormF(
-                        label="Body Content",
-                        value=item.body_content,
-                        input_html=''
+                        label="Body Content", value=item.body_content, input_html=""
                     ),
                     "m": {
                         "name": "body_content",
@@ -188,7 +188,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Title",
                         value=item.title,
-                        input_html='<input name="title" type="text" value="A beautiful post">'
+                        input_html='<input name="title" type="text" value="A beautiful post">',
                     ),
                     "m": {
                         "name": "title",
@@ -201,7 +201,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Published On",
                         value=item.published_on,
-                        input_html='<input name="published_on" type="date" value="2026-05-25">'
+                        input_html='<input name="published_on" type="date" value="2026-05-25">',
                     ),
                     "m": {
                         "name": "published_on",
@@ -213,7 +213,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Created At String",
                         value=item.created_at_str,
-                        input_html='<input name="created_at_str" type="text" value="2026-06-12 20:52:14">'
+                        input_html='<input name="created_at_str" type="text" value="2026-06-12 20:52:14">',
                     ),
                     "m": {
                         "name": "created_at_str",
@@ -225,7 +225,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Created At Object",
                         value=item.created_at_dt,
-                        input_html='<input name="created_at_dt" type="text" value="2026-06-12 20:52:14">'
+                        input_html='<input name="created_at_dt" type="text" value="2026-06-12 20:52:14">',
                     ),
                     "m": {
                         "name": "created_at_dt",
@@ -237,7 +237,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Author",
                         value=item.author_id,
-                        input_html='<select name="author_id"><option value="456" selected>John Doe</option></select>'
+                        input_html='<select name="author_id"><option value="456" selected>John Doe</option></select>',
                     ),
                     "m": {
                         "name": "author_id",
@@ -251,7 +251,7 @@ def test_detail_template_rendering(tmp_path):
                     "f": MockFormF(
                         label="Is Published",
                         value=item.is_published,
-                        input_html='<input name="is_published" type="checkbox" checked>'
+                        input_html='<input name="is_published" type="checkbox" checked>',
                     ),
                     "m": {
                         "name": "is_published",
@@ -260,11 +260,7 @@ def test_detail_template_rendering(tmp_path):
                 },
                 # Image Field
                 {
-                    "f": MockFormF(
-                        label="Image",
-                        value=item.image,
-                        input_html=''
-                    ),
+                    "f": MockFormF(label="Image", value=item.image, input_html=""),
                     "m": {
                         "name": "image",
                         "is_file": True,
@@ -305,8 +301,8 @@ def test_detail_template_rendering(tmp_path):
     )
 
     # 4. Verify text field renders as textarea and contains the text
-    assert '<textarea' in html_content
-    assert 'This is a multiline\ndescription field.' in html_content
+    assert "<textarea" in html_content
+    assert "This is a multiline\ndescription field." in html_content
 
     # 5. Verify Foreign Key value is rendered
     assert "John Doe" in html_content
@@ -316,13 +312,12 @@ def test_detail_template_rendering(tmp_path):
 
     # 7. Verify Boolean field renders as checkbox
     assert 'type="checkbox"' in html_content
-    assert 'checked' in html_content
+    assert "checked" in html_content
 
     # 8. Verify Image field renders with a thumbnail image preview and link
     assert 'class="detail-image-thumb"' in html_content
     assert 'src="/uploads/2eb68e7a-d90d-4745-9381-425d1e38a257.jpeg"' in html_content
     assert 'href="/uploads/2eb68e7a-d90d-4745-9381-425d1e38a257.jpeg"' in html_content
-
 
 
 class MockRelated(Model):
@@ -350,10 +345,14 @@ def test_fk_rel_name_in_field_metadata(tmp_path):
 
     readonly_set = set()
     tup_fk, meta_fk = admin_instance._field_meta(
-        "related_id", MockModelWithRelation._fields["related_id"], readonly_set, model=MockModelWithRelation
+        "related_id",
+        MockModelWithRelation._fields["related_id"],
+        readonly_set,
+        model=MockModelWithRelation,
     )
     assert meta_fk["is_fk"] is True
     assert meta_fk["fk_rel_name"] == "related"
+
 
 def test_display_filter_and_detail_rendering(tmp_path):
     app = DummyApp(root_dir=str(tmp_path))
@@ -380,6 +379,7 @@ def test_display_filter_and_detail_rendering(tmp_path):
         class MockRelatedItem:
             id = 999
             name = "Awesome Product"
+
             def __str__(self):
                 return self.name
 
@@ -398,7 +398,7 @@ def test_display_filter_and_detail_rendering(tmp_path):
                     "f": MockFormF(
                         label="Related Item",
                         value=999,
-                        input_html='<select name="related_id"><option value="999" selected>Awesome Product</option></select>'
+                        input_html='<select name="related_id"><option value="999" selected>Awesome Product</option></select>',
                     ),
                     "m": {
                         "name": "related_id",
@@ -426,4 +426,3 @@ def test_display_filter_and_detail_rendering(tmp_path):
     )
 
     assert "Awesome Product" in html_content
-

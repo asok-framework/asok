@@ -65,7 +65,9 @@ def _verify_envelope(envelope: dict[str, Any]) -> bool:
 
     if not _verify_job_signature(envelope["job"], envelope["sig"]):
         print("[!] Rejected job: invalid signature")
-        logger.error("Rejected Redis job with invalid HMAC signature. Possible tampering.")
+        logger.error(
+            "Rejected Redis job with invalid HMAC signature. Possible tampering."
+        )
         return False
 
     return True
@@ -228,9 +230,7 @@ def _handle_redis_error(e: Exception, redis_mod: Any) -> None:
 def _reschedule_single_task(client: Any, envelope: Any) -> None:
     try:
         envelope_str = (
-            envelope.decode("utf-8")
-            if isinstance(envelope, bytes)
-            else envelope
+            envelope.decode("utf-8") if isinstance(envelope, bytes) else envelope
         )
         envelope_dict = json.loads(envelope_str)
         job = json.loads(envelope_dict["job"])

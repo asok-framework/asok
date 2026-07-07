@@ -44,21 +44,18 @@ def check_min(val: Any, limit: str) -> bool:
     """Check if length of value is at least limit.
 
     SECURITY: Validates limit parameter to prevent integer overflow.
-    Raises ValueError for invalid limit configurations.
+    Raises ValueError for invalid limit configurations (developer error).
     """
     try:
         limit_int = int(limit)
-        # SECURITY: Reject unreasonably large or negative limits
         if limit_int < 0:
             raise ValueError(f"Minimum length cannot be negative: {limit_int}")
         if limit_int > 1_000_000:
             raise ValueError(f"Minimum length too large (max 1,000,000): {limit_int}")
         return len(str(val)) >= limit_int
     except (ValueError, OverflowError) as e:
-        # Re-raise with context if it's our validation error
         if "length" in str(e).lower():
             raise
-        # For other parsing errors, raise with clear message
         raise ValueError(f"Invalid minimum length value: {limit}") from e
 
 
@@ -66,21 +63,18 @@ def check_max(val: Any, limit: str) -> bool:
     """Check if length of value is at most limit.
 
     SECURITY: Validates limit parameter to prevent integer overflow.
-    Raises ValueError for invalid limit configurations.
+    Raises ValueError for invalid limit configurations (developer error).
     """
     try:
         limit_int = int(limit)
-        # SECURITY: Reject unreasonably large or negative limits
         if limit_int < 0:
             raise ValueError(f"Maximum length cannot be negative: {limit_int}")
         if limit_int > 1_000_000:
             raise ValueError(f"Maximum length too large (max 1,000,000): {limit_int}")
         return len(str(val)) <= limit_int
     except (ValueError, OverflowError) as e:
-        # Re-raise with context if it's our validation error
         if "length" in str(e).lower():
             raise
-        # For other parsing errors, raise with clear message
         raise ValueError(f"Invalid maximum length value: {limit}") from e
 
 
@@ -137,7 +131,7 @@ def _has_path_traversal(filename: str) -> bool:
     return ".." in filename or "/" in filename or "\\" in filename
 
 
-_SIZE_UNITS = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}
+_SIZE_UNITS = {"k": 1024, "m": 1024**2, "g": 1024**3}
 
 
 def check_size(file: Any, limit_arg: str) -> bool:
@@ -568,7 +562,13 @@ def check_daterange(val: Any, limit_arg: str | None = None) -> bool:
         if d is None:
             return False
         return _validate_daterange_dict(d, limit_arg)
-    except (ValueError, json_mod.JSONDecodeError, TypeError, AttributeError, RecursionError):
+    except (
+        ValueError,
+        json_mod.JSONDecodeError,
+        TypeError,
+        AttributeError,
+        RecursionError,
+    ):
         return False
 
 

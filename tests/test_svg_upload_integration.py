@@ -241,4 +241,3 @@ def test_svg_upload_sanitizes_when_allowed_types_is_none(mock_upload_dir):
     assert b"<circle" in saved_content
     assert b"<script" not in saved_content
     assert b"alert" not in saved_content
-

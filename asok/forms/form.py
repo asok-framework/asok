@@ -19,13 +19,17 @@ class Form(SchemaMixin):
     Supports automatic validation, model pre-filling, and HTML rendering.
     """
 
-    def _build_field_value(self, field_type: str, name: str, request: Optional[Request]) -> str:
+    def _build_field_value(
+        self, field_type: str, name: str, request: Optional[Request]
+    ) -> str:
         """Read a field value from a POST request, handling checkbox/toggle specially."""
         if field_type in ("checkbox", "toggle"):
             return "1" if request.form.get(name) else "0"
         return request.form.get(name, "")
 
-    def _extract_choices_and_clean_attrs(self, definition: tuple) -> tuple[str, str, str, dict, list, dict]:
+    def _extract_choices_and_clean_attrs(
+        self, definition: tuple
+    ) -> tuple[str, str, str, dict, list, dict]:
         field_type, label, rules, messages, choices, attrs = definition
         attrs = dict(attrs)
         if "choices" in attrs:
@@ -37,14 +41,20 @@ class Form(SchemaMixin):
             attrs.pop(key, None)
         return field_type, label, rules, messages, choices, attrs
 
-    def _build_single_field(self, name: str, definition: tuple, is_post: bool, request: Optional[Request]) -> FormField:
-        field_type, label, rules, messages, choices, attrs = self._extract_choices_and_clean_attrs(definition)
+    def _build_single_field(
+        self, name: str, definition: tuple, is_post: bool, request: Optional[Request]
+    ) -> FormField:
+        field_type, label, rules, messages, choices, attrs = (
+            self._extract_choices_and_clean_attrs(definition)
+        )
         field = FormField(name, label, field_type, rules, messages, choices, **attrs)
         if is_post and not field.readonly:
             field.value = self._build_field_value(field_type, name, request)
         return field
 
-    def _build_fields(self, fields_dict: dict, is_post: bool, request: Optional[Request]) -> dict[str, FormField]:
+    def _build_fields(
+        self, fields_dict: dict, is_post: bool, request: Optional[Request]
+    ) -> dict[str, FormField]:
         """Create FormField objects from a field schema, populating values on POST."""
         fields = {}
         for name, definition in fields_dict.items():
@@ -70,7 +80,9 @@ class Form(SchemaMixin):
         self._schema: dict[str, tuple] = fields_dict
         self._is_template: bool = request is None
         is_post = bool(request) and request.method == "POST"
-        self._fields: dict[str, FormField] = self._build_fields(fields_dict, is_post, request)
+        self._fields: dict[str, FormField] = self._build_fields(
+            fields_dict, is_post, request
+        )
 
     def _bind(self, request: Request) -> Form:
         """Internal helper for creating a bound copy of the form."""
@@ -93,7 +105,9 @@ class Form(SchemaMixin):
         for name, field in self._fields.items():
             if not field.rules:
                 continue
-            schema[name] = (field.rules, field.messages) if field.messages else field.rules
+            schema[name] = (
+                (field.rules, field.messages) if field.messages else field.rules
+            )
         return schema
 
     def _apply_field_errors(self, errors: dict) -> None:
@@ -163,7 +177,9 @@ class Form(SchemaMixin):
             val = val.value
         field.value = val if val is not None else ""
 
-    def _fill_single_field(self, name: str, field: FormField, source: Any, is_dict: bool) -> None:
+    def _fill_single_field(
+        self, name: str, field: FormField, source: Any, is_dict: bool
+    ) -> None:
         if is_dict:
             if name in source:
                 self._fill_field_value(field, source[name])
@@ -218,11 +234,15 @@ class Form(SchemaMixin):
 
     @classmethod
     def _skip_slug(cls, field: Any) -> bool:
-        return bool(getattr(field, "is_slug", False) and getattr(field, "populate_from", None))
+        return bool(
+            getattr(field, "is_slug", False) and getattr(field, "populate_from", None)
+        )
 
     @classmethod
     def _skip_hidden(cls, field: Any) -> bool:
-        return bool(getattr(field, "hidden", False) and not getattr(field, "is_password", False))
+        return bool(
+            getattr(field, "hidden", False) and not getattr(field, "is_password", False)
+        )
 
     @classmethod
     def _skip_protected(cls, name: str, field: Any) -> bool:
@@ -232,7 +252,9 @@ class Form(SchemaMixin):
     def _should_skip_field(cls, name: str, field: Any) -> bool:
         if name == "id" or getattr(field, "is_timestamp", False):
             return True
-        if getattr(field, "is_soft_delete", False) or getattr(field, "is_vector", False):
+        if getattr(field, "is_soft_delete", False) or getattr(
+            field, "is_vector", False
+        ):
             return True
         return cls._skip_advanced(name, field)
 
@@ -243,7 +265,9 @@ class Form(SchemaMixin):
         return cls._skip_protected(name, field)
 
     @classmethod
-    def _build_field_attrs(cls, field: Any, max_length: Optional[int], rules_parts: list[str]) -> dict[str, Any]:
+    def _build_field_attrs(
+        cls, field: Any, max_length: Optional[int], rules_parts: list[str]
+    ) -> dict[str, Any]:
         if max_length:
             rules_parts.append(f"max:{max_length}")
         if field.rules:
@@ -273,10 +297,12 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if form_type == "wysiwyg":
-            return form_method(label, rules, messages, height=attrs.pop("height", 300), **attrs)
+            return form_method(
+                label, rules, messages, height=attrs.pop("height", 300), **attrs
+            )
         if form_type == "autocomplete":
             return form_method(label, attrs.pop("items", []), rules, messages, **attrs)
         if form_type == "signature":
@@ -293,15 +319,21 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if form_type in ("toggle", "month", "timerange", "phone"):
             return form_method(label, rules, messages, **attrs)
         if form_type == "rating":
-            return form_method(label, rules, messages, max_stars=attrs.pop("max_stars", 5), **attrs)
+            return form_method(
+                label, rules, messages, max_stars=attrs.pop("max_stars", 5), **attrs
+            )
         if form_type == "otp":
-            return form_method(label, rules, messages, length=attrs.pop("length", 6), **attrs)
-        return cls._dispatch_custom_form_type_extended(form_type, form_method, label, rules, messages, attrs)
+            return form_method(
+                label, rules, messages, length=attrs.pop("length", 6), **attrs
+            )
+        return cls._dispatch_custom_form_type_extended(
+            form_type, form_method, label, rules, messages, attrs
+        )
 
     @classmethod
     def _create_form_field_by_type(
@@ -311,7 +343,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> Optional[FormField]:
         form_type = getattr(field, "form_type", None)
         if not form_type:
@@ -319,7 +351,9 @@ class Form(SchemaMixin):
         form_method = getattr(cls, form_type, None)
         if not form_method or not callable(form_method):
             return None
-        return cls._dispatch_custom_form_type(form_type, form_method, label, rules, messages, attrs)
+        return cls._dispatch_custom_form_type(
+            form_type, form_method, label, rules, messages, attrs
+        )
 
     @classmethod
     def _apply_decimal_step(cls, field: Any, attrs: dict[str, Any]) -> None:
@@ -335,7 +369,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         target = field.related_model
         if getattr(field, "dropdown", False):
@@ -355,7 +389,7 @@ class Form(SchemaMixin):
             lambda t=target: [("", "— None —")] + [(o.id, str(o)) for o in t.all()],
             rules,
             messages,
-            **attrs
+            **attrs,
         )
 
     @classmethod
@@ -365,7 +399,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if name.startswith("is_") or name.startswith("has_"):
             return cls.checkbox(label, "", messages, **attrs)
@@ -379,7 +413,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if getattr(field, "is_email", False):
             return cls.email(label, rules, messages, **attrs)
@@ -395,14 +429,16 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if field.sql_type == "INTEGER":
             return cls._field_definition_integer(name, label, rules, messages, attrs)
         if field.sql_type == "REAL":
             cls._apply_decimal_step(field, attrs)
             return cls.number(label, rules, messages, **attrs)
-        return cls._field_definition_extended_6(name, field, label, rules, messages, attrs)
+        return cls._field_definition_extended_6(
+            name, field, label, rules, messages, attrs
+        )
 
     @classmethod
     def _field_definition_extended_4(
@@ -412,7 +448,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if getattr(field, "is_dropdown", False):
             return cls.dropdown(
@@ -426,7 +462,9 @@ class Form(SchemaMixin):
             )
         if getattr(field, "is_boolean", False):
             return cls.checkbox(label, "", messages, **attrs)
-        return cls._field_definition_extended_5(name, field, label, rules, messages, attrs)
+        return cls._field_definition_extended_5(
+            name, field, label, rules, messages, attrs
+        )
 
     @classmethod
     def _field_definition_extended_3(
@@ -436,7 +474,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if getattr(field, "is_decimal", False):
             cls._apply_decimal_step(field, attrs)
@@ -446,7 +484,9 @@ class Form(SchemaMixin):
             return cls.text(label, rules, messages, **attrs)
         if getattr(field, "is_foreign_key", False):
             return cls._field_definition_fk(name, field, label, rules, messages, attrs)
-        return cls._field_definition_extended_4(name, field, label, rules, messages, attrs)
+        return cls._field_definition_extended_4(
+            name, field, label, rules, messages, attrs
+        )
 
     @classmethod
     def _field_definition_extended_2(
@@ -456,7 +496,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if getattr(field, "is_datetime", False):
             return cls.datetime_local(label, rules, messages, **attrs)
@@ -464,7 +504,9 @@ class Form(SchemaMixin):
             return cls.enum(label, field.enum_class, rules, messages, **attrs)
         if getattr(field, "is_json", False):
             return cls.json(label, rules, messages, **attrs)
-        return cls._field_definition_extended_3(name, field, label, rules, messages, attrs)
+        return cls._field_definition_extended_3(
+            name, field, label, rules, messages, attrs
+        )
 
     @classmethod
     def _field_definition_extended_1(
@@ -474,7 +516,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if getattr(field, "is_url", False):
             return cls.url(label, f"url|{rules}".strip("|"), messages, **attrs)
@@ -482,7 +524,9 @@ class Form(SchemaMixin):
             return cls.color(label, f"color|{rules}".strip("|"), messages, **attrs)
         if getattr(field, "is_time", False):
             return cls.time(label, rules, messages, **attrs)
-        return cls._field_definition_extended_2(name, field, label, rules, messages, attrs)
+        return cls._field_definition_extended_2(
+            name, field, label, rules, messages, attrs
+        )
 
     @classmethod
     def _field_definition_from_model_field(
@@ -492,7 +536,7 @@ class Form(SchemaMixin):
         label: str,
         rules: str,
         messages: Optional[dict[str, str]],
-        attrs: dict[str, Any]
+        attrs: dict[str, Any],
     ) -> FormField:
         if getattr(field, "is_password", False):
             return cls.password(label, "", messages, **attrs)
@@ -500,15 +544,13 @@ class Form(SchemaMixin):
             return cls.file(label, rules, messages, **attrs)
         if getattr(field, "is_tel", False):
             return cls.tel(label, f"tel|{rules}".strip("|"), messages, **attrs)
-        return cls._field_definition_extended_1(name, field, label, rules, messages, attrs)
+        return cls._field_definition_extended_1(
+            name, field, label, rules, messages, attrs
+        )
 
     @classmethod
     def _should_process_field(
-        cls,
-        name: str,
-        field: Any,
-        include: Optional[set[str]],
-        exclude: set[str]
+        cls, name: str, field: Any, include: Optional[set[str]], exclude: set[str]
     ) -> bool:
         if include is not None and name not in include:
             return False
@@ -523,7 +565,7 @@ class Form(SchemaMixin):
         field: Any,
         include: Optional[set[str]],
         exclude: set[str],
-        schema: dict[str, FormField]
+        schema: dict[str, FormField],
     ) -> None:
         if not cls._should_process_field(name, field, include, exclude):
             return
@@ -532,11 +574,15 @@ class Form(SchemaMixin):
         messages = field.messages if field.messages else None
         rules, attrs = cls._build_rules_and_attrs(field)
 
-        custom_field = cls._create_form_field_by_type(name, field, label, rules, messages, attrs)
+        custom_field = cls._create_form_field_by_type(
+            name, field, label, rules, messages, attrs
+        )
         if custom_field is not None:
             schema[name] = custom_field
         else:
-            schema[name] = cls._field_definition_from_model_field(name, field, label, rules, messages, attrs)
+            schema[name] = cls._field_definition_from_model_field(
+                name, field, label, rules, messages, attrs
+            )
 
     @classmethod
     def _validate_model_fields(cls, model: type[Model]) -> None:
@@ -549,9 +595,7 @@ class Form(SchemaMixin):
 
     @classmethod
     def _parse_include_exclude(
-        cls,
-        include_fields: Optional[list[str]],
-        exclude_fields: Optional[list[str]]
+        cls, include_fields: Optional[list[str]], exclude_fields: Optional[list[str]]
     ) -> tuple[Optional[set[str]], set[str]]:
         include = set(include_fields) if include_fields else None
         exclude = set(exclude_fields) if exclude_fields else set()

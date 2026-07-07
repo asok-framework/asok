@@ -18,6 +18,7 @@ class AsokExtension:
         """Initialize the extension and register it with the Asok application."""
         self.app = app
         app.extensions[self.__class__.__name__] = self
+        app.register_extension(self)
 
     def get_pages_path(self) -> Optional[str]:
         """Return the absolute path to the extension's pages/controllers directory."""

@@ -7,6 +7,7 @@ from . import operations as operations
 
 class Migration:
     """Base class for declarative project migrations."""
+
     dependencies: List[str] = []
     operations: List[Any] = []
 

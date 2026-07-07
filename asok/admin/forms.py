@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from typing import Any, Optional
 
 from ..forms import Form
@@ -9,7 +10,9 @@ from .utils import _display
 
 
 def _is_hidden_non_password(field: Any) -> bool:
-    return bool(getattr(field, "hidden", False) and not getattr(field, "is_password", False))
+    return bool(
+        getattr(field, "hidden", False) and not getattr(field, "is_password", False)
+    )
 
 
 def _is_mutable_timestamp(field: Any, is_readonly: bool) -> bool:
@@ -71,7 +74,9 @@ def _get_validation_rules(field: Any, is_readonly: bool, is_creation: bool) -> s
     return "|".join(rules_parts)
 
 
-def _is_morph_many_relation(rel: Any, current_model_name: str, relation_name: str) -> bool:
+def _is_morph_many_relation(
+    rel: Any, current_model_name: str, relation_name: str
+) -> bool:
     return bool(
         rel.type == "MorphMany"
         and rel.target_model_name == current_model_name
@@ -79,40 +84,182 @@ def _is_morph_many_relation(rel: Any, current_model_name: str, relation_name: st
     )
 
 
-def _build_morph_type_field(morph_info: dict[str, Any], model: Any, label: str, rules: str, attrs: dict[str, Any]) -> tuple:
+def _build_morph_type_field(
+    admin_instance: Optional[Any],
+    morph_info: dict[str, Any],
+    model: Any,
+    label: str,
+    rules: str,
+    attrs: dict[str, Any],
+) -> tuple:
     choices = [("", "— None —")]
-    current_model_name = model.__name__
-    for target_model_name, target_model in MODELS_REGISTRY.items():
-        for rel_name, rel in getattr(target_model, "_relations", {}).items():
-            if _is_morph_many_relation(rel, current_model_name, morph_info["relation_name"]):
-                choices.append((target_model_name, target_model_name))
-                break
+    targets = _get_commentable_models(
+        admin_instance, model.__name__, morph_info["relation_name"]
+    )
+    for target_model_name, _ in targets:
+        choices.append((target_model_name, target_model_name))
     return Form.select(label, choices, rules, **attrs)
 
 
-def _get_commentable_models(current_model_name: str, relation_name: str) -> list[tuple[str, Any]]:
-    commentable = []
-    for target_model_name, target_model in MODELS_REGISTRY.items():
-        for rel_name, rel in getattr(target_model, "_relations", {}).items():
-            if _is_morph_many_relation(rel, current_model_name, relation_name):
-                commentable.append((target_model_name, target_model))
-                break
+def _check_config_key(cfg: Any, key: str) -> Optional[list[str]]:
+    val = cfg.get(key)
+    if val and isinstance(val, (list, tuple, set)):
+        return list(val)
+    return None
+
+
+def _find_config_targets(
+    app: Any, current_model_name: str, relation_name: str
+) -> list[str]:
+    if not (app and hasattr(app, "config")):
+        return []
+    cfg = app.config
+    config_keys = [
+        f"{current_model_name.upper()}S_TARGETS",
+        f"{current_model_name.upper()}_TARGETS",
+        f"{relation_name.upper()}_TARGETS",
+    ]
+    for ck in config_keys:
+        res = _check_config_key(cfg, ck)
+        if res is not None:
+            return res
+    return []
+
+
+def _has_morph_many(
+    target_model: Any, current_model_name: str, relation_name: str
+) -> bool:
+    for rel in getattr(target_model, "_relations", {}).values():
+        if _is_morph_many_relation(rel, current_model_name, relation_name):
+            return True
+    return False
+
+
+def _collect_explicit_morph_models(
+    current_model_name: str, relation_name: str
+) -> list[tuple[str, Any]]:
+    out = []
+    for name, model in MODELS_REGISTRY.items():
+        if _has_morph_many(model, current_model_name, relation_name):
+            out.append((name, model))
+    return out
+
+
+def _collect_config_morph_models(
+    admin_instance: Optional[Any],
+    current_model_name: str,
+    relation_name: str,
+    seen: set[str],
+) -> list[tuple[str, Any]]:
+    app = getattr(admin_instance, "app", None) if admin_instance else None
+    targets = _find_config_targets(app, current_model_name, relation_name)
+    out = []
+    for name in targets:
+        if name not in seen:
+            m = MODELS_REGISTRY.get(name)
+            if m:
+                out.append((name, m))
+                seen.add(name)
+    return out
+
+
+def _is_valid_fallback_model(name: str, model: Any, current_model_name: str) -> bool:
+    ignore_models = {
+        "User",
+        "Role",
+        "Permission",
+        "AuditLog",
+        "Session",
+        current_model_name,
+    }
+    if name in ignore_models or name.startswith("_"):
+        return False
+    if getattr(model, "_is_pivot", False):
+        return False
+    return True
+
+
+def _collect_fallback_morph_models(current_model_name: str) -> list[tuple[str, Any]]:
+    out = []
+    for name, model in MODELS_REGISTRY.items():
+        if _is_valid_fallback_model(name, model, current_model_name):
+            out.append((name, model))
+    return out
+
+
+
+
+def _add_config_targets(
+    commentable: list[tuple[str, Any]], seen: set[str], config_targets: tuple[str, ...]
+) -> None:
+    for name in config_targets:
+        if name not in seen:
+            m = MODELS_REGISTRY.get(name)
+            if m:
+                commentable.append((name, m))
+                seen.add(name)
+
+
+@functools.lru_cache(maxsize=128)
+def _get_commentable_models_cached(
+    current_model_name: str, relation_name: str, config_targets: tuple[str, ...]
+) -> list[tuple[str, Any]]:
+    commentable = _collect_explicit_morph_models(current_model_name, relation_name)
+    seen = {name for name, _ in commentable}
+
+    _add_config_targets(commentable, seen, config_targets)
+
+    if not commentable:
+        return _collect_fallback_morph_models(current_model_name)
     return commentable
 
 
-def _populate_morph_id_choices(choices: list[tuple[str, str]], commentable_models: list[tuple[str, Any]]) -> None:
+def _get_commentable_models(
+    admin_instance: Optional[Any], current_model_name: str, relation_name: str
+) -> list[tuple[str, Any]]:
+    app = getattr(admin_instance, "app", None) if admin_instance else None
+    targets = _find_config_targets(app, current_model_name, relation_name)
+    return _get_commentable_models_cached(
+        current_model_name, relation_name, tuple(targets)
+    )
+
+
+def _populate_morph_id_choices(
+    choices: list[tuple[str, str]], commentable_models: list[tuple[str, Any]]
+) -> None:
+    from ..cache import default_cache
+
     for model_name, commentable_model in sorted(commentable_models, key=lambda x: x[0]):
+        cache_key = f"admin_morph_choices:{model_name}"
+        cached_choices = default_cache.get(cache_key)
+        if cached_choices is not None:
+            choices.extend(cached_choices)
+            continue
         try:
+            model_choices = []
             items = commentable_model.all(limit=200)
             for obj in items:
-                choices.append((f"{model_name}:{obj.id}", f"{model_name}: {_display(obj)}"))
+                model_choices.append(
+                    (f"{model_name}:{obj.id}", f"{model_name}: {_display(obj)}")
+                )
+            default_cache.set(cache_key, model_choices, ttl=30)
+            choices.extend(model_choices)
         except Exception:
             pass
 
 
-def _build_morph_id_field(morph_info: dict[str, Any], model: Any, label: str, rules: str, attrs: dict[str, Any]) -> tuple:
+def _build_morph_id_field(
+    admin_instance: Optional[Any],
+    morph_info: dict[str, Any],
+    model: Any,
+    label: str,
+    rules: str,
+    attrs: dict[str, Any],
+) -> tuple:
     choices = [("", "— None —")]
-    commentable = _get_commentable_models(model.__name__, morph_info["relation_name"])
+    commentable = _get_commentable_models(
+        admin_instance, model.__name__, morph_info["relation_name"]
+    )
     _populate_morph_id_choices(choices, commentable)
     return Form.select(label, choices, rules, **attrs)
 
@@ -126,9 +273,7 @@ def _map_integer_field(
     return Form.number(label, rules, **attrs)
 
 
-def _map_real_field(
-    field: Any, label: str, rules: str, attrs: dict[str, Any]
-) -> tuple:
+def _map_real_field(field: Any, label: str, rules: str, attrs: dict[str, Any]) -> tuple:
     precision = getattr(field, "precision", None)
     if precision is not None:
         attrs["step"] = f"0.{'0' * (precision - 1)}1" if precision > 0 else "1"
@@ -136,7 +281,12 @@ def _map_real_field(
 
 
 def _map_numeric_field(
-    name: str, field: Any, label: str, rules: str, attrs: dict[str, Any], meta: dict[str, Any]
+    name: str,
+    field: Any,
+    label: str,
+    rules: str,
+    attrs: dict[str, Any],
+    meta: dict[str, Any],
 ) -> Optional[tuple]:
     if field.sql_type == "INTEGER":
         return _map_integer_field(name, label, rules, attrs, meta)
@@ -146,15 +296,28 @@ def _map_numeric_field(
 
 
 def _is_dt_match(name: str, field: Any, is_timestamp: bool) -> bool:
-    return bool(getattr(field, "is_datetime", False) or is_timestamp or name.endswith("_at") or name.endswith("_on"))
+    return bool(
+        getattr(field, "is_datetime", False)
+        or is_timestamp
+        or name.endswith("_at")
+        or name.endswith("_on")
+    )
 
 
 def _is_date_match(name: str, field: Any) -> bool:
-    return bool(getattr(field, "is_date", False) or name == "date" or name.endswith("_date"))
+    return bool(
+        getattr(field, "is_date", False) or name == "date" or name.endswith("_date")
+    )
 
 
 def _map_datetime_field(
-    name: str, field: Any, label: str, rules: str, attrs: dict[str, Any], meta: dict[str, Any], is_timestamp: bool
+    name: str,
+    field: Any,
+    label: str,
+    rules: str,
+    attrs: dict[str, Any],
+    meta: dict[str, Any],
+    is_timestamp: bool,
 ) -> Optional[tuple]:
     if _is_dt_match(name, field, is_timestamp):
         meta["is_datetime"] = True
@@ -200,7 +363,13 @@ def _map_text_or_choice_field(
 
 
 def _map_sql_type_field(
-    name: str, field: Any, label: str, rules: str, attrs: dict[str, Any], meta: dict[str, Any], is_timestamp: bool
+    name: str,
+    field: Any,
+    label: str,
+    rules: str,
+    attrs: dict[str, Any],
+    meta: dict[str, Any],
+    is_timestamp: bool,
 ) -> tuple:
     tup = _map_text_or_choice_field(field, label, rules, attrs, meta)
     if tup is not None:
@@ -253,19 +422,28 @@ def _get_target_count(target: Any) -> int:
 def _get_fk_choices(target: Any) -> list[tuple[Any, str]]:
     try:
         choices = [
-            (o.id, _display(o))
-            for o in target.all(limit=FK_AUTOCOMPLETE_THRESHOLD)
+            (o.id, _display(o)) for o in target.all(limit=FK_AUTOCOMPLETE_THRESHOLD)
         ]
     except Exception:
         choices = []
     return [("", "— None —")] + choices
 
 
-def _build_morph_field(morph_info: dict[str, Any], model: Any, label: str, rules: str, attrs: dict[str, Any], meta: dict[str, Any]) -> tuple:
+def _build_morph_field(
+    admin_instance: Optional[Any],
+    morph_info: dict[str, Any],
+    model: Any,
+    label: str,
+    rules: str,
+    attrs: dict[str, Any],
+    meta: dict[str, Any],
+) -> tuple:
     if morph_info["is_type"]:
-        return _build_morph_type_field(morph_info, model, label, rules, attrs)
+        return _build_morph_type_field(
+            admin_instance, morph_info, model, label, rules, attrs
+        )
     meta["morph_type_field"] = morph_info["type_field"]
-    return _build_morph_id_field(morph_info, model, label, rules, attrs)
+    return _build_morph_id_field(admin_instance, morph_info, model, label, rules, attrs)
 
 
 def _get_target_model(field: Any) -> Optional[Any]:
@@ -292,7 +470,9 @@ def _postprocess_file_meta(name: str, m: dict[str, Any], item: Any) -> None:
             m["is_image"] = True
 
 
-def _postprocess_morph_field(name: str, m: dict[str, Any], item: Any, form: Form) -> None:
+def _postprocess_morph_field(
+    name: str, m: dict[str, Any], item: Any, form: Form
+) -> None:
     if m.get("morph_type_field") and name in form._fields:
         type_val = getattr(item, m["morph_type_field"], None)
         id_val = getattr(item, name, None)
@@ -300,7 +480,9 @@ def _postprocess_morph_field(name: str, m: dict[str, Any], item: Any, form: Form
             form._fields[name].value = f"{type_val}:{id_val}"
 
 
-def _get_extra_fields(ordered: list[str], seen: set[str], form: Form, meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _get_extra_fields(
+    ordered: list[str], seen: set[str], form: Form, meta: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
     return [_pair_field(n, form, meta) for n in ordered if n not in seen]
 
 
@@ -320,13 +502,15 @@ def _parse_permissions(item: Any) -> tuple[str, set[str]]:
     return current_raw, perms
 
 
-
-
-def _pair_field(name: str, form: Form, meta: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _pair_field(
+    name: str, form: Form, meta: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     return {"f": form._fields[name], "m": meta[name]}
 
 
-def _build_fieldset_groups(entry: dict[str, Any], form: Form, meta: dict[str, dict[str, Any]], seen: set[str]) -> list[dict[str, Any]]:
+def _build_fieldset_groups(
+    entry: dict[str, Any], form: Form, meta: dict[str, dict[str, Any]], seen: set[str]
+) -> list[dict[str, Any]]:
     groups = []
     for label, names in entry["fieldsets"]:
         items = [_pair_field(n, form, meta) for n in names if n in form._fields]
@@ -337,7 +521,10 @@ def _build_fieldset_groups(entry: dict[str, Any], form: Form, meta: dict[str, di
 
 def _fetch_all_target_options(target: Any) -> list[dict[str, Any]]:
     try:
-        return [{"id": o.id, "label": f"{target.__name__} #{o.id}"} for o in target.all(limit=500)]
+        return [
+            {"id": o.id, "label": f"{target.__name__} #{o.id}"}
+            for o in target.all(limit=500)
+        ]
     except Exception:
         return []
 
@@ -377,14 +564,18 @@ def _get_target_cols(target: Any) -> list[str]:
     return cols
 
 
-def _build_perm_cells(slug: str, wildcard: bool, perms: set[str]) -> list[dict[str, Any]]:
+def _build_perm_cells(
+    slug: str, wildcard: bool, perms: set[str]
+) -> list[dict[str, Any]]:
     cells = []
     for v in ADMIN_VERBS:
         perm = f"{slug}.{v}"
-        cells.append({
-            "perm": perm,
-            "checked": wildcard or perm in perms or f"{slug}.*" in perms,
-        })
+        cells.append(
+            {
+                "perm": perm,
+                "checked": wildcard or perm in perms or f"{slug}.*" in perms,
+            }
+        )
     return cells
 
 
@@ -411,7 +602,14 @@ class FormMixin:
     """Mixin for model form building and representation in Asok Admin."""
 
     def _build_fk_field(
-        self, name: str, field: Any, model: Any, label: str, rules: str, attrs: dict[str, Any], meta: dict[str, Any]
+        self,
+        name: str,
+        field: Any,
+        model: Any,
+        label: str,
+        rules: str,
+        attrs: dict[str, Any],
+        meta: dict[str, Any],
     ) -> tuple:
         target = _resolve_fk_target(field.related_model)
         meta["is_fk"] = True
@@ -419,7 +617,9 @@ class FormMixin:
         meta["fk_rel_name"] = _find_belongs_to_relation(model, name)
 
         count = _get_target_count(target)
-        use_auto = getattr(field, "autocomplete", False) or count > FK_AUTOCOMPLETE_THRESHOLD
+        use_auto = (
+            getattr(field, "autocomplete", False) or count > FK_AUTOCOMPLETE_THRESHOLD
+        )
 
         if use_auto:
             meta["is_fk_autocomplete"] = True
@@ -430,13 +630,23 @@ class FormMixin:
         return Form.select(label, choices, rules, **attrs)
 
     def _build_field_type_tup(
-        self, name: str, field: Any, model: Any, label: str, rules: str, attrs: dict[str, Any], meta: dict[str, Any], morph_info: Optional[dict[str, Any]]
+        self,
+        name: str,
+        field: Any,
+        model: Any,
+        label: str,
+        rules: str,
+        attrs: dict[str, Any],
+        meta: dict[str, Any],
+        morph_info: Optional[dict[str, Any]],
     ) -> tuple:
         if getattr(field, "is_password", False):
             meta["is_password"] = True
             return Form.password(label, rules, **attrs)
         if morph_info:
-            return _build_morph_field(morph_info, model, label, rules, attrs, meta)
+            return _build_morph_field(
+                self, morph_info, model, label, rules, attrs, meta
+            )
         if getattr(field, "is_file", False):
             meta["is_file"] = True
             return Form.file(label, rules, **attrs)
@@ -491,11 +701,17 @@ class FormMixin:
             "fk_model_slug": None,
         }
 
-        tup = self._build_field_type_tup(name, field, model, label, rules, attrs, meta, morph_info)
+        tup = self._build_field_type_tup(
+            name, field, model, label, rules, attrs, meta, morph_info
+        )
         return tup, meta
 
     def _build_schema_and_meta(
-        self, model: Any, form_exclude: set[str], readonly_set: set[str], is_creation: bool
+        self,
+        model: Any,
+        form_exclude: set[str],
+        readonly_set: set[str],
+        is_creation: bool,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         schema = {}
         meta = {}
@@ -510,7 +726,9 @@ class FormMixin:
                 meta[name] = m
         return schema, meta
 
-    def _resolve_fk_current_label(self, name: str, m: dict[str, Any], item: Any, model: Any) -> None:
+    def _resolve_fk_current_label(
+        self, name: str, m: dict[str, Any], item: Any, model: Any
+    ) -> None:
         val = getattr(item, name, None)
         if not val:
             return
@@ -522,7 +740,9 @@ class FormMixin:
         if rel:
             m["fk_current_label"] = _display(rel)
 
-    def _postprocess_autocomplete_field(self, name: str, m: dict[str, Any], item: Any, model: Any) -> None:
+    def _postprocess_autocomplete_field(
+        self, name: str, m: dict[str, Any], item: Any, model: Any
+    ) -> None:
         if m.get("is_fk_autocomplete") and item.id:
             self._resolve_fk_current_label(name, m, item, model)
 
@@ -560,7 +780,9 @@ class FormMixin:
         _populate_readonly_slugs(model, readonly_set)
 
         is_creation = not (item and getattr(item, "id", None))
-        schema, meta = self._build_schema_and_meta(model, form_exclude, readonly_set, is_creation)
+        schema, meta = self._build_schema_and_meta(
+            model, form_exclude, readonly_set, is_creation
+        )
 
         form = Form(schema, request)
         self._postprocess_form_meta(form, meta, item, model)
@@ -574,7 +796,9 @@ class FormMixin:
         """Return [{label, fields:[{f, m}, ...]}, ...] honoring fieldsets."""
         ordered = list(form._fields.keys())
         if not entry["fieldsets"]:
-            return [{"label": None, "fields": [_pair_field(n, form, meta) for n in ordered]}]
+            return [
+                {"label": None, "fields": [_pair_field(n, form, meta) for n in ordered]}
+            ]
         seen = set()
         groups = _build_fieldset_groups(entry, form, meta, seen)
         extras = _get_extra_fields(ordered, seen, form, meta)
@@ -590,12 +814,14 @@ class FormMixin:
                 target = _get_m2m_target(rel)
                 if target:
                     options = _load_m2m_options(target, item, name)
-                    out.append({
-                        "name": name,
-                        "label": name.replace("_", " ").title(),
-                        "options": options,
-                        "current": _get_selected_m2m_labels(options),
-                    })
+                    out.append(
+                        {
+                            "name": name,
+                            "label": name.replace("_", " ").title(),
+                            "options": options,
+                            "current": _get_selected_m2m_labels(options),
+                        }
+                    )
         return out
 
     def _find_target_slug(self, target: Any) -> Optional[str]:
@@ -604,7 +830,9 @@ class FormMixin:
                 return s
         return None
 
-    def _get_inline_rows(self, children: list[Any], cols: list[str], target: Any) -> list[dict[str, Any]]:
+    def _get_inline_rows(
+        self, children: list[Any], cols: list[str], target: Any
+    ) -> list[dict[str, Any]]:
         rows = []
         for c in children:
             d = {"id": c.id}
@@ -630,13 +858,15 @@ class FormMixin:
             children = _fetch_inline_children(item, rel_name)
             cols = _get_target_cols(target)
             rows = self._get_inline_rows(children, cols, target)
-            out.append({
-                "name": rel_name,
-                "label": rel_name.replace("_", " ").title(),
-                "columns": cols,
-                "rows": rows,
-                "target_slug": target_slug,
-            })
+            out.append(
+                {
+                    "name": rel_name,
+                    "label": rel_name.replace("_", " ").title(),
+                    "columns": cols,
+                    "rows": rows,
+                    "target_slug": target_slug,
+                }
+            )
         return out
 
     def _build_permission_matrix(self, request: Any, item: Any) -> dict[str, Any]:
@@ -670,4 +900,3 @@ class FormMixin:
             for r in all_roles
         ]
         return {"name": "roles", "label": "Roles", "options": options}
-

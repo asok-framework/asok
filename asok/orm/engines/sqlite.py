@@ -155,6 +155,7 @@ class SQLiteEngine(BaseEngine):
         self, table: str, columns: List[str], term: str
     ) -> Tuple[str, List[Any]]:
         import re
+
         clean = re.sub(r"[^\w\s]", " ", term or "", flags=re.UNICODE)
         words = clean.split()
         if not words:
@@ -205,7 +206,9 @@ class SQLiteEngine(BaseEngine):
             return ModelError(msg, original=e)
         return e
 
-    def _validate_and_get_search_field_names(self, model_class: Any) -> tuple[str, str, str]:
+    def _validate_and_get_search_field_names(
+        self, model_class: Any
+    ) -> tuple[str, str, str]:
         for field_name in model_class._search_fields:
             model_class._valid_column(field_name)
 
@@ -214,7 +217,9 @@ class SQLiteEngine(BaseEngine):
         f_names_old = ", ".join([f"old.{n}" for n in model_class._search_fields])
         return f_names_quoted, f_names_new, f_names_old
 
-    def _setup_fts_tables_and_triggers(self, model_class: Any, f_names_quoted: str, f_names_new: str, f_names_old: str) -> None:
+    def _setup_fts_tables_and_triggers(
+        self, model_class: Any, f_names_quoted: str, f_names_new: str, f_names_old: str
+    ) -> None:
         # Create FTS5 virtual table
         fts_sql = f'CREATE VIRTUAL TABLE IF NOT EXISTS "{model_class._table}_fts" USING fts5({f_names_quoted}, content="{model_class._table}", content_rowid="id")'
         self.execute(fts_sql)
@@ -253,7 +258,9 @@ class SQLiteEngine(BaseEngine):
 
     def post_create_table(self, model_class: Any) -> None:
         if model_class._search_fields:
-            f_quoted, f_new, f_old = self._validate_and_get_search_field_names(model_class)
+            f_quoted, f_new, f_old = self._validate_and_get_search_field_names(
+                model_class
+            )
             self._setup_fts_tables_and_triggers(model_class, f_quoted, f_new, f_old)
             self._auto_rebuild_fts_index(model_class)
 

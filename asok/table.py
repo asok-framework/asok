@@ -55,7 +55,6 @@ def _merge_attrs(
     return merged
 
 
-
 class TableColumn:
     """Configuration for a single table column."""
 
@@ -126,7 +125,11 @@ class Table:
     def _wrap_column(self, col: Union[str, TableColumn]) -> TableColumn:
         return TableColumn(col) if isinstance(col, str) else col
 
-    def _detect_columns(self, query: Union[Query, list, dict], columns: Optional[list[Union[str, TableColumn]]]) -> list[TableColumn]:
+    def _detect_columns(
+        self,
+        query: Union[Query, list, dict],
+        columns: Optional[list[Union[str, TableColumn]]],
+    ) -> list[TableColumn]:
         if columns:
             return [self._wrap_column(c) for c in columns]
         return self._detect_columns_fallback(query)
@@ -155,9 +158,7 @@ class Table:
         for name, field in fields.items():
             if name == "id" or getattr(field, "hidden", False):
                 continue
-            label = (
-                getattr(field, "label", None) or name.replace("_", " ").title()
-            )
+            label = getattr(field, "label", None) or name.replace("_", " ").title()
             res.append(TableColumn(name, label=label))
         return res
 
@@ -236,7 +237,11 @@ class Table:
             if isinstance(items, list):
                 self.query["items"] = self._limit_list_size(items)
             return self.query
-        limited_query = self._limit_list_size(self.query) if isinstance(self.query, list) else self.query
+        limited_query = (
+            self._limit_list_size(self.query)
+            if isinstance(self.query, list)
+            else self.query
+        )
         return {
             "items": limited_query,
             "total": len(limited_query),
@@ -364,9 +369,7 @@ class Table:
 
             if opts.get("ajax"):
                 method = opts.get("method", "POST")
-                confirm_msg = opts.get(
-                    "confirm", f"Are you sure you want to {label}?"
-                )
+                confirm_msg = opts.get("confirm", f"Are you sure you want to {label}?")
                 confirm_logic = (
                     f"if(confirm('{confirm_msg}')) "
                     if opts.get("confirm") is not False
@@ -423,10 +426,9 @@ class Table:
         html_out += "</tr>"
         return html_out
 
-
-
     def _reactive_state_json(self) -> str:
         import json
+
         raw_items = []
         if isinstance(self.query, (list, dict)):
             raw_items = (
@@ -544,25 +546,23 @@ class Table:
         return html_out
 
     def _render_server_filters(self, request: Any) -> str:
-        filter_container_attrs = _extract_nested_attrs(
-            self.attrs, "filter_container"
-        )
+        filter_container_attrs = _extract_nested_attrs(self.attrs, "filter_container")
         merged_filter_container = _merge_attrs(
             {"class": "asok-table-filters"}, filter_container_attrs
         )
         html_out = f'<div {_render_attrs(merged_filter_container)}><form method="GET" class="asok-filter-form">'
         search_q = request.get("search", "") if request else ""
         if search_q:
-            html_out += f'<input type="hidden" name="search" value="{html.escape(search_q)}">'
+            html_out += (
+                f'<input type="hidden" name="search" value="{html.escape(search_q)}">'
+            )
         for key, choices in self._filters.items():
             html_out += self._render_single_filter(key, choices, request)
         html_out += "</form></div>"
         return html_out
 
     def _render_server_search(self, request: Any) -> str:
-        search_container_attrs = _extract_nested_attrs(
-            self.attrs, "search_container"
-        )
+        search_container_attrs = _extract_nested_attrs(self.attrs, "search_container")
         merged_search_container = _merge_attrs(
             {"class": "asok-table-search"}, search_container_attrs
         )
@@ -621,9 +621,9 @@ class Table:
 
     def _get_action_url(self, row: Any, url_pattern: str) -> str:
         if hasattr(row, "id"):
-            return url_pattern.replace("{id}", str(row.id))
+            return url_pattern.replace("{id}", html.escape(str(row.id)))
         if isinstance(row, dict) and "id" in row:
-            return url_pattern.replace("{id}", str(row["id"]))
+            return url_pattern.replace("{id}", html.escape(str(row["id"])))
         return url_pattern
 
     def _render_row_actions(self, row: Any) -> str:
@@ -632,7 +632,7 @@ class Table:
         html_out = '<td class="asok-table-actions">'
         for label, url_pattern, icon, opts in self._actions:
             url = self._get_action_url(row, url_pattern)
-            html_out += f'<a href="{url}" class="asok-btn-table" title="{label}">{label}</a>'
+            html_out += f'<a href="{url}" class="asok-btn-table" title="{html.escape(label)}">{html.escape(label)}</a>'
         html_out += "</td>"
         return html_out
 
@@ -709,9 +709,7 @@ class Table:
         html_out = f"<div {_render_attrs(merged_footer)}>"
         html_out += f'<div class="asok-table-info">Showing {len(items)} of {data["total"]} entries</div>'
         pagination_attrs = _extract_nested_attrs(self.attrs, "pagination")
-        merged_pagination = _merge_attrs(
-            {"class": "asok-pagination"}, pagination_attrs
-        )
+        merged_pagination = _merge_attrs({"class": "asok-pagination"}, pagination_attrs)
         html_out += f"<div {_render_attrs(merged_pagination)}>"
         html_out += self._render_pagination_links(data["current_page"], data["pages"])
         html_out += "</div></div>"

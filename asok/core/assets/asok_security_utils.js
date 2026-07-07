@@ -48,8 +48,9 @@
             el.removeAttribute(attr.name);
           }
 
-          // Validate href/src attributes
-          if (attr.name.toLowerCase() === 'href' || attr.name.toLowerCase() === 'src') {
+          // Validate href/src/action/formaction attributes
+          const attrLower = attr.name.toLowerCase();
+          if (attrLower === 'href' || attrLower === 'src' || attrLower === 'action' || attrLower === 'formaction') {
             if (!this.isSafeUrl(attr.value)) {
               el.removeAttribute(attr.name);
             }
@@ -72,8 +73,13 @@
         return false;
       }
 
-      // Remove ASCII control characters (ordinals < 32 and 127) which browsers ignore/strip in URLs
-      const cleanUrl = url.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
+      // SECURITY: Decode percent-encoded characters before checking (e.g. j%61vascript: bypass).
+      let cleanUrl;
+      try {
+        cleanUrl = decodeURIComponent(url).replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
+      } catch (e) {
+        cleanUrl = url.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
+      }
 
       // Block dangerous protocols
       const dangerousProtocols = [

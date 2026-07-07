@@ -11,7 +11,6 @@ _TEMPLATE_SAFE_ATTRS = frozenset(
         "_label",
         "_error",
         "_fields",
-        "_request",
         "_input_schema",
         "_output_schema",
     }
@@ -102,16 +101,46 @@ def _safe_subscript(obj: Any, key: Union[str, int]) -> Any:
         return ""
 
 
-_BLOCKED_BUILTINS = frozenset({
-    "eval", "exec", "compile", "execfile", "__import__", "open",
-    "type", "vars", "dir", "globals", "locals",
-    "getattr", "setattr", "delattr", "hasattr", "__builtins__",
-})
+_BLOCKED_BUILTINS = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "execfile",
+        "__import__",
+        "open",
+        "type",
+        "vars",
+        "dir",
+        "globals",
+        "locals",
+        "getattr",
+        "setattr",
+        "delattr",
+        "hasattr",
+        "__builtins__",
+    }
+)
 
-_ALLOWED_BUILTINS = frozenset({
-    "range", "len", "dict", "str", "int", "float", "list", "enumerate",
-    "bool", "abs", "min", "max", "sum", "sorted", "reversed",
-})
+_ALLOWED_BUILTINS = frozenset(
+    {
+        "range",
+        "len",
+        "dict",
+        "str",
+        "int",
+        "float",
+        "list",
+        "enumerate",
+        "bool",
+        "abs",
+        "min",
+        "max",
+        "sum",
+        "sorted",
+        "reversed",
+    }
+)
 
 _LITERAL_ALIASES = {"true": True, "false": False, "none": None}
 

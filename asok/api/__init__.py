@@ -14,6 +14,7 @@ except ImportError:
             def __init__(self, name: str):
                 self.__name__ = name
 
+
 from ..core import Asok
 from ..request import Request
 
@@ -79,10 +80,13 @@ def register_api_docs(app):
     pass
 
 
-def _should_serve_docs(app: Asok, path: str, spec_path: str, docs_path: str) -> Optional[dict]:
+def _should_serve_docs(
+    app: Asok, path: str, spec_path: str, docs_path: str
+) -> Optional[dict]:
     if path != spec_path and path != docs_path:
         return None
     from .openapi import OpenAPIGenerator
+
     gen = OpenAPIGenerator(app)
     spec = gen.generate()
     if not spec.get("paths"):
@@ -108,6 +112,7 @@ def _render_docs_html(app: Asok, request: Request, spec: dict) -> Optional[str]:
         content = f.read()
 
     from ..templates import render_template_string
+
     css_url = "/asok-api/docs.min.css"
     js_url = "/asok-api/docs.min.js"
 
@@ -143,9 +148,18 @@ def _serve_static_asset(request: Request, path: str) -> Optional[bytes]:
         "/asok-api/fonts/outfit-600.woff2": ("fonts/outfit-600.woff2", "font/woff2"),
         "/asok-api/fonts/outfit-700.woff2": ("fonts/outfit-700.woff2", "font/woff2"),
         "/asok-api/fonts/outfit-800.woff2": ("fonts/outfit-800.woff2", "font/woff2"),
-        "/asok-graphql/react.min.js":     ("graphiql/react.min.js", "application/javascript"),
-        "/asok-graphql/react-dom.min.js": ("graphiql/react-dom.min.js", "application/javascript"),
-        "/asok-graphql/graphiql.min.js":  ("graphiql/graphiql.min.js", "application/javascript"),
+        "/asok-graphql/react.min.js": (
+            "graphiql/react.min.js",
+            "application/javascript",
+        ),
+        "/asok-graphql/react-dom.min.js": (
+            "graphiql/react-dom.min.js",
+            "application/javascript",
+        ),
+        "/asok-graphql/graphiql.min.js": (
+            "graphiql/graphiql.min.js",
+            "application/javascript",
+        ),
         "/asok-graphql/graphiql.min.css": ("graphiql/graphiql.min.css", "text/css"),
     }
 

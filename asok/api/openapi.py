@@ -24,7 +24,7 @@ class OpenAPIGenerator:
                 "title": app.config.get(
                     "API_TITLE", app.config.get("PROJECT_NAME", "Asok API")
                 ),
-                "version": app.config.get("VERSION", "0.5.1"),
+                "version": app.config.get("VERSION", "0.5.2"),
                 "description": app.config.get(
                     "API_DESCRIPTION",
                     "A sleek, automatically generated reference for your Asok API endpoints.",
@@ -90,7 +90,9 @@ class OpenAPIGenerator:
         except Exception:
             return None
 
-    def _build_base_operation(self, meta: Any, m: str, route_path: str) -> dict[str, Any]:
+    def _build_base_operation(
+        self, meta: Any, m: str, route_path: str
+    ) -> dict[str, Any]:
         return {
             "summary": meta.summary or f"{m.upper()} {route_path}",
             "description": meta.description or "",
@@ -123,7 +125,9 @@ class OpenAPIGenerator:
             }
         }
 
-    def _parse_method_operation(self, fn: Any, m: str, route_path: str) -> dict[str, Any] | None:
+    def _parse_method_operation(
+        self, fn: Any, m: str, route_path: str
+    ) -> dict[str, Any] | None:
         if not (fn and hasattr(fn, "_asok_api")):
             return None
         meta = fn._asok_api

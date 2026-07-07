@@ -54,8 +54,7 @@ class SmartStreamer:
     def _gzip_if_supported(self, encoded: bytes) -> bytes:
         if (
             self.app.config.get("GZIP", False)
-            and "gzip"
-            in self.request.environ.get("HTTP_ACCEPT_ENCODING", "").lower()
+            and "gzip" in self.request.environ.get("HTTP_ACCEPT_ENCODING", "").lower()
         ):
             buf = io.BytesIO()
             with gzip_mod.GzipFile(fileobj=buf, mode="wb") as f:

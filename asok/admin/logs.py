@@ -38,7 +38,15 @@ class LogMixin:
                 ]
         return out
 
-    def _create_log_entry(self, AdminLog: Any, user_id: Any, action: str, entity: str, entity_id: Any, changes: Any) -> None:
+    def _create_log_entry(
+        self,
+        AdminLog: Any,
+        user_id: Any,
+        action: str,
+        entity: str,
+        entity_id: Any,
+        changes: Any,
+    ) -> None:
         try:
             log = AdminLog()
             log.user_id = user_id
@@ -133,13 +141,15 @@ class LogMixin:
             if log.user_id:
                 label = user_cache.get(log.user_id, f"#{log.user_id}")
             changes = self._parse_log_changes(log.changes or "")
-            entries.append({
-                "id": log.id,
-                "when": log.created_at,
-                "who": label,
-                "action": log.action,
-                "changes": changes,
-            })
+            entries.append(
+                {
+                    "id": log.id,
+                    "when": log.created_at,
+                    "who": label,
+                    "action": log.action,
+                    "changes": changes,
+                }
+            )
         return entries
 
     def _can_view_history(self, request: Any, slug: str) -> bool:

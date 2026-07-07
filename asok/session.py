@@ -65,9 +65,9 @@ class SessionStore:
         self.ttl = ttl
         self.max_sessions = max_sessions
         self._lock = threading.Lock()
-        self._memory: OrderedDict[
-            str, dict[str, Any]
-        ] = OrderedDict()  # sid -> {"data": dict, "ts": float}
+        self._memory: OrderedDict[str, dict[str, Any]] = (
+            OrderedDict()
+        )  # sid -> {"data": dict, "ts": float}
 
         if backend == "file":
             self._init_file_backend()
@@ -249,9 +249,7 @@ class SessionStore:
             return entry["data"]
 
     def _truncate_if_large(self, data: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(data, dict) or len(data) >= 200:
-            return self._perform_truncation_check(data)
-        return data
+        return self._perform_truncation_check(data)
 
     def _perform_truncation_check(self, data: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -273,9 +271,7 @@ class SessionStore:
         return data
 
     def _purge_expired_memory(self, now: float) -> None:
-        expired = [
-            k for k, v in self._memory.items() if now - v["ts"] > self.ttl
-        ]
+        expired = [k for k, v in self._memory.items() if now - v["ts"] > self.ttl]
         for k in expired:
             del self._memory[k]
 

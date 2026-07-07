@@ -57,7 +57,9 @@ def _process_css_tokens(tokens: list[str], prefix: str, global_marker: str) -> s
         if _is_selector_token(i, tokens):
             selector_text = t.strip()
             if _should_scope_selector(selector_text):
-                result.append(_scope_selector_block(selector_text, prefix, global_marker))
+                result.append(
+                    _scope_selector_block(selector_text, prefix, global_marker)
+                )
             else:
                 result.append(t)
         else:

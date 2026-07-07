@@ -206,6 +206,7 @@ def test_enum_display_and_formatting():
 
 def test_admin_dropdown_mapping():
     """Verify that Field.Dropdown() is correctly mapped to Form.dropdown in Admin forms."""
+
     class CustomItem(Model):
         _db_path = ":memory:"
         __tablename__ = "custom_items"

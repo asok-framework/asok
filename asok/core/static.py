@@ -46,11 +46,16 @@ class StaticMixin:
         O(1) per eviction via OrderedDict.popitem(last=False) — items are
         ordered from LRU (front) to MRU (back) by move_to_end() on each hit.
         """
-        while self._static_cache and self._static_cache_size + content_size > self._static_cache_max:
+        while (
+            self._static_cache
+            and self._static_cache_size + content_size > self._static_cache_max
+        ):
             _, (oldest_content, _, _) = self._static_cache.popitem(last=False)
             self._static_cache_size -= len(oldest_content)
 
-    def _read_and_cache_static(self, static_path: str, debug: bool) -> tuple[bytes, str, str]:
+    def _read_and_cache_static(
+        self, static_path: str, debug: bool
+    ) -> tuple[bytes, str, str]:
         """Read a static file from disk and cache it (in non-debug mode)."""
         mimetype = self._resolve_mimetype(static_path)
         with open(static_path, "rb") as f:
@@ -64,18 +69,25 @@ class StaticMixin:
             self._static_cache_size += content_size
         return content, mimetype, etag
 
-    def _build_static_response_headers(self, mimetype: str, content: bytes, etag: str, debug: bool) -> list:
+    def _build_static_response_headers(
+        self, mimetype: str, content: bytes, etag: str, debug: bool
+    ) -> list:
         """Build the HTTP response headers for a static file."""
         headers = [
             ("Content-Type", mimetype),
             ("Content-Length", str(len(content))),
-            ("Cache-Control", "public, max-age=86400" if not debug else "no-cache, no-store"),
+            (
+                "Cache-Control",
+                "public, max-age=86400" if not debug else "no-cache, no-store",
+            ),
         ]
         if not debug:
             headers.append(("ETag", etag))
         return headers
 
-    def _get_static_content(self, static_path: str, debug: bool) -> Optional[tuple[bytes, str, str]]:
+    def _get_static_content(
+        self, static_path: str, debug: bool
+    ) -> Optional[tuple[bytes, str, str]]:
         if not debug and static_path in self._static_cache:
             # Promote to MRU position for LRU ordering.
             self._static_cache.move_to_end(static_path)
@@ -85,7 +97,9 @@ class StaticMixin:
             return None
         return self._read_and_cache_static(static_path, debug)
 
-    def _is_static_304(self, environ: Optional[dict[str, Any]], etag: str, debug: bool) -> bool:
+    def _is_static_304(
+        self, environ: Optional[dict[str, Any]], etag: str, debug: bool
+    ) -> bool:
         if not environ or debug:
             return False
         if_none_match = environ.get("HTTP_IF_NONE_MATCH", "").strip()
@@ -122,11 +136,15 @@ class StaticMixin:
         try:
             if os.path.commonpath([static_path, base_path]) != base_path:
                 body = self._render_error_page(request, 403)
-                start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+                start_response(
+                    "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
+                )
                 return [body.encode("utf-8")]
         except ValueError:
             body = self._render_error_page(request, 403)
-            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            start_response(
+                "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
+            )
             return [body.encode("utf-8")]
         return None
 
@@ -150,7 +168,9 @@ class StaticMixin:
             # to prevent directory traversal via URL paths like /css/../template.html
             subdir_path = os.path.abspath(os.path.join(base_path, parts[0]))
             static_path = os.path.abspath(os.path.join(subdir_path, *parts[1:]))
-            traversal = self._check_static_path_traversal(static_path, subdir_path, request, start_response)
+            traversal = self._check_static_path_traversal(
+                static_path, subdir_path, request, start_response
+            )
             if traversal is not None:
                 return traversal
             if os.path.isfile(static_path):

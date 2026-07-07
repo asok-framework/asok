@@ -175,7 +175,9 @@ class SecurityMixin:
             "frame-ancestors": ["'none'"],
         }
 
-    def _add_connect_src(self, request: Optional[Any], ws_port: int, directives: dict[str, list[str]]) -> None:
+    def _add_connect_src(
+        self, request: Optional[Any], ws_port: int, directives: dict[str, list[str]]
+    ) -> None:
         if not request or not hasattr(request, "host"):
             directives["connect-src"].extend(
                 [
@@ -210,7 +212,9 @@ class SecurityMixin:
                 ]
             )
 
-    def _add_script_src(self, nonce: Optional[str], directives: dict[str, list[str]]) -> None:
+    def _add_script_src(
+        self, nonce: Optional[str], directives: dict[str, list[str]]
+    ) -> None:
         script_src = ["'self'"]
         if nonce:
             script_src.extend([f"'nonce-{nonce}'", "'strict-dynamic'"])
@@ -275,7 +279,9 @@ class SecurityMixin:
             self._override_static_security_headers(base, sec)
         return list(base.items())
 
-    def _override_static_security_headers(self, base: dict[str, str], sec: dict[str, Any]) -> None:
+    def _override_static_security_headers(
+        self, base: dict[str, str], sec: dict[str, Any]
+    ) -> None:
         for k, v in sec.items():
             if k in ("Content-Security-Policy", "Strict-Transport-Security"):
                 continue  # per-request headers
@@ -295,7 +301,9 @@ class SecurityMixin:
         # Use pre-computed base; copy so per-request additions don't mutate it.
         cached_base = getattr(self, "_static_security_headers_base", None)
         if cached_base is None:
-            self._static_security_headers_base = self._build_static_security_headers_base()
+            self._static_security_headers_base = (
+                self._build_static_security_headers_base()
+            )
             cached_base = self._static_security_headers_base
 
         headers = list(cached_base)
@@ -303,14 +311,18 @@ class SecurityMixin:
         headers.append(("Content-Security-Policy", self._build_csp(request, nonce)))
         return self._apply_csp_override(headers, sec)
 
-    def _add_hsts_header(self, headers: list[tuple[str, str]], request: Optional[Any]) -> None:
+    def _add_hsts_header(
+        self, headers: list[tuple[str, str]], request: Optional[Any]
+    ) -> None:
         if request and request.scheme != "https":
             return
         hsts = self._DEFAULT_SECURITY_HEADERS.get("Strict-Transport-Security", "")
         if hsts:
             headers.append(("Strict-Transport-Security", hsts))
 
-    def _apply_csp_override(self, headers: list[tuple[str, str]], sec: Any) -> list[tuple[str, str]]:
+    def _apply_csp_override(
+        self, headers: list[tuple[str, str]], sec: Any
+    ) -> list[tuple[str, str]]:
         if not self._has_csp_override(sec):
             return headers
         v = sec["Content-Security-Policy"]
@@ -322,7 +334,9 @@ class SecurityMixin:
     def _has_csp_override(self, sec: Any) -> bool:
         return isinstance(sec, dict) and "Content-Security-Policy" in sec
 
-    def _remove_csp_header(self, headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    def _remove_csp_header(
+        self, headers: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
         return [(k, val) for k, val in headers if k != "Content-Security-Policy"]
 
     def _replace_csp_header(self, headers: list[tuple[str, str]], value: str) -> None:

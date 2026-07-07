@@ -179,6 +179,7 @@ def _pluralize(word: str) -> str:
 
 def _numpy_cosine_similarity(v1: bytes, v2: bytes) -> float:
     import numpy as np
+
     a = np.frombuffer(v1, dtype=np.float32)
     b = np.frombuffer(v2, dtype=np.float32)
     if a.shape != b.shape:
@@ -189,8 +190,11 @@ def _numpy_cosine_similarity(v1: bytes, v2: bytes) -> float:
     return float(np.dot(a, b) / denom)
 
 
-def _unpack_float_vectors(v1: bytes, v2: bytes) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
+def _unpack_float_vectors(
+    v1: bytes, v2: bytes
+) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
     import logging
+
     if len(v1) % 4 != 0 or len(v2) % 4 != 0:
         logging.getLogger("asok.orm").debug(
             "Vector byte length not divisible by 4: %d, %d", len(v1), len(v2)
@@ -227,6 +231,7 @@ def _python_cosine_similarity(v1: bytes, v2: bytes) -> float:
 def _asok_cosine_similarity(v1, v2):
     """SQLite extension for cosine similarity: 1 - cosine_distance."""
     import logging
+
     if not v1 or not v2:
         return 0.0
     try:
@@ -242,6 +247,7 @@ def _asok_cosine_similarity(v1, v2):
 
 def _numpy_euclidean_distance(v1: bytes, v2: bytes) -> float:
     import numpy as np
+
     a = np.frombuffer(v1, dtype=np.float32)
     b = np.frombuffer(v2, dtype=np.float32)
     if a.shape != b.shape:
@@ -260,6 +266,7 @@ def _python_euclidean_distance(v1: bytes, v2: bytes) -> float:
 def _asok_euclidean_distance(v1, v2):
     """SQLite extension for euclidean distance."""
     import logging
+
     if not v1 or not v2:
         return 99999.0
     try:

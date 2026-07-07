@@ -3,6 +3,7 @@
 Add a new locale by adding an entry to MESSAGES. Missing keys fall back
 to the English source string (which is used as the lookup key).
 """
+
 from typing import Optional
 
 LOCALES = {

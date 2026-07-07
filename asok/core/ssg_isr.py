@@ -27,7 +27,12 @@ class SSGISRMixin:
         clean_path = path.strip("/")
         if not clean_path:
             clean_path = "index"
-        return os.path.join(self._get_ssg_cache_dir(), f"{clean_path}.html")
+        cache_dir = self._get_ssg_cache_dir()
+        candidate = os.path.realpath(os.path.join(cache_dir, f"{clean_path}.html"))
+        real_cache_dir = os.path.realpath(cache_dir)
+        if not candidate.startswith(real_cache_dir + os.sep):
+            raise ValueError(f"Path traversal bloqué : {path!r}")
+        return candidate
 
     def _check_py_module_static(self, page_file: str) -> tuple[bool, Optional[int]]:
         try:
@@ -43,7 +48,9 @@ class SSGISRMixin:
             logger.error(f"Error loading page module {page_file} for SSG/ISR: {e}")
             return False, None
 
-    def _resolve_static_page_file(self, request: Request) -> tuple[Optional[str], dict[str, Any]]:
+    def _resolve_static_page_file(
+        self, request: Request
+    ) -> tuple[Optional[str], dict[str, Any]]:
         parts = [p for p in request.path.split("/") if p]
         return self._resolve_route(parts)
 
@@ -51,6 +58,16 @@ class SSGISRMixin:
         if page_file.endswith((".py", ".pyc")):
             return self._check_py_module_static(page_file)
         if page_file.endswith((".html", ".asok")):
+            # BUG-3 fix: only treat a pure HTML/Asok template as statically
+            # cacheable when there is *no* companion .py controller.  If a .py
+            # controller exists, defer to its SSG/REVALIDATE flags instead —
+            # otherwise dynamic pages would be incorrectly frozen as SSG.
+            base = os.path.splitext(page_file)[0]
+            for py_ext in (".py", ".pyc"):
+                companion = base + py_ext
+                if os.path.isfile(companion):
+                    return self._check_py_module_static(companion)
+            # No companion .py → pure static template, always SSG-eligible.
             return True, None
         return False, None
 
@@ -77,7 +94,11 @@ class SSGISRMixin:
             background(self._regenerate_ssg_page, path, page_file, cache_file)
 
     def _send_cached_file(
-        self, request: Request, cache_file: str, revalidate: Optional[int], start_response: Callable
+        self,
+        request: Request,
+        cache_file: str,
+        revalidate: Optional[int],
+        start_response: Callable,
     ) -> Optional[list[bytes]]:
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
@@ -98,6 +119,11 @@ class SSGISRMixin:
             else:
                 headers.append(("Cache-Control", "public, max-age=86400"))
 
+            headers += self._cookie_headers(request, request.environ)
+            headers += self._security_headers(
+                request=request, nonce=getattr(request, "nonce", None)
+            )
+
             start_response("200 OK", headers)
             return [b""] if request.method == "HEAD" else [body]
         except Exception as e:
@@ -105,7 +131,11 @@ class SSGISRMixin:
             return None
 
     def _serve_ssg_cache(
-        self, request: Request, cache_file: str, revalidate: Optional[int], start_response: Callable
+        self,
+        request: Request,
+        cache_file: str,
+        revalidate: Optional[int],
+        start_response: Callable,
     ) -> Optional[list[bytes]]:
         if not os.path.exists(cache_file):
             return None
@@ -117,7 +147,9 @@ class SSGISRMixin:
             return None
 
         if self._is_cache_stale(age, revalidate):
-            logger.info(f"SSG/ISR Cache stale for path {request.path} (age: {int(age)}s). Regenerating...")
+            logger.info(
+                f"SSG/ISR Cache stale for path {request.path} (age: {int(age)}s). Regenerating..."
+            )
             self._trigger_background_revalidation(request.path, cache_file)
 
         return self._send_cached_file(request, cache_file, revalidate, start_response)
@@ -127,11 +159,9 @@ class SSGISRMixin:
         request: Request,
         raw_html: str,
         revalidate: Optional[int],
-        start_response: Callable
+        start_response: Callable,
     ) -> list[bytes]:
-        content = self._inject_assets(
-            raw_html, request, getattr(request, "nonce", "")
-        )
+        content = self._inject_assets(raw_html, request, getattr(request, "nonce", ""))
         body = content.encode("utf-8")
         headers = [
             ("Content-Type", "text/html; charset=utf-8"),
@@ -142,6 +172,12 @@ class SSGISRMixin:
             headers.append(("Cache-Control", f"public, max-age={revalidate}"))
         else:
             headers.append(("Cache-Control", "public, max-age=86400"))
+
+        headers += self._cookie_headers(request, request.environ)
+        headers += self._security_headers(
+            request=request, nonce=getattr(request, "nonce", None)
+        )
+
         start_response("200 OK", headers)
         return [b""] if request.method == "HEAD" else [body]
 
@@ -152,17 +188,17 @@ class SSGISRMixin:
         cache_file: str,
         revalidate: Optional[int],
         route_params: dict[str, Any],
-        start_response: Callable
+        start_response: Callable,
     ) -> Optional[list[bytes]]:
         if revalidate is None and len(route_params) > 0:
             return None
 
         try:
-            raw_html = self._generate_ssg_page_sync(
-                request.path, page_file, cache_file
-            )
+            raw_html = self._generate_ssg_page_sync(request.path, page_file, cache_file)
             if raw_html:
-                return self._build_and_send_generated_response(request, raw_html, revalidate, start_response)
+                return self._build_and_send_generated_response(
+                    request, raw_html, revalidate, start_response
+                )
         except Exception as e:
             logger.error(
                 f"Failed to generate SSG page on-demand for {request.path}: {e}"
@@ -173,7 +209,9 @@ class SSGISRMixin:
         self, request: Request, environ: dict[str, Any], start_response: Callable
     ) -> Optional[list[bytes]]:
         """Checks if a request path has a pre-rendered static page and serves it if appropriate."""
-        is_ssg_or_isr, revalidate, page_file, route_params = self._check_request_is_static(request)
+        is_ssg_or_isr, revalidate, page_file, route_params = (
+            self._check_request_is_static(request)
+        )
         if not is_ssg_or_isr or not page_file:
             return None
 
@@ -292,7 +330,9 @@ class SSGISRMixin:
         except Exception:
             return False
 
-    def _pre_render_static_route(self, route_path: str, full_path: str, file: str, root: str) -> None:
+    def _pre_render_static_route(
+        self, route_path: str, full_path: str, file: str, root: str
+    ) -> None:
         py_file = self._find_py_companion(file, root)
         should_render = True
         target_py = full_path if file.endswith((".py", ".pyc")) else py_file
@@ -309,6 +349,7 @@ class SSGISRMixin:
 
     def _get_dynamic_static_paths(self, module: Any) -> Optional[list[dict]]:
         from ..core.asgi import async_to_sync
+
         if not hasattr(module, "get_static_paths"):
             return None
         get_paths_fn = getattr(module, "get_static_paths")
@@ -317,7 +358,9 @@ class SSGISRMixin:
             paths = async_to_sync(paths)
         return paths
 
-    def _render_single_dynamic_path(self, route_path: str, full_path: str, p: dict[str, Any]) -> None:
+    def _render_single_dynamic_path(
+        self, route_path: str, full_path: str, p: dict[str, Any]
+    ) -> None:
         rendered_route = route_path
         for k, v in p.items():
             rendered_route = re.sub(rf"\[{k}(:\w+)?\]", str(v), rendered_route)
@@ -354,7 +397,9 @@ class SSGISRMixin:
     def _walk_and_generate_ssg(self, pages_root: str) -> None:
         for root, _, files in os.walk(pages_root):
             for file in files:
-                if file.endswith((".py", ".html", ".asok")) and not file.startswith("__"):
+                if file.endswith((".py", ".html", ".asok")) and not file.startswith(
+                    "__"
+                ):
                     self._pre_generate_file(root, file, pages_root)
 
     def pre_generate_ssg_site(self) -> None:

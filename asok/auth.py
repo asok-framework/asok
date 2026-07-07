@@ -57,23 +57,17 @@ class MagicLink:
 
         SECURITY: Uses constant-time operations to prevent timing attacks.
         """
-        import secrets
 
         # Unsign the token
         payload = request._unsign(token)
         email, exp_time, is_valid = MagicLink._parse_payload(payload)
 
-        # Check expiration with constant-time comparison
+        # Check expiration
         current_time = int(time.time())
         is_expired = exp_time < current_time
 
-        # SECURITY: Apply consistent delay for ALL paths to prevent timing attacks
-        # This prevents attackers from distinguishing valid vs invalid tokens by timing
-        base_delay = 0.15  # 150ms minimum
-        jitter = secrets.randbelow(50) / 1000  # 0-50ms random jitter
-        time.sleep(base_delay + jitter)
-
-        # Combine all checks (after delay, so timing is consistent)
+        # Combine all checks. Note: while parsing/expiration checks run only on valid signatures,
+        # the signature validation itself uses constant-time hmac.compare_digest to prevent signature forgery.
         if not is_valid or is_expired:
             return None
 
@@ -194,7 +188,9 @@ class OAuth:
             raise AuthError(f"OAuth token request failed: {e}")
 
     @staticmethod
-    def _fetch_raw_user_info(config: dict[str, str], access_token: str) -> dict[str, Any]:
+    def _fetch_raw_user_info(
+        config: dict[str, str], access_token: str
+    ) -> dict[str, Any]:
         user_headers = {
             "Authorization": f"Bearer {access_token}",
             "User-Agent": "Asok-Framework",

@@ -140,10 +140,10 @@ def test_encrypted_field_missing_secret_key(monkeypatch):
     monkeypatch.delenv("SECRET_KEY", raising=False)
     # Clear the encryption key cache to force key resolution
     from asok.orm.model import _ENCRYPTION_KEY_CACHE
+
     _ENCRYPTION_KEY_CACHE.clear()
 
     # Attempting to encrypt a value without SECRET_KEY must raise RuntimeError
     user = SecureUser(name="Bob", ssn="123-45-6789")
     with pytest.raises(RuntimeError, match="SECRET_KEY is not configured"):
         user.save()
-

@@ -52,7 +52,13 @@ class Mail:
         try:
             with smtplib.SMTP(host, port) as server:
                 Mail._connect_and_send(
-                    server, sender, all_recipients, msg_string, username, password, use_tls
+                    server,
+                    sender,
+                    all_recipients,
+                    msg_string,
+                    username,
+                    password,
+                    use_tls,
                 )
         except Exception as e:
             logger.error("Failed to send email: %s", e)
@@ -231,7 +237,9 @@ class Mail:
         sender = from_addr or Mail._cfg("MAIL_FROM", username or "noreply@localhost")
         use_tls = Mail._cfg("MAIL_TLS", "true").lower() != "false"
 
-        to_list, cc_list, bcc_list, all_recipients = Mail._prepare_recipients(to, cc, bcc)
+        to_list, cc_list, bcc_list, all_recipients = Mail._prepare_recipients(
+            to, cc, bcc
+        )
         sender = Mail._validate_email(sender)
         body, html = Mail._prepare_content(body, html)
         subject = Mail._sanitize(subject)

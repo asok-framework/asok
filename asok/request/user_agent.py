@@ -20,7 +20,11 @@ class UserAgent:
         return "MSIE" in ua or "Trident/" in ua
 
     def _detect_other_browsers(self, ua: str) -> str:
-        for key, name in (("Firefox/", "Firefox"), ("Chrome/", "Chrome"), ("Safari/", "Safari")):
+        for key, name in (
+            ("Firefox/", "Firefox"),
+            ("Chrome/", "Chrome"),
+            ("Safari/", "Safari"),
+        ):
             if key in ua:
                 return name
         return "Unknown"
@@ -36,7 +40,11 @@ class UserAgent:
         return self._detect_other_browsers(ua)
 
     def _detect_other_os(self, ua_lower: str) -> str:
-        for key, name in (("android", "Android"), ("mac os x", "macOS"), ("linux", "Linux")):
+        for key, name in (
+            ("android", "Android"),
+            ("mac os x", "macOS"),
+            ("linux", "Linux"),
+        ):
             if key in ua_lower:
                 return name
         return "Unknown"
@@ -56,7 +64,9 @@ class UserAgent:
         ua_lower = ua.lower()
         self._name = self._detect_browser(ua)
         self._os = self._detect_os(ua_lower)
-        self._is_mobile = any(x in ua_lower for x in ["mobile", "android", "iphone", "ipad"])
+        self._is_mobile = any(
+            x in ua_lower for x in ["mobile", "android", "iphone", "ipad"]
+        )
         self._parsed = True
 
     @property

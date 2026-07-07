@@ -16,12 +16,15 @@ class RoutingMixin:
             return False
         return True
 
-    def _rewrite_api_version(self, parts: list[str], request: Optional[Any]) -> list[str]:
+    def _rewrite_api_version(
+        self, parts: list[str], request: Optional[Any]
+    ) -> list[str]:
         """Header-based API Versioning Rewrite."""
         if not self._should_rewrite_version(parts, request):
             return parts
 
         from ..api.versioning import get_request_version
+
         version = get_request_version(request)
         if not version:
             return parts
@@ -49,17 +52,21 @@ class RoutingMixin:
         """Resolve a list of URL segments to a page file and captured parameters."""
         debug = self.config.get("DEBUG", False)
 
-        parts = self._rewrite_api_version(parts, request)
+        # BUG-2 fix: cache key must be built from the *original* parts (before
+        # API version rewriting), otherwise a versioned lookup can poison the
+        # cache for subsequent non-versioned requests to the same path.
+        cache_key_parts = list(parts)
 
         if not debug:
-            cached = self._lookup_route_cache(parts)
+            cached = self._lookup_route_cache(cache_key_parts)
             if cached is not None:
                 return cached
 
+        parts = self._rewrite_api_version(parts, request)
         result = self._search_pages_dirs(parts)
 
         if not debug:
-            self._cache_route(parts, result)
+            self._cache_route(cache_key_parts, result)
 
         return result
 
@@ -159,11 +166,15 @@ class RoutingMixin:
             return handler(value)
         return value  # str or unknown type
 
-    def _walk_route_terminal(self, current_base: str, captured_params: dict[str, Any]) -> tuple[Optional[str], dict[str, Any]]:
-        for ext in (".py", ".pyc", ".html", ".asok"):
-            p = os.path.join(current_base, self.config["INDEX"] + ext)
-            if os.path.isfile(p):
-                return p, captured_params
+    def _walk_route_terminal(
+        self, current_base: str, captured_params: dict[str, Any]
+    ) -> tuple[Optional[str], dict[str, Any]]:
+        index_names = (self.config.get("INDEX", "page"), "index")
+        for name in index_names:
+            for ext in (".py", ".pyc", ".html", ".asok"):
+                p = os.path.join(current_base, name + ext)
+                if os.path.isfile(p):
+                    return p, captured_params
         return None, captured_params
 
     def _walk_literal_file(
@@ -188,7 +199,9 @@ class RoutingMixin:
             return self._walk_route(segments[1:], dir_candidate, captured_params)
         return None, captured_params
 
-    def _find_dynamic_candidates(self, current_base: str, entries: list[str]) -> list[str]:
+    def _find_dynamic_candidates(
+        self, current_base: str, entries: list[str]
+    ) -> list[str]:
         candidates = []
         for entry in entries:
             if entry.startswith("[") and entry.endswith("]"):
@@ -202,7 +215,7 @@ class RoutingMixin:
         remaining: list[str],
         current_base: str,
         entry: str,
-        captured_params: dict[str, Any]
+        captured_params: dict[str, Any],
     ) -> tuple[Optional[str], dict[str, Any]]:
         inner = entry[1:-1]
         if ":" in inner:
@@ -224,7 +237,9 @@ class RoutingMixin:
             remaining, os.path.join(current_base, entry), new_params
         )
 
-    def _split_candidates_by_type(self, candidates: list[str]) -> tuple[list[str], list[str]]:
+    def _split_candidates_by_type(
+        self, candidates: list[str]
+    ) -> tuple[list[str], list[str]]:
         typed = []
         generic = []
         for c in candidates:
@@ -249,7 +264,9 @@ class RoutingMixin:
         remaining = segments[1:]
 
         for entry in typed + generic:
-            res, pars = self._try_dynamic_entry(seg, remaining, current_base, entry, captured_params)
+            res, pars = self._try_dynamic_entry(
+                seg, remaining, current_base, entry, captured_params
+            )
             if res:
                 return res, pars
 
@@ -261,6 +278,9 @@ class RoutingMixin:
         """Recursively walk the pages directory to find a matching route file."""
         if not segments:
             return self._walk_route_terminal(current_base, captured_params)
+
+        if segments[0] in ("..", "."):
+            return None, captured_params
 
         res, pars = self._walk_literal_file(segments, current_base, captured_params)
         if res:

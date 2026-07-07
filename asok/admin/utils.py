@@ -108,32 +108,69 @@ def _verify_backup_code(code: str, hashed: str) -> bool:
         return False
 
 
+def _generate_ctr_keystream(enc_key: bytes, iv: bytes, length: int) -> bytes:
+    """Generate CTR mode keystream block-by-block using HMAC-SHA256."""
+    keystream = bytearray()
+    counter = 0
+    while len(keystream) < length:
+        block = hmac.new(
+            enc_key, iv + counter.to_bytes(4, "big"), hashlib.sha256
+        ).digest()
+        keystream.extend(block)
+        counter += 1
+    return bytes(keystream[:length])
+
+
 def _encrypt_totp_secret(secret: str, master_key: str) -> str:
-    """Encrypt TOTP secret with XOR + HMAC (stdlib only, zero-dep).
+    """Encrypt TOTP secret with CTR mode stream cipher + HMAC (stdlib only, zero-dep).
 
     Format: salt$iv$ciphertext$hmac
     - salt: 16 bytes hex (for key derivation)
     - iv: 16 bytes hex (initialization vector)
-    - ciphertext: XOR encrypted secret
+    - ciphertext: Encrypted secret
     - hmac: HMAC-SHA256 for integrity
     """
     # Generate salt and IV
     salt = secrets.token_bytes(16)
     iv = secrets.token_bytes(16)
 
-    # Derive encryption key from master key + salt (OWASP 2026: 600k iterations)
-    key = hashlib.pbkdf2_hmac("sha256", master_key.encode(), salt, 600000)
+    # Derive separate encryption and MAC keys from master key + salt (OWASP 2026: 600k iterations)
+    derived_key = hashlib.pbkdf2_hmac(
+        "sha256", master_key.encode(), salt, 600000, dklen=64
+    )
+    enc_key = derived_key[:32]
+    mac_key = derived_key[32:]
 
-    # XOR encryption (repeat key to match plaintext length)
+    # CTR mode stream cipher encryption
     plaintext = secret.encode()
-    keystream = (key * ((len(plaintext) // len(key)) + 1))[: len(plaintext)]
+    keystream = _generate_ctr_keystream(enc_key, iv, len(plaintext))
     ciphertext = bytes(p ^ k for p, k in zip(plaintext, keystream))
 
     # HMAC for integrity (over salt + iv + ciphertext)
-    mac = hmac.new(key, salt + iv + ciphertext, hashlib.sha256).digest()
+    mac = hmac.new(mac_key, salt + iv + ciphertext, hashlib.sha256).digest()
 
     # Encode and return
     return f"{salt.hex()}${iv.hex()}${ciphertext.hex()}${mac.hex()}"
+
+
+def _decrypt_totp_secret_legacy(
+    ciphertext: bytes, salt: bytes, iv: bytes, expected_mac: bytes, master_key: str
+) -> str | None:
+    """Fallback decryption for old repeated-key XOR encrypted secrets."""
+    try:
+        legacy_key = hashlib.pbkdf2_hmac("sha256", master_key.encode(), salt, 600000)
+        legacy_mac = hmac.new(
+            legacy_key, salt + iv + ciphertext, hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(legacy_mac, expected_mac):
+            return None
+        keystream = (legacy_key * ((len(ciphertext) // len(legacy_key)) + 1))[
+            : len(ciphertext)
+        ]
+        plaintext = bytes(c ^ k for c, k in zip(ciphertext, keystream))
+        return plaintext.decode()
+    except Exception:
+        return None
 
 
 def _decrypt_totp_secret(encrypted: str, master_key: str) -> str | None:
@@ -149,16 +186,23 @@ def _decrypt_totp_secret(encrypted: str, master_key: str) -> str | None:
         ciphertext = bytes.fromhex(parts[2])
         expected_mac = bytes.fromhex(parts[3])
 
-        # Derive key (OWASP 2026: 600k iterations)
-        key = hashlib.pbkdf2_hmac("sha256", master_key.encode(), salt, 600000)
+        # Derive keys (OWASP 2026: 600k iterations)
+        derived_key = hashlib.pbkdf2_hmac(
+            "sha256", master_key.encode(), salt, 600000, dklen=64
+        )
+        enc_key = derived_key[:32]
+        mac_key = derived_key[32:]
 
-        # Verify HMAC
-        mac = hmac.new(key, salt + iv + ciphertext, hashlib.sha256).digest()
+        # Verify HMAC first to ensure integrity
+        mac = hmac.new(mac_key, salt + iv + ciphertext, hashlib.sha256).digest()
         if not hmac.compare_digest(mac, expected_mac):
-            return None  # Integrity check failed
+            # Fall back to legacy decryption scheme
+            return _decrypt_totp_secret_legacy(
+                ciphertext, salt, iv, expected_mac, master_key
+            )
 
-        # XOR decryption
-        keystream = (key * ((len(ciphertext) // len(key)) + 1))[: len(ciphertext)]
+        # CTR mode stream cipher decryption (XOR is symmetric)
+        keystream = _generate_ctr_keystream(enc_key, iv, len(ciphertext))
         plaintext = bytes(c ^ k for c, k in zip(ciphertext, keystream))
 
         return plaintext.decode()
@@ -195,6 +239,7 @@ def _display(obj: any) -> str:
     if obj is None:
         return ""
     import enum
+
     if isinstance(obj, enum.Enum):
         return str(obj.value)
     s = str(obj)

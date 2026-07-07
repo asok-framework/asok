@@ -120,7 +120,8 @@ class AuthViewsMixin:
                 )
                 if self._has_admin_access(user):
                     self._handle_login_success(request, user)
-                self._handle_login_failure(request, form.email.value)
+                else:
+                    self._handle_login_failure(request, form.email.value)
         except (AbortException, SecurityError) as e:
             self._handle_login_exception(request, e)
 
@@ -157,6 +158,7 @@ class AuthViewsMixin:
         if not user.backup_codes:
             return False, False
         import json
+
         try:
             backup_codes = json.loads(user.backup_codes)
             code_input = code_val.strip().upper()
@@ -177,7 +179,9 @@ class AuthViewsMixin:
                 return True, False
         return self._verify_backup_codes(user, code_val)
 
-    def _handle_successful_2fa_login(self, request: Any, user: Any, used_backup: bool) -> None:
+    def _handle_successful_2fa_login(
+        self, request: Any, user: Any, used_backup: bool
+    ) -> None:
         self._login_rate_reset(request)
         try:
             request.session.pop("pending_2fa_uid", None)
@@ -195,6 +199,7 @@ class AuthViewsMixin:
         )
         if used_backup:
             import json
+
             count = len(json.loads(user.backup_codes or "[]"))
             request.flash(
                 "warning",
@@ -206,9 +211,7 @@ class AuthViewsMixin:
             )
         request.flash(
             "success",
-            self.t(
-                request, "Welcome back, {name}!", name=user.name or user.email
-            ),
+            self.t(request, "Welcome back, {name}!", name=user.name or user.email),
         )
         raise RedirectException(self.prefix)
 
@@ -272,10 +275,9 @@ class AuthViewsMixin:
 
     def _enable_2fa_on_user(self, request: Any, u: Any, secret: str) -> None:
         backup_codes_plain = _generate_backup_codes(10)
-        backup_codes_hashed = [
-            _hash_backup_code(code) for code in backup_codes_plain
-        ]
+        backup_codes_hashed = [_hash_backup_code(code) for code in backup_codes_plain]
         import json
+
         master_key = self.app.config.get("SECRET_KEY", "")
         encrypted_secret = _encrypt_totp_secret(secret, master_key)
 
@@ -291,6 +293,7 @@ class AuthViewsMixin:
             pass
 
         import time
+
         request.session["_backup_codes_display"] = {
             "codes": backup_codes_plain,
             "expires_at": time.time() + 300,
@@ -367,6 +370,7 @@ class AuthViewsMixin:
             raise RedirectException(self.prefix + "/me")
         if isinstance(codes_data, dict):
             import time
+
             if time.time() > codes_data.get("expires_at", 0):
                 request.session.pop("_backup_codes_display", None)
                 request.flash(
@@ -415,7 +419,9 @@ class AuthViewsMixin:
             return admin_user
         return None
 
-    def _setup_impersonation(self, request: Any, admin_user: Any, target: Any, auth_name: str) -> None:
+    def _setup_impersonation(
+        self, request: Any, admin_user: Any, target: Any, auth_name: str
+    ) -> None:
         request.session["impersonator_id"] = admin_user.id
         request.session["impersonate_started_at"] = time.time()
         request.session["user_id"] = target.id
@@ -468,4 +474,3 @@ class AuthViewsMixin:
 
         request.flash("info", self.t(request, "Stopped impersonation"))
         raise RedirectException(self.prefix)
-

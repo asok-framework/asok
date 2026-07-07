@@ -57,7 +57,7 @@ class Asok(
         self.root_dir: str = os.path.abspath(root_dir or os.getcwd())
         import asok
 
-        self.version = getattr(asok, "__version__", "0.5.1")
+        self.version = getattr(asok, "__version__", "0.5.2")
         self.dirs: dict[str, str] = {
             "LOCALES": "src/locales",
             "PAGES": "src/pages",
@@ -89,6 +89,7 @@ class Asok(
             "TRUSTED_PROXIES": None,  # Set to list of IPs or "*" to trust X-Forwarded-For
             "BG_WORKERS": 10,  # Max background threads
             "GRAPHQL_DISABLE_INTROSPECTION": None,
+            "STRICT_STATIC_TEMPLATES": False,
         }
 
         # Lifecycle hooks
@@ -117,10 +118,22 @@ class Asok(
         self.setup()
 
     _DIRECTIVE_MARKERS = (
-        "asok-state", "asok-on:", "asok-text", "asok-show", "asok-hide",
-        "asok-class:", "asok-bind:", "asok-model", "asok-if", "asok-for",
-        "asok-init", "asok-ref", "asok-teleport", "asok-cloak",
-        "asok-fetch", "asok-fetch-async",
+        "asok-state",
+        "asok-on:",
+        "asok-text",
+        "asok-show",
+        "asok-hide",
+        "asok-class:",
+        "asok-bind:",
+        "asok-model",
+        "asok-if",
+        "asok-for",
+        "asok-init",
+        "asok-ref",
+        "asok-teleport",
+        "asok-cloak",
+        "asok-fetch",
+        "asok-fetch-async",
     )
 
     def setup(self) -> None:
@@ -128,8 +141,9 @@ class Asok(
         self._setup_python_path()
         self._setup_logger()
         self._ensure_package_dirs(
-            self.dirs["MODELS"], self.dirs["COMPONENTS"], self.dirs["MIDDLEWARES"],
-            "src/pages", "src/routes",
+            self.dirs["MODELS"],
+            self.dirs["MIDDLEWARES"],
+            "src/routes",
         )
         self._load_env_file()
         self._setup_debug_flag()
@@ -301,7 +315,9 @@ class Asok(
         return filename.endswith(".py") or filename.endswith(".pyc")
 
     @staticmethod
-    def _load_module_from_path(mod_name: str, filepath: str, register: bool = False) -> Any:
+    def _load_module_from_path(
+        mod_name: str, filepath: str, register: bool = False
+    ) -> Any:
         spec = importlib.util.spec_from_file_location(mod_name, filepath)
         mod = importlib.util.module_from_spec(spec)
         if register:
@@ -320,15 +336,23 @@ class Asok(
             with open(os.path.join(locale_dir, filename), "r", encoding="utf-8") as f:
                 self.locales[lang] = json.load(f)
 
+    def _ensure_extension_containers(self) -> None:
+        defaults: list[tuple[str, Any]] = [
+            ("extensions", dict),
+            ("_extension_pages_paths", list),
+            ("_extension_template_paths", list),
+            ("_extension_static_paths", list),
+            ("_static_hashes", dict),
+        ]
+        for attr, factory in defaults:
+            if not hasattr(self, attr):
+                setattr(self, attr, factory())
+
     def _init_paths_and_extensions(self) -> None:
         self._static_dirs = frozenset(["images", "css", "js", "uploads"])
         self._partials_path = os.path.join(self.root_dir, self.dirs["PARTIALS"])
         self._tpl_root = os.path.abspath(os.path.join(self.root_dir, "src/partials"))
-        self.extensions: dict[str, Any] = {}
-        self._extension_pages_paths: list[str] = []
-        self._extension_template_paths: list[str] = []
-        self._extension_static_paths: list[str] = []
-        self._static_hashes = {}
+        self._ensure_extension_containers()
         # Cached search path lists (invalidated on extension registration).
         self.__pages_search_paths_cache: Optional[list[str]] = None
         self.__template_search_paths_cache: Optional[list[str]] = None
@@ -381,13 +405,24 @@ class Asok(
         from ..cache import default_cache
 
         env_backend = os.environ.get("ASOK_CACHE_BACKEND", "memory").lower()
-        if env_backend == default_cache.backend:
+        if env_backend != default_cache.backend:
+            default_cache.backend = env_backend
+            if env_backend == "file":
+                os.makedirs(default_cache._path, exist_ok=True)
+            elif env_backend == "redis":
+                default_cache._init_redis()
+
+        self._check_cache_backend_security(default_cache.backend)
+
+    def _check_cache_backend_security(self, backend: str) -> None:
+        if self.config.get("DEBUG", False):
             return
-        default_cache.backend = env_backend
-        if env_backend == "file":
-            os.makedirs(default_cache._path, exist_ok=True)
-        elif env_backend == "redis":
-            default_cache._init_redis()
+        if backend == "memory":
+            logger.warning(
+                "SECURITY WARNING: Cache backend is set to 'memory' in production. "
+                "In multi-process deployments (like Gunicorn), rate limiting and caching "
+                "will be per-process instead of global. Consider configuring 'redis' or 'file' backend."
+            )
 
     def _ensure_package_dirs(self, *dirs: str) -> None:
         """Create empty __init__.py in directories if they exist but are not Python packages."""
@@ -420,7 +455,9 @@ class Asok(
         if self.__template_search_paths_cache is None:
             paths = [
                 os.path.join(self.root_dir, self.dirs.get("PAGES", "src/pages")),
-                os.path.join(self.root_dir, self.dirs.get("COMPONENTS", "src/components")),
+                os.path.join(
+                    self.root_dir, self.dirs.get("COMPONENTS", "src/components")
+                ),
                 os.path.join(self.root_dir, self.dirs.get("PARTIALS", "src/partials")),
             ]
             paths.extend(self._extension_template_paths)
@@ -444,13 +481,22 @@ class Asok(
             return [o.strip() for o in cors_origins.split(",") if o.strip()]
         return _parse_cors_iterable(cors_origins)
 
-
     def _invalidate_search_path_caches(self) -> None:
         self.__pages_search_paths_cache = None
         self.__template_search_paths_cache = None
         self.__static_search_paths_cache = None
+        if hasattr(self, "_route_cache"):
+            self._route_cache.clear()
 
-    _FORBIDDEN_UNIX_ROOTS = ("/etc", "/sys", "/proc", "/dev", "/boot", "/root", "/var/run")
+    _FORBIDDEN_UNIX_ROOTS = (
+        "/etc",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/boot",
+        "/root",
+        "/var/run",
+    )
     _FORBIDDEN_WIN_ROOTS = ("c:\\windows", "c:\\winnt", "\\windows\\system32")
 
     def register_extension(
@@ -461,7 +507,10 @@ class Asok(
 
         if isinstance(extension, type) and issubclass(extension, AsokExtension):
             extension = extension()
-        extension.init_app(self)
+
+        ext_name = extension.__class__.__name__
+        if ext_name not in self.extensions:
+            extension.init_app(self)
 
         self._register_extension_path(
             extension.get_pages_path(), self._extension_pages_paths, "page"
@@ -526,4 +575,3 @@ def _parse_cors_iterable(cors_origins: Any) -> list[str]:
         return [str(o).strip() for o in cors_origins]
     except TypeError:
         return []
-

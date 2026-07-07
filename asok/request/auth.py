@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-import time
 from typing import Any, Optional
 
 from asok.auth import BearerToken, MagicLink, OAuth
@@ -93,18 +92,19 @@ class AuthMixin:
         self._user_instance = None
         self._auth_resolved = False
 
-    def _is_blocked_by_rate_limit(self: Any, key: str, attempts: int) -> bool:
+    def _is_blocked_by_rate_limit(self: Any, attempts: int) -> bool:
         if attempts >= 5:
             logging.getLogger(__name__).warning(
                 "SECURITY: Authentication blocked for IP %s: too many failed attempts (%d)",
                 self.ip,
                 attempts,
             )
-            time.sleep(2)
             return True
         return False
 
-    def _verify_and_login_user(self: Any, user: Any, password_field: str, password: str, key: str) -> bool:
+    def _verify_and_login_user(
+        self: Any, user: Any, password_field: str, password: str, key: str
+    ) -> bool:
         if user and user.check_password(password_field, password):
             default_cache.forget(key)
             self.login(user)
@@ -113,6 +113,20 @@ class AuthMixin:
 
     def _are_credentials_missing(self: Any, password: Any, credentials: dict) -> bool:
         return not password or not credentials
+
+    def _check_rate_limit_and_incr(self: Any, rate_limit_key: str) -> bool:
+        """Verify the rate limit status and atomically increment attempts count."""
+        attempts = default_cache.get(rate_limit_key, 0)
+        if self._is_blocked_by_rate_limit(attempts):
+            return True
+
+        # SECURITY: Increment failed attempts counter atomically *before* verifying
+        # to prevent TOCTOU race conditions from bypassing the rate limit.
+        attempts = default_cache.incr(rate_limit_key, amount=1, ttl=900)
+        if attempts > 5:
+            self._is_blocked_by_rate_limit(attempts)
+            return True
+        return False
 
     def authenticate(
         self: Any, password_field: str = "password", **credentials: Any
@@ -131,21 +145,14 @@ class AuthMixin:
         if self._are_credentials_missing(password, credentials):
             return None
 
-        # SECURITY: Rate limiting by IP address
         rate_limit_key = f"auth_attempts:{self.ip}"
-        attempts = default_cache.get(rate_limit_key, 0)
-
-        if self._is_blocked_by_rate_limit(rate_limit_key, attempts):
+        if self._check_rate_limit_and_incr(rate_limit_key):
             return None
 
         user = user_model.find(**credentials)
         if self._verify_and_login_user(user, password_field, password, rate_limit_key):
             return user
 
-        # SECURITY: Increment failed attempts counter
-        default_cache.set(rate_limit_key, attempts + 1, ttl=900)
-        # Slow down failed attempts to make brute force impractical
-        time.sleep(1)
         return None
 
     @property
@@ -218,6 +225,7 @@ class AuthMixin:
     def _load_user_by_id(self: Any, user_id: Any, user_model: Any) -> Optional[Any]:
         """Load a user from the model by ID, logging security events on failure."""
         import logging as _logging
+
         _logger = _logging.getLogger("asok.security")
         try:
             uid = int(user_id)

@@ -427,9 +427,16 @@ class TestEnvVarDbPath:
 
 class TestFTS:
     def test_search_finds_matching_records(self):
-        Article.create(title="Introduction to Python", body="Python is a great programming language.")
-        Article.create(title="Advanced Java", body="Java is widely used in enterprise software.")
-        Article.create(title="Web Development", body="Learn HTML, CSS, JavaScript and Python.")
+        Article.create(
+            title="Introduction to Python",
+            body="Python is a great programming language.",
+        )
+        Article.create(
+            title="Advanced Java", body="Java is widely used in enterprise software."
+        )
+        Article.create(
+            title="Web Development", body="Learn HTML, CSS, JavaScript and Python."
+        )
 
         # Search for Python (should match Python in title or body)
         results = Article.query().search("Python").get()
@@ -451,8 +458,14 @@ class TestFTS:
         assert len(results_none) == 0
 
     def test_search_with_soft_delete(self):
-        SearchableArticle.create(title="Introduction to Python", body="Python is a great programming language.")
-        a2 = SearchableArticle.create(title="Advanced Python", body="Python is widely used in enterprise software.")
+        SearchableArticle.create(
+            title="Introduction to Python",
+            body="Python is a great programming language.",
+        )
+        a2 = SearchableArticle.create(
+            title="Advanced Python",
+            body="Python is widely used in enterprise software.",
+        )
 
         # Soft delete the second article
         a2.delete()
@@ -463,7 +476,10 @@ class TestFTS:
         assert results[0].title == "Introduction to Python"
 
     def test_query_search_prefix_consistency(self):
-        Article.create(title="Introduction to Python", body="Python is a great programming language.")
+        Article.create(
+            title="Introduction to Python",
+            body="Python is a great programming language.",
+        )
 
         # Checking if Pyth matches Python via both methods
         results_model = Article.search("Pyth")
@@ -473,7 +489,10 @@ class TestFTS:
         assert len(results_query) == 1
 
     def test_search_syntax_errors(self):
-        Article.create(title="Introduction to Python", body="Python is a great programming language.")
+        Article.create(
+            title="Introduction to Python",
+            body="Python is a great programming language.",
+        )
 
         # Passing invalid FTS syntax terms
         # This shouldn't crash the application
@@ -482,4 +501,3 @@ class TestFTS:
 
         res2 = Article.query().search("Python OR").get()
         assert len(res2) == 0
-

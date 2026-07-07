@@ -60,6 +60,7 @@ class MySQLEngine(BaseEngine):
         try:
             import pymysql
             import pymysql.cursors
+
             return pymysql
         except ImportError:
             raise ImportError(
@@ -155,19 +156,20 @@ class MySQLEngine(BaseEngine):
 
     def _translate_autoincrement(self, sql: str) -> str:
         import re
+
         if "AUTOINCREMENT" not in sql:
             return sql
         sql = re.sub(
-            r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
-            'INT AUTO_INCREMENT PRIMARY KEY',
+            r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+            "INT AUTO_INCREMENT PRIMARY KEY",
             sql,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
         return re.sub(
-            r'id\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
-            'id INT AUTO_INCREMENT PRIMARY KEY',
+            r"id\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+            "id INT AUTO_INCREMENT PRIMARY KEY",
             sql,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
 
     def _translate_sqlite_fts(self, sql: str) -> str:
@@ -189,13 +191,13 @@ class MySQLEngine(BaseEngine):
             return False
         return "INSERT INTO" in sql or "DROP TABLE" in sql
 
-
     def _build_fts_index_sql_from_virtual(self, sql: str) -> str:
         import re
+
         match = re.search(
             r'CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?(\w+)"?)\s+USING\s+fts5\((.*?)\)',
             sql,
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE | re.DOTALL,
         )
         if not match:
             return "SELECT 1"
@@ -203,6 +205,7 @@ class MySQLEngine(BaseEngine):
 
     def _do_build_fts(self, fts_table: str, params_str: str) -> str:
         import re
+
         target_table = fts_table[:-4] if fts_table.endswith("_fts") else fts_table
         content_match = re.search(r"content\s*=\s*'([^']+)'", params_str)
         if content_match:
@@ -212,19 +215,20 @@ class MySQLEngine(BaseEngine):
             return "SELECT 1"
         idx_cols = ", ".join(f"`{c}`" for c in cols)
         idx_name = f"idx_{target_table}_fts"
-        return f'ALTER TABLE `{target_table}` ADD FULLTEXT INDEX `{idx_name}` ({idx_cols})'
+        return (
+            f"ALTER TABLE `{target_table}` ADD FULLTEXT INDEX `{idx_name}` ({idx_cols})"
+        )
 
     def _extract_fts_cols(self, params_str: str) -> List[str]:
         cols: List[str] = []
-        for param in params_str.split(','):
+        for param in params_str.split(","):
             param = param.strip()
             if not param:
                 continue
-            if any(kw in param.lower() for kw in ('content=', 'content_rowid=')):
+            if any(kw in param.lower() for kw in ("content=", "content_rowid=")):
                 continue
             cols.append(param.strip('"`[]'))
         return cols
-
 
     def _detect_mysql_type_attrs(self, field: Any) -> str | None:
         """Check field type attributes and return MySQL type, or None for standard mapping."""
@@ -281,6 +285,7 @@ class MySQLEngine(BaseEngine):
 
     def _clean_search_term_mysql(self, term: str) -> str:
         import re
+
         return re.sub(r"[^\w\s]", " ", term or "", flags=re.UNICODE).strip()
 
     def _get_search_words_mysql(self, clean: str) -> list[str]:
@@ -316,6 +321,7 @@ class MySQLEngine(BaseEngine):
 
     def _deserialize_vector_json_mysql(self, value: str) -> list[float]:
         import json
+
         try:
             return [float(x) for x in json.loads(value)]
         except Exception:
@@ -335,6 +341,7 @@ class MySQLEngine(BaseEngine):
     def _get_pymysql_module(self) -> Any:
         try:
             import pymysql
+
             return pymysql
         except ImportError:
             return None
@@ -343,6 +350,7 @@ class MySQLEngine(BaseEngine):
         import re
 
         from ..exceptions import ModelError
+
         m = re.search(r"for key '.*?\.(\w+)'", err_msg)
         if not m:
             m = re.search(r"for key '(\w+)'", err_msg)
@@ -353,6 +361,7 @@ class MySQLEngine(BaseEngine):
         import re
 
         from ..exceptions import ModelError
+
         m = re.search(r"Column '(\w+)' cannot be null", err_msg)
         field = m.group(1) if m else "field"
         return ModelError(f"{field} is required", field=field, original=e)
@@ -373,6 +382,7 @@ class MySQLEngine(BaseEngine):
             if err_code in (1048, 1364):
                 return self._handle_mysql_not_null(err_msg, e)
             from ..exceptions import ModelError
+
             return ModelError(err_msg, original=e)
         return e
 

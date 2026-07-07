@@ -114,7 +114,9 @@ def _emit_for_token(state: CompilerState, token: str) -> None:
         _handle_literal_token(state, token)
 
 
-def _build_compiled_callable(template_string: str, is_debug: bool) -> Callable[..., Any]:
+def _build_compiled_callable(
+    template_string: str, is_debug: bool
+) -> Callable[..., Any]:
     state = CompilerState(is_debug)
     for token in _RE_TOKENS.split(template_string):
         _emit_for_token(state, token)
@@ -133,6 +135,18 @@ def _exec_template_code(compiled_code: str) -> Callable[..., Any]:
         "_Loop": _Loop,
         "_escape": _escape,
         "slice": slice,
+        "str": str,
+        "int": int,
+        "float": float,
+        "len": len,
+        "range": range,
+        "dict": dict,
+        "list": list,
+        "bool": bool,
+        "abs": abs,
+        "min": min,
+        "max": max,
+        "sum": sum,
         "default_cache": default_cache,
     }
     try:
@@ -159,14 +173,17 @@ def _compile_and_run(
     if run_fn is None:
         run_fn = _build_compiled_callable(template_string, is_debug)
         _compiled_cache[cache_key] = run_fn
-    try:
-        return run_fn(
-            context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug
-        )
-    except Exception as e:
-        code_str = getattr(run_fn, "_compiled_code", "unknown")
-        # Log or raise with context info to debug
-        print(f"DEBUG: Context keys: {list(context.keys())}")
-        print(f"DEBUG: dropzone_loader type: {type(context.get('dropzone_loader'))} value: {repr(context.get('dropzone_loader'))}")
-        print(f"DEBUG: dropzone type: {type(context.get('dropzone'))} value: {repr(context.get('dropzone'))}")
-        raise type(e)(f"{str(e)}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}") from e
+    gen = run_fn(
+        context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug
+    )
+
+    def _generator_wrapper() -> Any:
+        try:
+            yield from gen
+        except Exception as e:
+            code_str = getattr(run_fn, "_compiled_code", "unknown")
+            raise type(e)(
+                f"{str(e)}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}"
+            ) from e
+
+    return _generator_wrapper()

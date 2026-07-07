@@ -331,7 +331,9 @@ class TestTemplateSandboxSecurity:
     def test_call_injection_raises(self):
         # Trying to inject arbitrary python in macro call args
         try:
-            render("{% call macro(1); import os %}{% endcall %}", macro=lambda *a, **kw: "")
+            render(
+                "{% call macro(1); import os %}{% endcall %}", macro=lambda *a, **kw: ""
+            )
             assert False, "Should have failed to compile/run template"
         except Exception:
             pass
@@ -344,11 +346,14 @@ sys.injected_flag = True
 # = 1 %}"""
         try:
             import sys
+
             if hasattr(sys, "injected_flag"):
                 del sys.injected_flag
             render(tpl)
             # If it succeeded, check if code executed
-            assert not getattr(sys, "injected_flag", False), "Code injection was executed!"
+            assert not getattr(sys, "injected_flag", False), (
+                "Code injection was executed!"
+            )
         except Exception:
             pass
 
@@ -383,3 +388,8 @@ def test_shared_variables_caching_and_double_evaluation():
     assert helper2 is my_helper
     assert call_count == 0
 
+
+def test_tilde_string_concatenation():
+    tpl = '{% set name = "User #" ~ user.id %}{{ name }}'
+    res = render_template_string(tpl, {"user": {"id": 42}})
+    assert res == "User #42"

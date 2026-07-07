@@ -7,6 +7,7 @@ from typing import Any
 
 from asok.templates import _extract_nested_attrs, _render_attrs
 from asok.utils.geo import get_dial_codes, iso_to_flag
+from asok.utils.html_sanitizer import sanitize_html
 
 from .utils import _filter_nested_attrs, escape_js_string, html_safe_json
 
@@ -110,28 +111,34 @@ def _build_dropdown_items(field: Any) -> tuple[list, str]:
         tid, title, subtitle, image = _process_dropdown_item(item, field)
         if str(tid) == str(field.value):
             current_label = title
-        render_items.append({"id": tid, "title": title, "subtitle": subtitle, "image": image})
+        render_items.append(
+            {"id": tid, "title": title, "subtitle": subtitle, "image": image}
+        )
     return render_items, current_label
 
 
-def _render_dropdown_item(ri: dict, field: Any, item_attrs_base: dict, item_class_base: str) -> str:
+def _render_dropdown_item(
+    ri: dict, field: Any, item_attrs_base: dict, item_class_base: str
+) -> str:
     """Render a single dropdown item div."""
     esc = escape
-    js_title = escape_js_string(str(ri['title']))
-    js_id = escape_js_string(str(ri['id']))
+    js_title = escape_js_string(str(ri["title"]))
+    js_id = escape_js_string(str(ri["id"]))
     s_cond = f"!search || '{esc(js_title.lower())}'.includes(search.toLowerCase())"
     click = f"Asok.selectDropdown($, '{esc(js_id)}', '{esc(js_title)}', $refs.input_{field.name})"
     item_attrs = dict(item_attrs_base)
     item_attrs["class"] = f"asok-dropdown-item {item_class_base}".strip()
     item_attrs["asok-show"] = s_cond
     item_attrs["asok-on:click"] = click
-    item_attrs["data-value"] = str(ri['id'])
-    item_attrs["data-title"] = str(ri['title'])
+    item_attrs["data-value"] = str(ri["id"])
+    item_attrs["data-title"] = str(ri["title"])
     out = f"      <div{_render_attrs(item_attrs)}>"
     if ri["image"]:
         out += f'        <img src="{esc(str(ri["image"]))}" class="asok-dropdown-item-img">'
     out += '        <div class="asok-dropdown-item-content">'
-    out += f'          <div class="asok-dropdown-item-title">{esc(str(ri["title"]))}</div>'
+    out += (
+        f'          <div class="asok-dropdown-item-title">{esc(str(ri["title"]))}</div>'
+    )
     if ri["subtitle"]:
         out += f'          <div class="asok-dropdown-item-subtitle">{esc(str(ri["subtitle"]))}</div>'
     out += "        </div>"
@@ -172,7 +179,7 @@ def render_dropdown(
     searchable = field.item_meta["searchable"]
 
     state = html_safe_json({"open": False, "search": "", "label": str(current_label)})
-    html_out = f"<div{_render_attrs(container_attrs)} asok-state=\"{state}\">"
+    html_out = f'<div{_render_attrs(container_attrs)} asok-state="{state}">'
     html_out += f"  <button{_render_attrs(trigger_attrs)}>"
     html_out += f'    <span asok-text="label">{esc(str(current_label))}</span>'
     html_out += '    <svg class="asok-dropdown-arrow" asok-class:rotate-180="open" width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
@@ -288,7 +295,7 @@ def _build_tags_options(field: Any, current_values: list) -> tuple[list, dict]:
     """Build available_options list and current_labels dict from field.choices."""
     available_options = []
     current_labels = {}
-    for val_opt, label in (field.choices or []):
+    for val_opt, label in field.choices or []:
         available_options.append({"value": str(val_opt), "label": str(label)})
         if str(val_opt) in current_values:
             current_labels[str(val_opt)] = str(label)
@@ -366,8 +373,8 @@ def render_tags(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out += '    <div class="asok-tags-options">'
 
     for opt in available_options:
-        js_label = escape_js_string(str(opt['label']))
-        js_value = escape_js_string(str(opt['value']))
+        js_label = escape_js_string(str(opt["label"]))
+        js_value = escape_js_string(str(opt["value"]))
         search_cond = (
             f"!search || '{esc(js_label.lower())}'.includes(search.toLowerCase())"
             if searchable
@@ -381,7 +388,9 @@ def render_tags(field: Any, val: str, merged: dict[str, Any]) -> str:
         option_attrs["asok-show"] = f"{search_cond} && !{already_selected}"
         option_attrs["asok-on:click"] = click_action
 
-        html_out += f"      <div{_render_attrs(option_attrs)}>{esc(str(opt['label']))}</div>"
+        html_out += (
+            f"      <div{_render_attrs(option_attrs)}>{esc(str(opt['label']))}</div>"
+        )
 
     html_out += "    </div>"
     html_out += "  </div>"
@@ -1010,9 +1019,15 @@ def render_wysiwyg(field: Any, val: str, merged: dict[str, Any]) -> str:
     editor_attrs["contenteditable"] = "true"
     editor_attrs["asok-on:input"] = update_hidden
 
-    html_out += f"<div{_render_attrs(editor_attrs)}>{esc(current_content)}</div>"
+    # SECURITY: sanitize at render time. Client-side AsokSecurity.sanitizeHtml() and
+    # the admin CRUD save path do NOT cover reflected re-renders (validation failures,
+    # before any save) or values written through non-admin paths (Model.create, GraphQL,
+    # public forms). sanitize_html() keeps legitimate WYSIWYG markup so contenteditable
+    # renders correctly, while stripping <script>, on* handlers and javascript: URIs.
+    html_out += f"<div{_render_attrs(editor_attrs)}>{sanitize_html(current_content)}</div>"
 
-    # Hidden input to store HTML
+    # Hidden input: esc() in the attribute is correct — browsers decode HTML entities
+    # before form submission, so the server receives the original HTML string.
     html_out += f'<input type="hidden" name="{field.name}" id="{field.name}" value="{esc(current_content)}" asok-ref="hidden_{field.name}">'
     html_out += "</div>"
     return html_out
@@ -1182,7 +1197,9 @@ def _get_transfer_lists_attrs(merged: dict[str, Any]) -> dict[str, Any]:
     return lists_attrs
 
 
-def _get_transfer_list_side_attrs(list_attrs_base: dict[str, Any], list_class_base: str, side: str) -> dict[str, Any]:
+def _get_transfer_list_side_attrs(
+    list_attrs_base: dict[str, Any], list_class_base: str, side: str
+) -> dict[str, Any]:
     attrs = dict(list_attrs_base)
     attrs["class"] = f"asok-transfer-{side} {list_class_base}".strip()
     if not list_class_base:
@@ -1222,7 +1239,9 @@ def render_transfer(field: Any, val: str, merged: dict[str, Any]) -> str:
     button_class_base = button_attrs_base.get("class", "")
 
     # Available list
-    avail_attrs = _get_transfer_list_side_attrs(list_attrs_base, list_class_base, "avail")
+    avail_attrs = _get_transfer_list_side_attrs(
+        list_attrs_base, list_class_base, "avail"
+    )
     html_out += f"  <div{_render_attrs(avail_attrs)}>"
     html_out += "    <h4>Available</h4>"
     html_out += '    <select multiple style="width:100%;height:200px;" asok-on:change="Asok.updateTransferSelection($, \'h_avail\', $event)">'
@@ -1250,7 +1269,9 @@ def render_transfer(field: Any, val: str, merged: dict[str, Any]) -> str:
     html_out += "  </div>"
 
     # Selected list
-    sel_list_attrs = _get_transfer_list_side_attrs(list_attrs_base, list_class_base, "selected")
+    sel_list_attrs = _get_transfer_list_side_attrs(
+        list_attrs_base, list_class_base, "selected"
+    )
     html_out += f"  <div{_render_attrs(sel_list_attrs)}>"
     html_out += "    <h4>Selected</h4>"
     html_out += '    <select multiple style="width:100%;height:200px;" asok-on:change="Asok.updateTransferSelection($, \'h_sel\', $event)">'

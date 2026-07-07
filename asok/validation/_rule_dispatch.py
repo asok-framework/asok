@@ -22,6 +22,7 @@ def _simple_handler(check_name: str, default_arg: Any = None):
         val = validator.data.get(field, default_arg)
         if not check_fn(val):
             validator.errors[field] = validator._msg(check_name, messages, field=field)
+
     return handler
 
 
@@ -32,6 +33,7 @@ def _file_handler(check_name: str):
         f = validator.files.get(field)
         if not check_fn(f):
             validator.errors[field] = validator._msg(check_name, messages, field=field)
+
     return handler
 
 
@@ -44,6 +46,7 @@ def _arg_handler(check_name: str):
         val = validator.data.get(field, "")
         if not check_fn(val, arg):
             validator.errors[field] = validator._msg(check_name, messages, arg, field)
+
     return handler
 
 
@@ -56,6 +59,7 @@ def _file_arg_handler(check_name: str):
         f = validator.files.get(field)
         if not check_fn(f, arg):
             validator.errors[field] = validator._msg(check_name, messages, arg, field)
+
     return handler
 
 
@@ -128,17 +132,36 @@ def _handle_same(validator, field: str, arg, messages: dict) -> None:
         validator.errors[field] = validator._msg("same", messages, arg, field)
 
 
+def _decode_daterange_val(val):
+    """Decode a daterange value from JSON. Returns None when too large."""
+    if isinstance(val, str):
+        if len(val) > 10_000:
+            return None
+        return json_mod.loads(val)
+    return val
+
+
 def _handle_daterange(validator, field: str, arg, messages: dict) -> None:
     val = validator.data.get(field)
     if not val:
         return
     try:
-        d = json_mod.loads(val) if isinstance(val, str) else val
+        d = _decode_daterange_val(val)
+        if d is None:
+            raise ValueError("daterange payload too large")
         start = d.get("start")
         end = d.get("end")
         _check_daterange_payload(validator, field, arg, messages, start, end)
-    except (ValueError, json_mod.JSONDecodeError, TypeError, AttributeError):
-        validator.errors[field] = validator._msg("daterange_invalid", messages, field=field)
+    except (
+        ValueError,
+        json_mod.JSONDecodeError,
+        TypeError,
+        AttributeError,
+        RecursionError,
+    ):
+        validator.errors[field] = validator._msg(
+            "daterange_invalid", messages, field=field
+        )
 
 
 def _check_daterange_payload(validator, field, arg, messages, start, end) -> None:
@@ -151,9 +174,13 @@ def _check_daterange_payload(validator, field, arg, messages, start, end) -> Non
 
 def _record_daterange_errors(validator, field, arg, messages, ds, de) -> None:
     if de < ds:
-        validator.errors[field] = validator._msg("daterange_order", messages, field=field)
+        validator.errors[field] = validator._msg(
+            "daterange_order", messages, field=field
+        )
     if arg == "future" and ds < datetime.date.today():
-        validator.errors[field] = validator._msg("daterange_future", messages, field=field)
+        validator.errors[field] = validator._msg(
+            "daterange_future", messages, field=field
+        )
 
 
 _HANDLERS: dict[str, Callable] = {

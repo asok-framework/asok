@@ -476,8 +476,15 @@ class Request(
         return self.__dict__["_browser_cache"]
 
     _LANG_TO_COUNTRY = {
-        "fr": "FR", "en": "US", "es": "ES", "de": "DE", "it": "IT",
-        "ja": "JP", "zh": "CN", "pt": "BR", "ru": "RU",
+        "fr": "FR",
+        "en": "US",
+        "es": "ES",
+        "de": "DE",
+        "it": "IT",
+        "ja": "JP",
+        "zh": "CN",
+        "pt": "BR",
+        "ru": "RU",
     }
 
     _UNKNOWN_COUNTRY = {
@@ -566,6 +573,11 @@ class Request(
     @property
     def scheme(self) -> str:
         """The URL scheme (http or https)."""
+        remote_addr = self.environ.get("REMOTE_ADDR", "")
+        if self._is_proxy_trusted(remote_addr):
+            forwarded_proto = self.environ.get("HTTP_X_FORWARDED_PROTO")
+            if forwarded_proto:
+                return forwarded_proto.lower()
         return self.environ.get("wsgi.url_scheme", "http")
 
     @property

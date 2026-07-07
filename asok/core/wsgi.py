@@ -39,6 +39,15 @@ class _FinalRedirectException(Exception):
 _ADMIN_REDIRECTED = object()
 
 
+# Sentinel used to tag internally-generated fallback error bodies so that
+# _normalize_error_body can replace them with a custom error page if one exists.
+# We wrap the HTML in a dedicated class to avoid any string-sniffing heuristics.
+class _DefaultErrorBody(str):
+    """A str subclass that marks a response as a framework-generated fallback body."""
+
+    __slots__ = ()
+
+
 class WSGIMixin:
     """Mixin class for Asok that handles the main WSGI entry point, middleware execution,
     static file serving, hot reload checks, and error rendering.
@@ -78,7 +87,9 @@ class WSGIMixin:
             max_mtime = self._max_mtime_in_files(root, files, max_mtime)
         return max_mtime
 
-    def _max_mtime_in_files(self, root: str, files: list[str], current_max: float) -> float:
+    def _max_mtime_in_files(
+        self, root: str, files: list[str], current_max: float
+    ) -> float:
         for f in files:
             current_max = max(current_max, self._safe_mtime(os.path.join(root, f)))
         return current_max
@@ -107,7 +118,9 @@ class WSGIMixin:
     _CORS_METHODS = "GET, POST, PUT, DELETE, PATCH, OPTIONS"
     _CORS_HEADERS = "Content-Type, X-CSRF-Token, X-Block"
 
-    def _preflight_cors_headers(self, origin: str, cors_origins: Any) -> list[tuple[str, str]]:
+    def _preflight_cors_headers(
+        self, origin: str, cors_origins: Any
+    ) -> list[tuple[str, str]]:
         allowed_origin, allow_cred = self._resolve_cors(origin, cors_origins)
         origin_header = allowed_origin or "*"
         headers = [
@@ -158,8 +171,11 @@ class WSGIMixin:
         return self._send_admin_body(request, content_str, environ, start_response)
 
     def _run_admin_dispatch(
-        self, request: Request, environ: dict[str, Any],
-        admin: Any, start_response: Callable,
+        self,
+        request: Request,
+        environ: dict[str, Any],
+        admin: Any,
+        start_response: Callable,
     ) -> Any:
         try:
             return admin.dispatch(request)
@@ -175,7 +191,9 @@ class WSGIMixin:
 
     @staticmethod
     def _is_admin_path(request: Request, admin: Any) -> bool:
-        return request.path == admin.prefix or request.path.startswith(admin.prefix + "/")
+        return request.path == admin.prefix or request.path.startswith(
+            admin.prefix + "/"
+        )
 
     def _admin_redirect_response(
         self,
@@ -186,7 +204,9 @@ class WSGIMixin:
     ) -> list[bytes]:
         is_ajax = environ.get("HTTP_X_REQUESTED_WITH") == "XMLHttpRequest"
         if is_ajax and request._new_flashes:
-            return self._ajax_redirect_with_flashes(request, environ, redir, start_response)
+            return self._ajax_redirect_with_flashes(
+                request, environ, redir, start_response
+            )
         headers = [("Location", redir.url)]
         headers += environ.get("asok.extra_headers", [])
         headers += self._cookie_headers(request, environ)
@@ -206,7 +226,7 @@ class WSGIMixin:
 
         flash_html = "".join(
             f'<div class="flash-msg {_html.escape(f.get("category", "info"))}" data-ttl="6000">'
-            f'<span>{_html.escape(f.get("message", ""))}</span></div>'
+            f"<span>{_html.escape(f.get('message', ''))}</span></div>"
             for f in request._new_flashes
         )
         body = f'<template data-block="#flash-zone">{flash_html}</template>'
@@ -223,7 +243,8 @@ class WSGIMixin:
         request.status = Request._STATUS_MAP.get(
             abort.status, f"{abort.status} Unknown"
         )
-        return self._render_error_page(request, abort.status, message=abort.message)
+        body = self._render_error_page(request, abort.status, message=abort.message)
+        return self._inject_assets(body, request, getattr(request, "nonce", ""))
 
     def _admin_exception_response(self, request: Request, e: Exception) -> Any:
         from ..exceptions import SecurityError
@@ -234,7 +255,9 @@ class WSGIMixin:
         error_id = str(uuid.uuid4())[:8]
         logger.error(
             "[ERROR-ID:%s] Admin Dispatch Exception: %s\n%s",
-            error_id, str(e), traceback.format_exc(),
+            error_id,
+            str(e),
+            traceback.format_exc(),
         )
         # SECURITY: never expose stack traces; server-side logs hold the details.
         request.status = "500 Internal Server Error"
@@ -409,23 +432,30 @@ class WSGIMixin:
             if module:
                 return self._dispatch_module(req, module, page_file)
             return self._dispatch_template(req, page_file)
+
         return core_layer
 
     def _enforce_csrf(self, req: Request) -> Any:
-        if not self.config.get("CSRF") or req.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        if not self.config.get("CSRF") or req.method not in (
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+        ):
             return None
         try:
             req.verify_csrf()
         except Exception:
             return self._handle_csrf_failure(req)
-        req.csrf_token_value = secrets.token_hex(32)
         return None
 
     @staticmethod
     def _handle_csrf_failure(req: Request) -> Any:
         logger.warning(
             "[CSRF FAIL] %s %s from %s (UA: %s)",
-            req.method, req.path, req.ip,
+            req.method,
+            req.path,
+            req.ip,
             req.headers.get("User-Agent", "unknown")[:120],
         )
         if req.path.startswith("/api"):
@@ -462,7 +492,9 @@ class WSGIMixin:
         if supported and req.method not in supported:
             req.method_not_allowed(supported)
         req.status = "404 Not Found"
-        return "<h1>404 Not Found</h1><p>The requested route does not provide a valid handler.</p>"
+        return _DefaultErrorBody(
+            "<h1>404 Not Found</h1><p>The requested route does not provide a valid handler.</p>"
+        )
 
     def _apply_api_versioning(self, req: Request, module: Any) -> None:
         deprecation, sunset = self._api_version_metadata(req, module)
@@ -472,7 +504,9 @@ class WSGIMixin:
             req.response_headers.append(("Sunset", self._format_sunset(sunset)))
 
     @classmethod
-    def _api_version_metadata(cls, req: Request, module: Any) -> tuple[bool, Optional[str]]:
+    def _api_version_metadata(
+        cls, req: Request, module: Any
+    ) -> tuple[bool, Optional[str]]:
         deprecation = bool(getattr(module, "__api_deprecated__", False))
         sunset = getattr(module, "__api_sunset__", None)
         meta = cls._api_version_meta(req, module)
@@ -483,7 +517,9 @@ class WSGIMixin:
 
     @staticmethod
     def _api_version_meta(req: Request, module: Any) -> Any:
-        handler = getattr(module, req.method.lower(), None) or getattr(module, "render", None)
+        handler = getattr(module, req.method.lower(), None) or getattr(
+            module, "render", None
+        )
         if not handler:
             return None
         return getattr(handler, "_asok_api_version", None)
@@ -525,14 +561,18 @@ class WSGIMixin:
         if self.config.get("CSRF"):
             req.verify_csrf()
         return self._call_handler(
-            req, action_func, page_file,
+            req,
+            action_func,
+            page_file,
             f"Action handler 'action_{action_name}'",
             extra="Ensure your action returns request.html(), request.json(), or calls request.redirect().",
         )
 
     @classmethod
     def _safe_action_name(cls, req: Request) -> Optional[str]:
-        name = req.form.get("_action") or req.args.get("_action") or req.args.get("action")
+        name = (
+            req.form.get("_action") or req.args.get("_action") or req.args.get("action")
+        )
         if name and cls._is_valid_action_name(name):
             return name
         return None
@@ -553,16 +593,22 @@ class WSGIMixin:
     def _validate_block_name(self, req: Request, bname: str) -> None:
         if not bname:
             return
-        if bname.startswith("#") or not bname.replace("_", "").replace("-", "").isalnum():
+        clean_bname = bname.strip().lstrip("#")
+        if not clean_bname.replace("_", "").replace("-", "").isalnum():
             msg = (
                 f"Invalid block name format: '{bname}'. Only alphanumeric characters, "
-                "underscores and dashes are allowed (no # prefix)."
+                "underscores and dashes are allowed."
             )
             logger.warning(f"CONSISTENCY ERROR: {msg} (from {req.ip})")
             req.abort(400, msg)
 
     def _call_handler(
-        self, req: Request, handler: Callable, page_file: str, label: str, extra: str = ""
+        self,
+        req: Request,
+        handler: Callable,
+        page_file: str,
+        label: str,
+        extra: str = "",
     ) -> Any:
         res = handler(req)
         if res is None:
@@ -602,7 +648,9 @@ class WSGIMixin:
 
         return async_to_sync(r)
 
-    def _run_middleware_chain(self, request: Request, module: Any, core_layer: Callable) -> Any:
+    def _run_middleware_chain(
+        self, request: Request, module: Any, core_layer: Callable
+    ) -> Any:
         if self._asyncio_loop_running():
             return self._run_in_async_loop(request, core_layer)
         if self._needs_async_chain(module, request):
@@ -682,9 +730,19 @@ class WSGIMixin:
 
     @staticmethod
     def _is_default_error_body(content_str: Any) -> bool:
-        if isinstance(content_str, str):
-            return "<h1>" in content_str
-        return True
+        """Return True only for framework-generated fallback error bodies.
+
+        Previously this checked for the presence of '<h1>' in the response
+        string, which incorrectly matched *any* user-supplied or custom error
+        page that happened to contain an <h1> element — causing custom error
+        pages to be silently discarded and replaced by the plain code fallback.
+
+        The fix uses the _DefaultErrorBody sentinel subclass so that only
+        responses that were explicitly produced by the framework as last-resort
+        fallbacks (e.g. _fallback_no_handler) are replaced by a richer custom
+        error page when one is available.
+        """
+        return isinstance(content_str, _DefaultErrorBody)
 
     def _build_final_redirect(
         self, request: Request, environ: dict[str, Any], redir: RedirectException
@@ -692,7 +750,9 @@ class WSGIMixin:
         self._maybe_record_redirect_stats(request)
         headers = [("Location", redir.url)]
         headers += self._cookie_headers(request, environ)
-        status_str = self._REDIRECT_STATUS_MAP.get(redir.status, f"{redir.status} Found")
+        status_str = self._REDIRECT_STATUS_MAP.get(
+            redir.status, f"{redir.status} Found"
+        )
         return _FinalRedirectException(redir.url, status_str, headers)
 
     def _maybe_record_redirect_stats(self, request: Request) -> None:
@@ -712,7 +772,9 @@ class WSGIMixin:
         return bool(val)
 
     def _abort_to_error_page(self, request: Request, abort: AbortException) -> Any:
-        request.status = Request._STATUS_MAP.get(abort.status, f"{abort.status} Unknown")
+        request.status = Request._STATUS_MAP.get(
+            abort.status, f"{abort.status} Unknown"
+        )
         return self._render_error_page(request, abort.status, message=abort.message)
 
     def _handle_dispatch_exception(self, request: Request, e: Exception) -> Any:
@@ -723,14 +785,21 @@ class WSGIMixin:
             ValidationError,
         )
 
-        mapped = self._map_known_exception(request, e, SecurityError, ValidationError, TemplateError, AsokException)
+        mapped = self._map_known_exception(
+            request, e, SecurityError, ValidationError, TemplateError, AsokException
+        )
         if mapped is not None:
             return mapped
         return self._handle_unknown_exception(request, e)
 
     def _map_known_exception(
-        self, request: Request, e: Exception,
-        SecurityError, ValidationError, TemplateError, AsokException,
+        self,
+        request: Request,
+        e: Exception,
+        SecurityError,
+        ValidationError,
+        TemplateError,
+        AsokException,
     ) -> Any:
         if isinstance(e, SecurityError):
             request.status = "403 Forbidden"
@@ -739,22 +808,33 @@ class WSGIMixin:
             request.status = "400 Bad Request"
             return self._render_error_page(request, 400, message=str(e))
         if isinstance(e, TemplateError):
-            request.status = "500 Internal Server Error"
-            return self._render_error_page(request, 500, message=f"Template Error: {e}")
+            return self._handle_template_error(request, e)
         if isinstance(e, AsokException):
             request.status = "500 Internal Server Error"
             return self._render_error_page(request, 500, message=str(e))
         return None
 
+    def _handle_template_error(self, request: Request, e: Exception) -> Any:
+        request.status = "500 Internal Server Error"
+        if self.config.get("DEBUG"):
+            msg = f"Template Error: {e}"
+        else:
+            logger.error("Template rendering error: %s", str(e))
+            msg = "Template Error: An error occurred while rendering the template."
+        return self._render_error_page(request, 500, message=msg)
+
     def _handle_unknown_exception(self, request: Request, e: Exception) -> Any:
         error_id = str(uuid.uuid4())[:8]
         logger.error(
             "[ERROR-ID:%s] Unhandled Exception: %s\n%s",
-            error_id, str(e), traceback.format_exc(),
+            error_id,
+            str(e),
+            traceback.format_exc(),
         )
         # SECURITY: never reveal traces; surface only the error ID to the client.
         body = self._render_error_page(
-            request, 500,
+            request,
+            500,
             message=(
                 f"An unexpected error occurred. Error ID: {error_id}. "
                 "Please contact support with this ID if the problem persists."
@@ -777,7 +857,9 @@ class WSGIMixin:
             return self._finalize_binary(request, environ, is_head, start_response)
         headers = self._base_response_headers(request, environ)
         if inspect.isgenerator(content_str):
-            return self._finalize_streaming(request, content_str, environ, headers, start_response)
+            return self._finalize_streaming(
+                request, content_str, environ, headers, start_response
+            )
         content_str = self._maybe_inject_and_minify(request, content_str)
         output = str(content_str).encode("utf-8")
         output = self._maybe_gzip(output, environ, headers)
@@ -787,8 +869,11 @@ class WSGIMixin:
         return [b""] if is_head else [output]
 
     def _finalize_stream_file(
-        self, request: Request, environ: dict[str, Any],
-        is_head: bool, start_response: Callable,
+        self,
+        request: Request,
+        environ: dict[str, Any],
+        is_head: bool,
+        start_response: Callable,
     ) -> Any:
         stream_path = environ["asok.stream_file"]
         headers = [("Content-Type", request.content_type)]
@@ -814,8 +899,11 @@ class WSGIMixin:
             return
 
     def _finalize_binary(
-        self, request: Request, environ: dict[str, Any],
-        is_head: bool, start_response: Callable,
+        self,
+        request: Request,
+        environ: dict[str, Any],
+        is_head: bool,
+        start_response: Callable,
     ) -> list[bytes]:
         output = environ["asok.binary_response"]
         headers = [("Content-Type", request.content_type)]
@@ -843,13 +931,19 @@ class WSGIMixin:
         return headers
 
     def _expose_csrf_token_if_needed(
-        self, headers: list[tuple[str, str]], request: Request, origin: str, cors_origins: Any
+        self,
+        headers: list[tuple[str, str]],
+        request: Request,
+        origin: str,
+        cors_origins: Any,
     ) -> None:
         if self._should_expose_csrf(origin, request, cors_origins):
             headers.append(("X-CSRF-Token", request.csrf_token_value))
             headers.append(("Access-Control-Expose-Headers", "X-CSRF-Token"))
 
-    def _should_expose_csrf(self, origin: str, request: Request, cors_origins: Any) -> bool:
+    def _should_expose_csrf(
+        self, origin: str, request: Request, cors_origins: Any
+    ) -> bool:
         if not origin:
             return True
         if self._is_same_origin(origin, request):
@@ -863,6 +957,7 @@ class WSGIMixin:
 
     def _is_same_origin(self, origin: str, request: Request) -> bool:
         from urllib.parse import urlparse
+
         try:
             parsed = urlparse(origin)
             request_host = request.environ.get("HTTP_HOST", "localhost")
@@ -875,7 +970,9 @@ class WSGIMixin:
         except Exception:
             return False
 
-    def _resolve_cors(self, origin: str, cors_origins: Any) -> tuple[Optional[str], bool]:
+    def _resolve_cors(
+        self, origin: str, cors_origins: Any
+    ) -> tuple[Optional[str], bool]:
         if cors_origins == "*":
             return self._resolve_wildcard_cors(origin)
         if self._cors_allowed(origin) and origin:
@@ -904,8 +1001,12 @@ class WSGIMixin:
         headers.append(("Access-Control-Allow-Headers", self._CORS_HEADERS))
 
     def _finalize_streaming(
-        self, request: Request, content_str: Any, environ: dict[str, Any],
-        headers: list[tuple[str, str]], start_response: Callable,
+        self,
+        request: Request,
+        content_str: Any,
+        environ: dict[str, Any],
+        headers: list[tuple[str, str]],
+        start_response: Callable,
     ) -> Any:
         if self._gzip_accepted(environ):
             headers.append(("Content-Encoding", "gzip"))
@@ -1033,7 +1134,9 @@ class WSGIMixin:
             return
         logger.info(
             "[%s] %s (DEBUG=%s)",
-            environ.get("REQUEST_METHOD"), path, self.config.get("DEBUG"),
+            environ.get("REQUEST_METHOD"),
+            path,
+            self.config.get("DEBUG"),
         )
 
     @classmethod
@@ -1109,50 +1212,78 @@ class WSGIMixin:
         return [body]
 
     def _dispatch_and_finalize(
-        self, request: Request, environ: dict[str, Any],
-        is_head: bool, start_response: Callable,
+        self,
+        request: Request,
+        environ: dict[str, Any],
+        is_head: bool,
+        start_response: Callable,
     ) -> list[bytes]:
         try:
             result = self._dispatch_controller(request, environ)
         except _FinalResponseException as fre:
-            return self._send_final_response(fre, start_response)
+            return self._send_final_response(fre, start_response, request, environ)
         except _FinalRedirectException as frde:
             start_response(frde.status_str, frde.headers)
             return [b""]
         except Exception as e:
-            return self._send_wsgi_error(request, e, start_response)
-        return self._finalize_response(request, result, environ, is_head, start_response)
+            return self._send_wsgi_error(request, e, start_response, environ)
+        return self._finalize_response(
+            request, result, environ, is_head, start_response
+        )
 
-    @staticmethod
     def _send_final_response(
-        fre: _FinalResponseException, start_response: Callable
+        self,
+        fre: _FinalResponseException,
+        start_response: Callable,
+        request: Optional[Request] = None,
+        environ: Optional[dict[str, Any]] = None,
     ) -> list[bytes]:
+        """Send a _FinalResponseException with full headers (cookies + security).
+
+        Previously this sent only Content-Type, which meant 404/500 pages were
+        delivered without session cookies, CSP, HSTS or CSRF tokens.
+        """
         status_str = Request._STATUS_MAP.get(
             fre.status_code, f"{fre.status_code} Unknown"
         )
-        start_response(
-            status_str, [("Content-Type", f"{fre.content_type}; charset=utf-8")]
-        )
+        headers = [("Content-Type", f"{fre.content_type}; charset=utf-8")]
+        if request is not None and environ is not None:
+            headers += self._cookie_headers(request, environ)
+            headers += self._security_headers(
+                request=request, nonce=getattr(request, "nonce", None)
+            )
         body = fre.body.encode("utf-8") if isinstance(fre.body, str) else fre.body
+        headers.append(("Content-Length", str(len(body))))
+        start_response(status_str, headers)
         return [body]
 
     def _send_wsgi_error(
-        self, request: Request, e: Exception, start_response: Callable
+        self,
+        request: Request,
+        e: Exception,
+        start_response: Callable,
+        environ: Optional[dict[str, Any]] = None,
     ) -> list[bytes]:
         error_id = str(uuid.uuid4())[:8]
         logger.error(
             "[ERROR-ID:%s] Unhandled Exception in WSGI: %s\n%s",
-            error_id, str(e), traceback.format_exc(),
+            error_id,
+            str(e),
+            traceback.format_exc(),
         )
         # SECURITY: never expose traces to the client; logs hold details.
         error_page = self._render_error_page(
             request, 500, message="An internal error occurred."
         )
-        start_response(
-            "500 Internal Server Error",
-            [("Content-Type", "text/html; charset=utf-8")],
-        )
+        headers = [("Content-Type", "text/html; charset=utf-8")]
+        if request is not None and environ is not None:
+            headers += self._cookie_headers(request, environ)
+            headers += self._security_headers(
+                request=request, nonce=getattr(request, "nonce", None)
+            )
         body = error_page.encode("utf-8") if isinstance(error_page, str) else error_page
+        headers.append(("Content-Length", str(len(body))))
+        start_response("500 Internal Server Error", headers)
         return [body]
 
     def _wsgi_teardown(self, request: Request, token: Any) -> None:

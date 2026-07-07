@@ -253,9 +253,9 @@ class WebSocketServer:
         """Send a text message to every connection that has joined `room`."""
         all_conns = self._all_connections()
         dead = [
-            c for c in all_conns
-            if self._should_deliver_to_room(c, room, exclude)
-            and not c.send(message)
+            c
+            for c in all_conns
+            if self._should_deliver_to_room(c, room, exclude) and not c.send(message)
         ]
         for c in dead:
             self._remove(c)
@@ -348,8 +348,10 @@ class WebSocketServer:
             pass
 
     _DEFAULT_LOCAL_ORIGINS = (
-        "http://localhost", "https://localhost",
-        "http://127.0.0.1", "https://127.0.0.1",
+        "http://localhost",
+        "https://localhost",
+        "http://127.0.0.1",
+        "https://127.0.0.1",
     )
     _COMMON_DEV_PORTS = (8000, 3000, 5173, 5000, 8080)
 
@@ -377,7 +379,9 @@ class WebSocketServer:
 
     def _build_local_variants(self, defaults, app, port: int) -> list[str]:
         variants: list[str] = []
-        app_port = os.getenv("ASOK_PORT", "8000") if app and hasattr(app, "config") else None
+        app_port = (
+            os.getenv("ASOK_PORT", "8000") if app and hasattr(app, "config") else None
+        )
         for d in defaults:
             self._append_origin_variants(variants, d, port, app_port)
         return variants
@@ -391,10 +395,14 @@ class WebSocketServer:
             variants.append(f"{d}:{app_port}")
 
     _LOCALHOST_ORIGIN_PREFIXES = (
-        "http://localhost", "https://localhost",
-        "http://127.0.0.1", "https://127.0.0.1",
-        "ws://localhost", "wss://localhost",
-        "ws://127.0.0.1", "wss://127.0.0.1",
+        "http://localhost",
+        "https://localhost",
+        "http://127.0.0.1",
+        "https://127.0.0.1",
+        "ws://localhost",
+        "wss://localhost",
+        "ws://127.0.0.1",
+        "wss://127.0.0.1",
     )
 
     def _is_origin_allowed(self, origin: Optional[str]) -> bool:
@@ -428,7 +436,7 @@ class WebSocketServer:
         for prefix in self._LOCALHOST_ORIGIN_PREFIXES:
             if not origin_lower.startswith(prefix):
                 continue
-            remainder = origin_lower[len(prefix):]
+            remainder = origin_lower[len(prefix) :]
             if not remainder or remainder.startswith(":"):
                 logger.debug("DEBUG MODE: Allowing localhost origin: %s", origin)
                 return True
@@ -449,7 +457,9 @@ class WebSocketServer:
 
     def _normalize_allowlist(self) -> list[str]:
         if isinstance(self.allowed_origins, str):
-            return [o.strip().lower().rstrip("/") for o in self.allowed_origins.split(",")]
+            return [
+                o.strip().lower().rstrip("/") for o in self.allowed_origins.split(",")
+            ]
         return [str(o).lower().rstrip("/") for o in self.allowed_origins]
 
     # --- internals ---
@@ -558,7 +568,9 @@ class WebSocketServer:
             self._release_connection_slot()
         except Exception as e:
             logger.error(
-                "Error handling WebSocket client connection: %s", e, exc_info=True,
+                "Error handling WebSocket client connection: %s",
+                e,
+                exc_info=True,
             )
             self._close_quietly(sock)
             self._release_connection_slot()
@@ -568,7 +580,8 @@ class WebSocketServer:
             if self._connection_count >= self.max_connections:
                 logger.warning(
                     "Refused connection from %s: Max connections reached (%d)",
-                    addr, self.max_connections,
+                    addr,
+                    self.max_connections,
                 )
                 sock.sendall(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
                 sock.close()
@@ -632,9 +645,7 @@ class WebSocketServer:
             return None
         origin = headers.get("origin")
         if not self._is_origin_allowed(origin):
-            logger.warning(
-                "403: Origin '%s' forbidden for '%s'", origin, route_path
-            )
+            logger.warning("403: Origin '%s' forbidden for '%s'", origin, route_path)
             sock.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             sock.close()
             return None
@@ -646,13 +657,25 @@ class WebSocketServer:
         return route, route_path, params
 
     def _build_and_register_connection(
-        self, sock, addr, route_path, headers, params, route,
+        self,
+        sock,
+        addr,
+        route_path,
+        headers,
+        params,
+        route,
     ):
         user = self._resolve_user(headers)
         session = self._resolve_session(headers)
         conn = Connection(
-            sock, addr, route_path, headers, user,
-            session=session, params=params, server=self,
+            sock,
+            addr,
+            route_path,
+            headers,
+            user,
+            session=session,
+            params=params,
+            server=self,
         )
         self._register(conn)
         self._fire_on_connect(route, conn)

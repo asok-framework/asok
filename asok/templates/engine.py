@@ -107,7 +107,7 @@ def _extract_named_block(template_string: str, block_name: str) -> Optional[str]
         )
         if close:
             content_end, _ = close
-            return template_string[open_match.end():content_end]
+            return template_string[open_match.end() : content_end]
     return None
 
 

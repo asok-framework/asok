@@ -8,6 +8,7 @@ from typing import Any, Optional
 from asok.utils import humanize
 
 from .safestring import SafeString, html_safe_json
+from .sandbox import _get
 
 _RE_STRIPTAGS = re.compile(r"<[^>]+>")
 
@@ -122,6 +123,7 @@ def _display_filter(value: Any) -> str:
     if not _display_lookup_done:
         try:
             from asok.admin.utils import _display
+
             _cached_display = _display
         except ImportError:
             _cached_display = None
@@ -151,16 +153,7 @@ TEMPLATE_FILTERS = {
     "e": lambda v: _html.escape(str(v)) if v is not None else "",
     "first": lambda v: v[0] if v and len(v) > 0 else None,
     "last": lambda v: v[-1] if v and len(v) > 0 else None,
-    "selectattr": lambda v, attr, val=True: [
-        i
-        for i in v
-        if (
-            getattr(i, attr)
-            if hasattr(i, attr)
-            else (i.get(attr) if isinstance(i, dict) else None)
-        )
-        == val
-    ],
+    "selectattr": lambda v, attr, val=True: [i for i in v if _get(i, attr) == val],
     "abs": lambda v: abs(v),
     "tojson": lambda v, **kwargs: html_safe_json(v, **kwargs),
     "dump": lambda v, **kwargs: html_safe_json(v, **kwargs),
@@ -174,4 +167,3 @@ TEMPLATE_FILTERS = {
     "decode_base64": _decode_base64_filter,
     "display": _display_filter,
 }
-

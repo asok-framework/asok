@@ -74,3 +74,30 @@ class TestOriginValidation:
         referer = "https://example.com/page"
         host_from_referer = referer.split("://", 1)[-1].split("/")[0]
         assert host_from_referer == "example.com"
+
+
+class TestConsecutiveSubmissions:
+    def test_csrf_token_preserved_across_verifications(self):
+        """CSRF token value should remain unchanged after verify_csrf() to allow multiple form submissions."""
+        from asok.request.request import Request
+
+        environ = {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/",
+            "HTTP_COOKIE": "asok_csrf=test_token_123",
+            "wsgi.input": None,
+        }
+        req = Request(environ)
+        req.form = {"csrf_token": "test_token_123"}
+
+        initial_token = req.csrf_token_value
+        assert initial_token == "test_token_123"
+
+        # First verification
+        req.verify_csrf()
+        assert req.csrf_token_value == initial_token
+
+        # Second verification (simulating second submission with same token)
+        req._csrf_verified = False
+        req.verify_csrf()
+        assert req.csrf_token_value == initial_token

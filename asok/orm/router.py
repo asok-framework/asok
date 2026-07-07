@@ -72,6 +72,7 @@ def select_replica(replicas_list: List[str], strategy: str = "round-robin") -> s
 
 # ── init_databases helpers ──────────────────────────────────────────────────
 
+
 def _init_primary_db() -> None:
     """Populate DATABASES['default'] from DATABASE_URL or fallback to SQLite."""
     default_url = (os.getenv("DATABASE_URL") or "").strip()
@@ -84,6 +85,7 @@ def _parse_replicas_from_env(replicas_env: str) -> None:
     sep = ";" if ";" in replicas_env else ","
     REPLICAS.extend(r.strip() for r in replicas_env.split(sep) if r.strip())
 
+
 def _parse_replicas_indexed() -> None:
     idx = 1
     while True:
@@ -92,6 +94,7 @@ def _parse_replicas_indexed() -> None:
             break
         REPLICAS.append(rep.strip())
         idx += 1
+
 
 def _init_replicas() -> None:
     """Populate REPLICAS from DATABASE_REPLICAS or indexed DATABASE_REPLICA_N vars."""
@@ -111,7 +114,10 @@ def _parse_shard_json(shards_json: str) -> None:
         for k, v in parsed.items():
             name = k.lower()
             if isinstance(v, dict):
-                SHARDS[name] = {"url": v.get("url", ""), "replicas": v.get("replicas", [])}
+                SHARDS[name] = {
+                    "url": v.get("url", ""),
+                    "replicas": v.get("replicas", []),
+                }
             else:
                 SHARDS[name] = {"url": str(v), "replicas": []}
     except Exception:
@@ -135,21 +141,24 @@ def _init_shards_from_json() -> None:
 
 
 def _process_shard_url_env(env_k: str, env_v: str) -> None:
-    shard_name = env_k[len("DATABASE_SHARD_"):-len("_URL")].lower()
+    shard_name = env_k[len("DATABASE_SHARD_") : -len("_URL")].lower()
     SHARDS.setdefault(shard_name, {"url": "", "replicas": []})
     SHARDS[shard_name]["url"] = env_v.strip()
 
+
 def _process_shard_replicas_env(env_k: str, env_v: str) -> None:
-    shard_name = env_k[len("DATABASE_SHARD_"):-len("_REPLICAS")].lower()
+    shard_name = env_k[len("DATABASE_SHARD_") : -len("_REPLICAS")].lower()
     SHARDS.setdefault(shard_name, {"url": "", "replicas": []})
     sep = ";" if ";" in env_v else ","
     SHARDS[shard_name]["replicas"] = [r.strip() for r in env_v.split(sep) if r.strip()]
+
 
 def _process_single_env_var(env_k: str, env_v: str) -> None:
     if env_k.startswith("DATABASE_SHARD_") and env_k.endswith("_URL"):
         _process_shard_url_env(env_k, env_v)
     elif env_k.startswith("DATABASE_SHARD_") and env_k.endswith("_REPLICAS"):
         _process_shard_replicas_env(env_k, env_v)
+
 
 def _init_shards_from_env_vars() -> None:
     """Populate SHARDS from individual DATABASE_SHARD_<name>_URL/REPLICAS vars."""
@@ -272,7 +281,9 @@ def resolve_primary_dsn(model_cls: Type[Model], shard: str | None = None) -> str
     return _resolve_model_dsn(model_cls)
 
 
-def _route_via_registered_routers(model_cls: Type[Model], op: str, hints: dict) -> Optional[str]:
+def _route_via_registered_routers(
+    model_cls: Type[Model], op: str, hints: dict
+) -> Optional[str]:
     for router in ROUTERS:
         if op == "read":
             target = router.db_for_read(model_cls, **hints)
@@ -289,9 +300,7 @@ def _route_fallback_shard(op: str, shard: str) -> Optional[str]:
     shard_conf = SHARDS.get(shard.lower())
     if shard_conf:
         if op == "read" and shard_conf["replicas"]:
-            return select_replica(
-                shard_conf["replicas"], get_load_balancing_strategy()
-            )
+            return select_replica(shard_conf["replicas"], get_load_balancing_strategy())
         return shard_conf["url"]
     return None
 

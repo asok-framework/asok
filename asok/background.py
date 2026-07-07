@@ -109,7 +109,6 @@ def _background_redis(
     return f
 
 
-
 def _background_local(
     fn: Callable,
     executor: Optional[ThreadPoolExecutor],

@@ -94,4 +94,3 @@ def test_api_static_font_files():
 
     assert response is not None, "inter-400.woff2 should be served"
     assert request.content_type == "font/woff2"
-

@@ -129,11 +129,20 @@ def _extract_macros(
         return {}
     all_macros: dict[str, Any] = {}
     for match in _RE_MACRO.finditer(content):
-        macro_name, body, raw_params = match.group(1), match.group(3), match.group(2).strip()
+        macro_name, body, raw_params = (
+            match.group(1),
+            match.group(3),
+            match.group(2).strip(),
+        )
         param_names, param_defaults, varargs, varkw = parse_macro_params(raw_params)
         all_macros[macro_name] = make_macro(
-            body, param_names, param_defaults, varargs, varkw,
-            sibling_lookup=all_macros, parent_ctx=parent_ctx,
+            body,
+            param_names,
+            param_defaults,
+            varargs,
+            varkw,
+            sibling_lookup=all_macros,
+            parent_ctx=parent_ctx,
         )
     return {n: all_macros[n] for n in names if n in all_macros}
 
@@ -177,14 +186,18 @@ def _merge_parent_with_child(text: str, parent_text: str, root_dir, depth: int) 
 def _collect_child_orphan_logic(text: str) -> str:
     outside_text = ""
     last_pos = 0
-    for start, end in sorted(top_level_block_ranges(text, _RE_BLOCK_OPEN, _RE_BLOCK_CLOSE)):
+    for start, end in sorted(
+        top_level_block_ranges(text, _RE_BLOCK_OPEN, _RE_BLOCK_CLOSE)
+    ):
         outside_text += text[last_pos:start]
         last_pos = end
     outside_text += text[last_pos:]
     return "\n".join(extract_child_orphans(outside_text, _RE_TOKENS))
 
 
-def _splice_child_blocks_into_parent(parent_text: str, child_blocks: dict[str, str]) -> str:
+def _splice_child_blocks_into_parent(
+    parent_text: str, child_blocks: dict[str, str]
+) -> str:
     replacements = _collect_parent_block_replacements(parent_text)
     for full_start, full_end, name, content_start, content_end in sorted(
         replacements, key=lambda x: x[0], reverse=True
@@ -223,7 +236,9 @@ def _inject_block_markers(template_string: str) -> str:
         if close is None:
             continue
         _, close_end = close
-        if not _should_inject_block_marker(template_string, open_match.start(), block_name):
+        if not _should_inject_block_marker(
+            template_string, open_match.start(), block_name
+        ):
             continue
         replacements.append((open_match.start(), f"<!-- block:{block_name}:start -->"))
         replacements.append((close_end, f"<!-- block:{block_name}:end -->"))
@@ -253,7 +268,18 @@ def _handle_includes(text: str, root_dir, depth: int = 0) -> str:
         return text
 
     def replace_include(match: re.Match[str]) -> str:
-        return _resolve_include(match.group(1).strip("'\""), root_dir, depth)
+        expr = match.group(1).strip()
+        with_clause = None
+        if " with " in expr:
+            parts = expr.split(" with ", 1)
+            inc_path = parts[0].strip().strip("'\"")
+            with_clause = parts[1].strip()
+        else:
+            inc_path = expr.strip("'\"")
+        expanded = _resolve_include(inc_path, root_dir, depth)
+        if with_clause and not expanded.startswith("<!-- Include Error:"):
+            return f"{{% with {with_clause} %}}{expanded}{{% endwith %}}"
+        return expanded
 
     return _RE_INCLUDE.sub(replace_include, text)
 
@@ -318,7 +344,9 @@ def _neutralize_raw(m: re.Match[str]) -> str:
 # ── Macro import handling ──────────────────────────────────────────
 
 
-def _process_from_imports(template_string: str, context: dict[str, Any], root_dir) -> None:
+def _process_from_imports(
+    template_string: str, context: dict[str, Any], root_dir
+) -> None:
     for m in _RE_FROM_IMPORT.finditer(template_string):
         _apply_from_import(m, context, root_dir)
 
@@ -353,11 +381,20 @@ def _process_namespace_imports(
 
 def _register_inline_macros(template_string: str, context: dict[str, Any]) -> str:
     for match in _RE_MACRO.finditer(template_string):
-        macro_name, body, raw_params = match.group(1), match.group(3), match.group(2).strip()
+        macro_name, body, raw_params = (
+            match.group(1),
+            match.group(3),
+            match.group(2).strip(),
+        )
         param_names, param_defaults, varargs, varkw = parse_macro_params(raw_params)
         context[macro_name] = make_macro(
-            body, param_names, param_defaults, varargs, varkw,
-            sibling_lookup=None, parent_ctx=context,
+            body,
+            param_names,
+            param_defaults,
+            varargs,
+            varkw,
+            sibling_lookup=None,
+            parent_ctx=context,
         )
     return _RE_MACRO.sub("", template_string)
 
@@ -383,7 +420,9 @@ def _preprocess(
     """
     template_string, _html_comments = _mask_html_comments(template_string)
     template_string = _handle_inheritance(template_string, root_dir)
-    template_string = _apply_block_strategy(template_string, strip_blocks, inject_markers)
+    template_string = _apply_block_strategy(
+        template_string, strip_blocks, inject_markers
+    )
     template_string = _handle_includes(template_string, root_dir)
     template_string = _handle_components(template_string)
     if context is not None:
@@ -393,7 +432,9 @@ def _preprocess(
         _process_namespace_imports(template_string, context, root_dir)
     template_string = _RE_IMPORT_AS.sub("", template_string)
     template_string = _RE_FILTER_BLOCK.sub(_replace_filter_block, template_string)
-    template_string = _RE_AUTOESCAPE_BLOCK.sub(_replace_autoescape_block, template_string)
+    template_string = _RE_AUTOESCAPE_BLOCK.sub(
+        _replace_autoescape_block, template_string
+    )
     template_string = _RE_COMMENT.sub("", template_string)
     template_string = _RE_RAW.sub(_neutralize_raw, template_string)
     if context is not None:

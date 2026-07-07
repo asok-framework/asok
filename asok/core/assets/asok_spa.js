@@ -282,7 +282,8 @@
       return;
     }
 
-    const headers = Object.assign({ 'X-Block': blockName, 'X-CSRF-Token': getCsrfToken() }, options.headers || {});
+    const cleanBlockHeader = (blockName || '').split(',').map(b => b.trim().replace(/^#/, '')).join(',');
+    const headers = Object.assign({ 'X-Block': cleanBlockHeader, 'X-CSRF-Token': getCsrfToken() }, options.headers || {});
     options.headers = headers;
     options.credentials = 'same-origin';
 
@@ -320,6 +321,8 @@
             if (csrfMeta) csrfMeta.content = token;
             document.querySelectorAll('input[name=csrf_token]').forEach(function (input) {
               input.value = token;
+              input.defaultValue = token;
+              input.setAttribute('value', token);
             });
           }
 
@@ -390,6 +393,15 @@
         }
       }
 
+      const currentToken = getCsrfToken();
+      if (currentToken) {
+        document.querySelectorAll('input[name=csrf_token]').forEach(function (input) {
+          input.value = currentToken;
+          input.defaultValue = currentToken;
+          input.setAttribute('value', currentToken);
+        });
+      }
+
       const getScopedTag = function (query) {
         let tag = tempDiv.querySelector(query);
         if (!tag) {
@@ -428,7 +440,9 @@
 
       // Handle page-id meta attributes
       const findPageId = function () {
-        const it = tempDiv.createNodeIterator(tempDiv.body, NodeFilter.SHOW_COMMENT);
+        // BUGFIX: createNodeIterator is a Document method, not an Element method.
+        // tempDiv.body is undefined on a div element — use document.createNodeIterator(tempDiv, ...).
+        const it = document.createNodeIterator(tempDiv, NodeFilter.SHOW_COMMENT);
         let comment;
         while ((comment = it.nextNode())) {
           const match = comment.textContent.match(/^\s*page-id:(.+)$/);

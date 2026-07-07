@@ -38,7 +38,6 @@ def escape_js_string(val: str) -> str:
     )
 
 
-
 def _merge_attrs(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     """Merge base attributes with overrides, stripping trailing underscores from keys."""
     merged = dict(base)

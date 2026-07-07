@@ -30,13 +30,15 @@ class TestDeclarativeMigrations(unittest.TestCase):
 
     def test_autodetect_create_model(self):
         hist = ProjectState()
-        curr = ProjectState({
-            "Address": VirtualModelState(
-                name="Address",
-                table="addresses",
-                fields={"id": {"type": "IntegerField", "sql_type": "INTEGER"}},
-            )
-        })
+        curr = ProjectState(
+            {
+                "Address": VirtualModelState(
+                    name="Address",
+                    table="addresses",
+                    fields={"id": {"type": "IntegerField", "sql_type": "INTEGER"}},
+                )
+            }
+        )
 
         detector = MigrationAutodetector(hist, curr)
         ops = detector.changes()
@@ -47,23 +49,31 @@ class TestDeclarativeMigrations(unittest.TestCase):
         self.assertEqual(ops[0].table, "addresses")
 
     def test_autodetect_add_field(self):
-        hist = ProjectState({
-            "Address": VirtualModelState(
-                name="Address",
-                table="addresses",
-                fields={"id": {"type": "IntegerField", "sql_type": "INTEGER"}},
-            )
-        })
-        curr = ProjectState({
-            "Address": VirtualModelState(
-                name="Address",
-                table="addresses",
-                fields={
-                    "id": {"type": "IntegerField", "sql_type": "INTEGER"},
-                    "street": {"type": "StringField", "sql_type": "TEXT", "nullable": False},
-                },
-            )
-        })
+        hist = ProjectState(
+            {
+                "Address": VirtualModelState(
+                    name="Address",
+                    table="addresses",
+                    fields={"id": {"type": "IntegerField", "sql_type": "INTEGER"}},
+                )
+            }
+        )
+        curr = ProjectState(
+            {
+                "Address": VirtualModelState(
+                    name="Address",
+                    table="addresses",
+                    fields={
+                        "id": {"type": "IntegerField", "sql_type": "INTEGER"},
+                        "street": {
+                            "type": "StringField",
+                            "sql_type": "TEXT",
+                            "nullable": False,
+                        },
+                    },
+                )
+            }
+        )
 
         detector = MigrationAutodetector(hist, curr)
         ops = detector.changes()
@@ -75,20 +85,36 @@ class TestDeclarativeMigrations(unittest.TestCase):
         self.assertEqual(ops[0].field["nullable"], False)
 
     def test_autodetect_alter_field(self):
-        hist = ProjectState({
-            "Address": VirtualModelState(
-                name="Address",
-                table="addresses",
-                fields={"price": {"type": "FloatField", "sql_type": "REAL", "default": None}},
-            )
-        })
-        curr = ProjectState({
-            "Address": VirtualModelState(
-                name="Address",
-                table="addresses",
-                fields={"price": {"type": "FloatField", "sql_type": "REAL", "default": 0.0}},
-            )
-        })
+        hist = ProjectState(
+            {
+                "Address": VirtualModelState(
+                    name="Address",
+                    table="addresses",
+                    fields={
+                        "price": {
+                            "type": "FloatField",
+                            "sql_type": "REAL",
+                            "default": None,
+                        }
+                    },
+                )
+            }
+        )
+        curr = ProjectState(
+            {
+                "Address": VirtualModelState(
+                    name="Address",
+                    table="addresses",
+                    fields={
+                        "price": {
+                            "type": "FloatField",
+                            "sql_type": "REAL",
+                            "default": 0.0,
+                        }
+                    },
+                )
+            }
+        )
 
         detector = MigrationAutodetector(hist, curr)
         ops = detector.changes()
@@ -102,20 +128,24 @@ class TestDeclarativeMigrations(unittest.TestCase):
     @patch("builtins.input", return_value="y")
     @patch("sys.stdout.isatty", return_value=True)
     def test_autodetect_rename_field(self, mock_isatty, mock_input):
-        hist = ProjectState({
-            "User": VirtualModelState(
-                name="User",
-                table="users",
-                fields={"name": {"type": "StringField"}},
-            )
-        })
-        curr = ProjectState({
-            "User": VirtualModelState(
-                name="User",
-                table="users",
-                fields={"nom": {"type": "StringField"}},
-            )
-        })
+        hist = ProjectState(
+            {
+                "User": VirtualModelState(
+                    name="User",
+                    table="users",
+                    fields={"name": {"type": "StringField"}},
+                )
+            }
+        )
+        curr = ProjectState(
+            {
+                "User": VirtualModelState(
+                    name="User",
+                    table="users",
+                    fields={"nom": {"type": "StringField"}},
+                )
+            }
+        )
 
         detector = MigrationAutodetector(hist, curr)
         ops = detector.changes()
@@ -128,6 +158,7 @@ class TestDeclarativeMigrations(unittest.TestCase):
     def test_sqlite_schema_editor_create_table(self):
         engine = SQLiteEngine(":memory:")
         from asok.cli.database import MigrationConnectionWrapper
+
         conn = MigrationConnectionWrapper(engine)
         editor = SQLiteSchemaEditor(conn, engine)
 
@@ -145,13 +176,19 @@ class TestDeclarativeMigrations(unittest.TestCase):
         cursor = db_conn.cursor()
 
         # Check base table
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='products'")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='products'"
+        )
         self.assertEqual(len(cursor.fetchall()), 1)
 
         # Check FTS virtual table
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='products_fts'")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='products_fts'"
+        )
         self.assertEqual(len(cursor.fetchall()), 1)
 
         # Check triggers
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name='products_ai'")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name='products_ai'"
+        )
         self.assertEqual(len(cursor.fetchall()), 1)
