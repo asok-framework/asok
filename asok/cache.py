@@ -286,11 +286,26 @@ class Cache:
 
     def _file_set(self, key, value, expires):
         path = self._key_path(key)
+        self._write_cache_file(path, {"value": value, "expires": expires})
+
+    @staticmethod
+    def _write_cache_file(path: str, entry: dict) -> None:
         # SECURITY: Restrictive permissions (owner-only read/write) to prevent
         # other system users from reading cached data — same pattern as SessionStore.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"value": value, "expires": expires}, f)
+        # Write to a temp file then os.replace() so a crash mid-write can never
+        # leave a truncated JSON file behind.
+        tmp_path = f"{path}.tmp"
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(entry, f)
+            os.replace(tmp_path, path)
+        except OSError:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _read_file_incr_val(self, path: str, now: float) -> tuple[int, Optional[float]]:
         if not os.path.exists(path):
@@ -316,9 +331,7 @@ class Cache:
         if expires is None:
             expires = (now + ttl) if ttl else None
 
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"value": new_val, "expires": expires}, f)
+        self._write_cache_file(path, {"value": new_val, "expires": expires})
         return new_val
 
     def _file_forget(self, key):
@@ -346,6 +359,12 @@ def cache_page(
     """
     Decorator to cache the HTTP response of a view function.
     Only caches GET requests.
+
+    WARNING: The cache key is based on the URL (path + query string) only and
+    does NOT vary on session or cookies. Never apply this decorator to a view
+    that renders user-specific content (dashboards, profiles, carts...): the
+    first user's page would be served to every other visitor of the same URL.
+    Reserve it for public, identical-for-everyone pages.
 
     SECURITY: Cache key length limits prevent DoS.
     """

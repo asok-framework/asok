@@ -647,7 +647,7 @@
     }
 
     function initElements(root) {
-        const selector = '[data-block], [data-sse], [data-spa], [data-trigger], [data-url], [data-spa-search], [data-indicator], [data-target]';
+        const selector = '[data-block], [data-sse], [data-spa], [data-spa-silent], [data-trigger], [data-url], [data-spa-search], [data-indicator], [data-target]';
         root.querySelectorAll(selector).forEach(el => {
             if (el.dataset.asokInit) return;
             el.dataset.asokInit = 'true';
@@ -707,6 +707,32 @@
                         }
                     });
                 }
+            } else if (el.tagName === 'FORM' && el.hasAttribute('data-spa-silent')) {
+                // Silent SPA: POST via AJAX then full-page reload (used for
+                // impersonate / stop-impersonate where the user identity changes
+                // and the entire admin shell must refresh).
+                el.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const action = el.getAttribute('action') || location.href;
+                    const formData = new FormData(el);
+                    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                    try {
+                        const res = await fetch(action, {
+                            method: 'POST',
+                            headers: {
+                                'X-Requested-With': 'XMLHttpRequest',
+                                [X_CSRF]: csrfToken
+                            },
+                            body: formData
+                        });
+                        // Redirect to wherever the server tells us (or reload current page)
+                        const xRedirect = res.headers.get('X-Redirect');
+                        window.location.href = xRedirect || res.url || location.href;
+                    } catch (err) {
+                        console.error('[Asok] Silent action failed:', err);
+                        window.location.reload();
+                    }
+                });
             } else if (el.tagName === 'FORM' && (el.hasAttribute('data-block') || el.hasAttribute('data-target') || el.hasAttribute('data-spa'))) {
                 el.addEventListener('submit', (e) => {
                     e.preventDefault();

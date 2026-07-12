@@ -372,29 +372,40 @@ class SessionStore:
             return None
 
     def _write_session_file(self, fpath: str, entry: dict[str, Any]) -> None:
+        # Write to a temp file then os.replace() so a crash mid-write can never
+        # leave a truncated JSON file (which would silently drop the session).
+        tmp_path = f"{fpath}.tmp"
         try:
-            fd = os.open(fpath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump(entry, f)
+            os.replace(tmp_path, fpath)
         except OSError as e:
-            # Fallback for systems that don't support os.open securely
-            import logging
+            self._write_session_file_fallback(fpath, tmp_path, entry, e)
 
-            logger = logging.getLogger("asok.session")
-            logger.warning(
-                f"Failed to create session file with secure permissions: {e}"
+    def _write_session_file_fallback(
+        self, fpath: str, tmp_path: str, entry: dict[str, Any], err: OSError
+    ) -> None:
+        # Fallback for systems that don't support os.open securely
+        import logging
+
+        logger = logging.getLogger("asok.session")
+        logger.warning(f"Failed to create session file with secure permissions: {err}")
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+        with open(fpath, "w") as f:
+            json.dump(entry, f)
+        try:
+            os.chmod(fpath, 0o600)
+        except OSError as chmod_err:
+            # SECURITY: Log if chmod fails - session file may be world-readable!
+            logger.error(
+                f"SECURITY WARNING: Failed to set secure permissions (0600) on session file {fpath}: {chmod_err}. "
+                "Session data may be exposed to other users on the system!"
             )
-
-            with open(fpath, "w") as f:
-                json.dump(entry, f)
-            try:
-                os.chmod(fpath, 0o600)
-            except OSError as chmod_err:
-                # SECURITY: Log if chmod fails - session file may be world-readable!
-                logger.error(
-                    f"SECURITY WARNING: Failed to set secure permissions (0600) on session file {fpath}: {chmod_err}. "
-                    "Session data may be exposed to other users on the system!"
-                )
 
     def _save_file(self, sid, data):
         """Save session data to file.

@@ -315,7 +315,10 @@ class SecurityMixin:
     def _add_hsts_header(
         self, headers: list[tuple[str, str]], request: Optional[Any]
     ) -> None:
-        if request and request.scheme != "https":
+        # Only send HSTS when we positively know the request came over HTTPS.
+        # Sending it on a plain-HTTP site would make browsers force HTTPS
+        # (and break the site) for max-age seconds.
+        if request is None or request.scheme != "https":
             return
         hsts = self._DEFAULT_SECURITY_HEADERS.get("Strict-Transport-Security", "")
         if hsts:

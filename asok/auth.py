@@ -144,8 +144,31 @@ class MagicLink:
             return "", 0, False
 
     @staticmethod
+    def _mark_token_used(token: str, exp: int) -> bool:
+        """Mark a token as consumed. Returns False if it was already used.
+
+        SECURITY: Single-use enforcement — an intercepted link (mail logs, URL
+        previews, Referer) cannot be replayed after the legitimate login.
+        NOTE: With the default in-memory cache this is per-process; use the
+        redis cache backend for cross-worker enforcement.
+        """
+        import hashlib
+
+        from .cache import default_cache
+
+        used_key = f"magic_used:{hashlib.sha256(token.encode()).hexdigest()}"
+        if default_cache.has(used_key):
+            logger.warning("Magic link replay attempt blocked (token already used).")
+            return False
+        remaining = max(int(exp - time.time()), 1)
+        default_cache.set(used_key, True, ttl=remaining)
+        return True
+
+    @staticmethod
     def verify_token(request: Request, token: str) -> Optional[str]:
         """Verify a magic link token and return the associated email if valid and not expired.
+
+        Tokens are single-use: a second verification of the same token fails.
 
         SECURITY: Uses constant-time operations to prevent timing attacks.
         """
@@ -158,6 +181,9 @@ class MagicLink:
         email, exp, is_valid = MagicLink._parse_payload(payload)
         is_expired = time.time() > exp
         if not is_valid or is_expired:
+            return None
+
+        if not MagicLink._mark_token_used(token, exp):
             return None
 
         return email
@@ -362,6 +388,16 @@ class OAuth:
         return None
 
 
+def _warn_permanent_bearer_token(request: Request) -> None:
+    app = request.environ.get("asok.app")
+    if app and not app.config.get("DEBUG"):
+        logger.warning(
+            "BearerToken.create() called without expires_in in production: "
+            "the token will never expire and can only be revoked by "
+            "rotating SECRET_KEY. Pass expires_in (e.g. 3600) instead."
+        )
+
+
 class BearerToken:
     """Provides stateless API authentication using cryptographically signed tokens."""
 
@@ -370,7 +406,11 @@ class BearerToken:
         """Create a signed bearer token for a specific user ID.
 
         If expires_in is provided (seconds), the token is time-limited.
+        Without expires_in the token never expires and can only be
+        invalidated by rotating SECRET_KEY — avoid this in production.
         """
+        if not expires_in:
+            _warn_permanent_bearer_token(request)
         exp = int(time.time() + expires_in) if expires_in else 0
         payload = f"{user_id}|{exp}"
         return request._sign(payload)

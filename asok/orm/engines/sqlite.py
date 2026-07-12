@@ -80,7 +80,11 @@ class SQLiteEngine(BaseEngine):
             return conn
 
         db_path = self._resolve_db_path()
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        # file: URIs (e.g. file:db.sqlite3?mode=ro) need uri=True, otherwise
+        # sqlite3 would create a literal file named "file:...".
+        conn = sqlite3.connect(
+            db_path, check_same_thread=False, uri=db_path.startswith("file:")
+        )
 
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
