@@ -1,3 +1,10 @@
+"""
+Core application class for the Asok framework.
+
+Integrates routing, templates, ORM, WebSockets, static site generation,
+and WSGI/ASGI application endpoints.
+"""
+
 from __future__ import annotations
 
 import importlib.util
@@ -57,7 +64,7 @@ class Asok(
         self.root_dir: str = os.path.abspath(root_dir or os.getcwd())
         import asok
 
-        self.version = getattr(asok, "__version__", "0.5.2")
+        self.version = getattr(asok, "__version__", "0.5.3")
         self.dirs: dict[str, str] = {
             "LOCALES": "src/locales",
             "PAGES": "src/pages",
@@ -246,6 +253,11 @@ class Asok(
             raise ValueError(
                 "SECURITY ERROR: SECRET_KEY must be at least 32 characters long in production. "
                 "Current key is too weak. Please generate a strong key using 'secrets.token_hex(32)'."
+            )
+        if sec_key == "change-me-to-a-very-secure-production-secret-key-32-chars":
+            raise ValueError(
+                "SECURITY ERROR: SECRET_KEY is set to the default boilerplate placeholder key in production. "
+                "You must change SECRET_KEY to a secure randomly generated value (e.g. using 'secrets.token_hex(32)') before deploying."
             )
 
     def _apply_env_overrides(self) -> None:

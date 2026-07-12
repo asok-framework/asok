@@ -1,4 +1,10 @@
-;(function () {
+/*
+*  Asok SPA - Single Page Application support for Asok framework
+*  author: Asok Team
+*  license: MIT
+*  version: 2.0.0
+*/
+; (function () {
   window.Asok = window.Asok || {};
 
   // In-memory cache for prefetch content
@@ -50,7 +56,7 @@
     if (!targetElement) {
       try {
         targetElement = document.querySelector(selector);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     if (!targetElement && /^[a-zA-Z0-9_-]+$/.test(selector)) {
@@ -212,11 +218,9 @@
       });
 
       const tempContainer = document.createElement('div');
-      // SECURITY: HTML comes from server - sanitize to prevent XSS if server is compromised
-      // Note: This assumes server responses are trusted but adds defense-in-depth
-      const sanitizedHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
-        window.AsokSecurity.sanitizeHtml(html) : html;
-      tempContainer.innerHTML = sanitizedHtml;
+      // HTML is server-rendered (same-origin, trusted); insert as-is to preserve
+      // scoped scripts/styles/forms. Sanitization is reserved for untrusted input.
+      tempContainer.innerHTML = html;
       const insertedNodes = Array.from(tempContainer.childNodes);
       insertedNodes.forEach(function (node) {
         startMarker.parentNode.insertBefore(node, endMarker);
@@ -238,9 +242,9 @@
           afterSwap(newNodes || [target]);
         });
       } else {
-        // SECURITY: Fallback implementation with sanitization (defense-in-depth)
-        const safeHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
-          window.AsokSecurity.sanitizeHtml(html) : html;
+        // Fallback swap (used when Asok.swap is unavailable). Server HTML is
+        // trusted and inserted as-is, consistent with the primary swap path.
+        const safeHtml = html;
 
         if (mode === 'delete') {
           target.remove();
@@ -291,54 +295,54 @@
     const fetchPromise = responseCache[cacheKey]
       ? Promise.resolve(responseCache[cacheKey])
       : fetch(url, options).then(function (res) {
-          if (!res.ok) {
-            return res.text().then(function (text) {
-              const ev = new CustomEvent('asok:error', { detail: { url: url, status: res.status, message: text } });
-              document.dispatchEvent(ev);
-              console.error((res.status === 400 ? 'Asok Consistency Error: ' : 'Asok Error ' + res.status + ': ') + text);
-              throw text;
-            });
-          }
+        if (!res.ok) {
+          return res.text().then(function (text) {
+            const ev = new CustomEvent('asok:error', { detail: { url: url, status: res.status, message: text } });
+            document.dispatchEvent(ev);
+            console.error((res.status === 400 ? 'Asok Consistency Error: ' : 'Asok Error ' + res.status + ': ') + text);
+            throw text;
+          });
+        }
 
-          const redirectUrl = res.headers.get('X-Asok-Redirect');
-          if (redirectUrl) {
-            // SECURITY: Validate redirect URL to prevent open redirect attacks
-            if (window.AsokSecurity && window.AsokSecurity.isSafeUrl) {
-              if (!window.AsokSecurity.isSafeUrl(redirectUrl)) {
-                console.error('[Asok] Blocked unsafe redirect URL:', redirectUrl);
-                return Promise.reject('unsafe_redirect');
-              }
+        const redirectUrl = res.headers.get('X-Asok-Redirect');
+        if (redirectUrl) {
+          // SECURITY: Validate redirect URL to prevent open redirect attacks
+          if (window.AsokSecurity && window.AsokSecurity.isSafeUrl) {
+            if (!window.AsokSecurity.isSafeUrl(redirectUrl)) {
+              console.error('[Asok] Blocked unsafe redirect URL:', redirectUrl);
+              return Promise.reject('unsafe_redirect');
             }
-            window.location.href = redirectUrl;
-            return Promise.reject('redirected');
           }
+          window.location.href = redirectUrl;
+          return Promise.reject('redirected');
+        }
 
-          const token = res.headers.get('X-CSRF-Token');
-          const blocks = res.headers.get('X-Asok-Blocks');
+        const token = res.headers.get('X-CSRF-Token');
+        const blocks = res.headers.get('X-Asok-Blocks');
 
-          if (token) {
-            const csrfMeta = document.querySelector('meta[name=csrf-token]');
-            if (csrfMeta) csrfMeta.content = token;
-            document.querySelectorAll('input[name=csrf_token]').forEach(function (input) {
-              input.value = token;
-              input.defaultValue = token;
-              input.setAttribute('value', token);
-            });
-          }
+        if (token) {
+          const csrfMeta = document.querySelector('meta[name=csrf-token]');
+          if (csrfMeta) csrfMeta.content = token;
+          document.querySelectorAll('input[name=csrf_token]').forEach(function (input) {
+            input.value = token;
+            input.defaultValue = token;
+            input.setAttribute('value', token);
+          });
+        }
 
-          if (blocks) {
-            window.Asok.lastBlocks = blocks;
-          }
+        if (blocks) {
+          window.Asok.lastBlocks = blocks;
+        }
 
-          const sqlLog = res.headers.get('X-Asok-SQL-Log');
-          if (sqlLog) {
-            window.Asok.lastSqlLog = sqlLog;
-          } else {
-            window.Asok.lastSqlLog = null;
-          }
+        const sqlLog = res.headers.get('X-Asok-SQL-Log');
+        if (sqlLog) {
+          window.Asok.lastSqlLog = sqlLog;
+        } else {
+          window.Asok.lastSqlLog = null;
+        }
 
-          return res.text();
-        });
+        return res.text();
+      });
 
     delete responseCache[cacheKey];
 
@@ -352,8 +356,8 @@
       }
 
       const tempDiv = document.createElement('div');
-      // SECURITY: tempDiv is not inserted into DOM, only used to parse templates
-      // The actual content is sanitized when passed through doSwap() -> Asok.swap()
+      // tempDiv is a detached parser for the server response (same-origin,
+      // trusted). Content is inserted as-is by doSwap()/Asok.swap().
       tempDiv.innerHTML = html;
 
       // Execute root-level scripts (like the directives registry) before swapping templates/content
@@ -457,7 +461,7 @@
       } else if (shouldPushUrl) {
         delete document.body.dataset.pageId;
       }
-    }, function () {});
+    }, function () { });
   }
 
   // Prefetch dynamic block content
@@ -703,11 +707,11 @@
     const el = e.target.closest('[data-block]');
     if (!el || el.tagName === 'FORM') return;
 
-    const isInteractive = 
-      el.tagName === 'A' || 
-      el.tagName === 'BUTTON' || 
+    const isInteractive =
+      el.tagName === 'A' ||
+      el.tagName === 'BUTTON' ||
       el.tagName === 'INPUT' ||
-      el.hasAttribute('data-url') || 
+      el.hasAttribute('data-url') ||
       el.hasAttribute('data-action') ||
       el.hasAttribute('data-trigger');
 

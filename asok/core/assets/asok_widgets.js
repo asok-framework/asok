@@ -1,4 +1,10 @@
-;(function () {
+/*
+ *  Asok Widgets - Widgets for Asok framework
+ *  author: Asok Team
+ *  license: MIT
+ *  version: 2.0.0
+*/
+(function () {
   window.Asok = window.Asok || {};
 
   // Form Helper Functions
@@ -75,6 +81,10 @@
       alert('Maximum ' + maxFiles + ' files');
       event.target.value = '';
       return;
+    }
+    // Release object URLs from a previous selection to avoid leaking them.
+    if (Array.isArray(state.files)) {
+      state.files.forEach(f => { if (f && f.url) URL.revokeObjectURL(f.url); });
     }
     state.files = fileList.map(f => ({
       name: f.name,

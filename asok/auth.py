@@ -1,3 +1,10 @@
+"""
+Authentication features and passwordless login strategies for Asok.
+
+Includes magic links, two-factor authentication (TOTP/Backup codes),
+and user authorization controls.
+"""
+
 from __future__ import annotations
 
 import json
@@ -18,7 +25,92 @@ logger = logging.getLogger("asok.auth")
 
 
 class AuthError(AsokException):
+    """Authentication exception raised when login or credentials verification fails."""
+
     pass
+
+
+def _magic_link_app(request: Request) -> Any:
+    return request.environ.get("asok.app")
+
+
+def _magic_link_app_url(app: Any) -> Optional[str]:
+    if not app:
+        return None
+    return app.config.get("APP_URL")
+
+
+def _magic_link_is_debug(app: Any) -> bool:
+    if not app:
+        return True
+    return app.config.get("DEBUG", True)
+
+
+def _resolve_magic_link_base(request: Request) -> str:
+    app = _magic_link_app(request)
+    app_url = _magic_link_app_url(app)
+
+    if app_url:
+        return app_url.rstrip("/")
+
+    if not _magic_link_is_debug(app):
+        raise ValueError(
+            "SECURITY ERROR: 'APP_URL' is mandatory in production to generate secure Magic Links. "
+            "Set it in your .env file: APP_URL=https://yourdomain.com"
+        )
+    return _resolve_debug_magic_link_base(request)
+
+
+def _resolve_debug_magic_link_base(request: Request) -> str:
+    # Fallback to Host header ONLY in DEBUG mode, but validate to prevent host injection.
+    host = _validate_debug_host(request.environ.get("HTTP_HOST", "localhost"))
+    scheme = request.environ.get("wsgi.url_scheme", "http")
+    return f"{scheme}://{host}"
+
+
+def _validate_debug_host(host: str) -> str:
+    host = host.strip()
+    if not host or any(ch.isspace() for ch in host):
+        raise ValueError(
+            f"SECURITY ERROR: Unrecognized Host header '{host}' in debug mode. "
+            "For external access or custom domains, you must set 'APP_URL'."
+        )
+
+    parsed = urllib.parse.urlsplit(f"//{host}", scheme="http")
+    if not _is_allowed_debug_host(parsed):
+        raise ValueError(
+            f"SECURITY ERROR: Unrecognized Host header '{host}' in debug mode. "
+            "For external access or custom domains, you must set 'APP_URL'."
+        )
+    return parsed.netloc
+
+
+def _is_allowed_debug_host(parsed: urllib.parse.SplitResult) -> bool:
+    return _has_allowed_debug_hostname(parsed.hostname) and _has_clean_debug_parts(
+        parsed
+    )
+
+
+def _has_allowed_debug_hostname(hostname: Optional[str]) -> bool:
+    return bool(hostname) and hostname.lower() in {"localhost", "127.0.0.1", "::1"}
+
+
+def _has_clean_debug_parts(parsed: urllib.parse.SplitResult) -> bool:
+    return not any(
+        (parsed.username, parsed.password, parsed.path, parsed.query, parsed.fragment)
+    )
+
+
+def _format_expires_in(expires_in: int) -> str:
+    if expires_in < 60:
+        return _pluralize_duration(expires_in, "second")
+    if expires_in % 3600 == 0:
+        return _pluralize_duration(expires_in // 3600, "hour")
+    return _pluralize_duration(expires_in // 60, "minute")
+
+
+def _pluralize_duration(value: int, unit: str) -> str:
+    return f"{value} {unit}" + ("s" if value != 1 else "")
 
 
 class MagicLink:
@@ -60,14 +152,11 @@ class MagicLink:
 
         # Unsign the token
         payload = request._unsign(token)
-        email, exp_time, is_valid = MagicLink._parse_payload(payload)
+        if not payload:
+            return None
 
-        # Check expiration
-        current_time = int(time.time())
-        is_expired = exp_time < current_time
-
-        # Combine all checks. Note: while parsing/expiration checks run only on valid signatures,
-        # the signature validation itself uses constant-time hmac.compare_digest to prevent signature forgery.
+        email, exp, is_valid = MagicLink._parse_payload(payload)
+        is_expired = time.time() > exp
         if not is_valid or is_expired:
             return None
 
@@ -82,29 +171,21 @@ class MagicLink:
     ) -> str:
         """Generate a magic link and send it to the specified email address."""
         token = MagicLink.create_token(request, email)
+        base = _resolve_magic_link_base(request)
 
-        # Build URL — OBLIGATORY APP_URL in production to prevent Host header injection
+        import html as _html
+        import urllib.parse
+
+        quoted_token = urllib.parse.quote(token)
+        link = f"{base}/auth/magic/callback?token={quoted_token}"
+
         app = request.environ.get("asok.app")
-        app_url = app.config.get("APP_URL") if app else None
-        is_debug = app.config.get("DEBUG", True) if app else True
+        expires_in = app.config.get("MAGIC_LINK_TTL", 3600) if app else 3600
+        ttl_text = _format_expires_in(expires_in)
 
-        if app_url:
-            base = app_url.rstrip("/")
-        else:
-            if not is_debug:
-                raise ValueError(
-                    "SECURITY ERROR: 'APP_URL' is mandatory in production to generate secure Magic Links. "
-                    "Set it in your .env file: APP_URL=https://yourdomain.com"
-                )
-            # Fallback to Host header ONLY in DEBUG mode
-            host = request.environ.get("HTTP_HOST", "localhost")
-            scheme = request.environ.get("wsgi.url_scheme", "http")
-            base = f"{scheme}://{host}"
-
-        link = f"{base}/auth/magic/callback?token={token}"
-
-        body = f"Click here to log in to your account:\n\n{link}\n\nThis link will expire in 1 hour."
-        html = f'<p>Click the link below to log in to your account:</p><p><a href="{link}">{link}</a></p><p>This link will expire in 1 hour.</p>'
+        body = f"Click here to log in to your account:\n\n{link}\n\nThis link will expire in {ttl_text}."
+        escaped_link = _html.escape(link)
+        html = f'<p>Click the link below to log in to your account:</p><p><a href="{escaped_link}">{escaped_link}</a></p><p>This link will expire in {ttl_text}.</p>'
 
         Mail.send(to=email, subject=subject, body=body, html=html)
         return link

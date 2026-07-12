@@ -62,26 +62,24 @@ class SQLiteEngine(BaseEngine):
         self.db_path = db_path or "db.sqlite3"
         self._local = threading.local()
 
+    def _resolve_db_path(self) -> str:
+        import os as _os
+
+        db_path = self.db_path
+        if db_path != ":memory:" and not db_path.startswith("file:"):
+            if not _os.path.isabs(db_path):
+                db_path = _os.path.join(_os.getcwd(), db_path)
+            parent = _os.path.dirname(db_path)
+            if parent:
+                _os.makedirs(parent, exist_ok=True)
+        return db_path
+
     def get_connection(self) -> Any:
         conn = getattr(self._local, "conn", None)
         if conn is not None:
             return conn
 
-        import os as _os
-
-        # Resolve relative path against CWD so the file lands in the project root.
-        db_path = self.db_path
-        if not _os.path.isabs(db_path):
-            db_path = _os.path.join(_os.getcwd(), db_path)
-
-        # Ensure the parent directory exists (handles nested paths like data/db.sqlite3)
-        parent = _os.path.dirname(db_path)
-        if parent:
-            _os.makedirs(parent, exist_ok=True)
-
-        # Always use the normal connect() which creates the file if missing.
-        # We intentionally avoid `mode=rw` (read-write-only) so that a fresh
-        # project automatically gets its database file on first run.
+        db_path = self._resolve_db_path()
         conn = sqlite3.connect(db_path, check_same_thread=False)
 
         conn.row_factory = sqlite3.Row

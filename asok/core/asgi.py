@@ -137,15 +137,19 @@ class ASGIMixin:
             str(e),
             traceback.format_exc(),
         )
-        # SECURITY: never expose traces to the client; logs hold details.
-        error_page = self._render_error_page(
-            request, 500, message="An internal error occurred."
-        )
-        body = error_page.encode("utf-8") if isinstance(error_page, str) else error_page
+        if self.config.get("DEBUG"):
+            error_page = self._render_debug_exception_page(request, e)
+        else:
+            # SECURITY: never expose traces to the client; logs hold details.
+            error_page = self._render_error_page(
+                request, 500, message="An internal error occurred."
+            )
+        body = error_page.encode("utf-8")
 
         headers = [("Content-Type", "text/html; charset=utf-8")]
-        if request is not None and environ is not None:
-            headers += self._cookie_headers(request, environ)
+        if request is not None:
+            env = environ or getattr(request, "environ", {})
+            headers += self._cookie_headers(request, env)
             headers += self._security_headers(
                 request=request, nonce=getattr(request, "nonce", None)
             )

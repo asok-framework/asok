@@ -25,3 +25,29 @@ class TestExceptions:
         exc = RedirectException("/dashboard")
         assert exc.url == "/dashboard"
         assert exc.status == 302
+
+
+def test_debug_exception_page():
+    from asok.core import Asok
+    from asok.request import Request
+
+    app = Asok()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/crash-route",
+        "asok.app": app,
+    }
+    req = Request(environ)
+    req.params["test_param"] = "test_val"
+    req.form["form_key"] = "form_val"
+
+    try:
+        raise ValueError("Crashed deliberately")
+    except Exception as e:
+        html = app._render_debug_exception_page(req, e)
+        assert "ValueError" in html
+        assert "Crashed deliberately" in html
+        assert "test_param" in html
+        assert "test_val" in html
+        assert "form_key" in html
+        assert "form_val" in html

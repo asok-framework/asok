@@ -1,3 +1,10 @@
+"""
+WebSocket Connection wrapper and routing matching classes for Asok.
+
+Defines the Route representation and the active Connection object,
+managing thread-safe frame writing and channels subscription.
+"""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +33,7 @@ class _Route:
     """One WS route. Supports [param] segments like file-system routing."""
 
     def __init__(self, pattern: str):
+        """Initialize the WS route with a route pattern string."""
         self.pattern = pattern
         self.segments = _split_path_segments(pattern)
         self.is_dynamic = any(_is_dynamic_segment(s) for s in self.segments)
@@ -92,6 +100,7 @@ class Connection:
         self._closed = False
         self._lock = threading.Lock()
         self._rooms: set[str] = set()
+        self._live_comps: dict[str, Any] = {}
 
     def send(self, message: Union[str, bytes]) -> bool:
         """Send a message to the client. Returns True if successful."""

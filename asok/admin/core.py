@@ -325,7 +325,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         block_header = request.environ.get("HTTP_X_BLOCK")
         if block_header:
             return self._render_block_response(content, root, ctx, block_header)
-        return render_template_string(content, ctx, root_dir=root)
+        return render_template_string(content, ctx, root_dir=root, template_name=name)
 
     @staticmethod
     def _populate_base_ctx(ctx: dict, request: Any, locale: str) -> None:
@@ -532,25 +532,25 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         # 4. Fallback
         return self.default_locale
 
-    def _create_lang_cookie(self, lang: str) -> str:
+    def _create_lang_cookie(self, request: Any, lang: str) -> str:
         lang_cookie = f"asok_lang={lang}; Path=/; SameSite=Lax; Max-Age=31536000"
-        if not self.app.config.get("DEBUG"):
+        if request.scheme == "https":
             lang_cookie += "; Secure"
         return lang_cookie
 
     def _persist_locale(self, request: Any, lang: str) -> None:
         request.session["admin_locale"] = lang
-        lang_cookie = self._create_lang_cookie(lang)
+        lang_cookie = self._create_lang_cookie(request, lang)
         if "asok.extra_headers" not in request.environ:
             request.environ["asok.extra_headers"] = []
         request.environ["asok.extra_headers"].append(("Set-Cookie", lang_cookie))
         request.flash("success", translate(lang, "Language updated"))
 
     def _resolve_redirect_referer(self, request: Any) -> str:
-        from ..utils.security import is_safe_url
+        from ..utils.security import is_safe_url, request_authority
 
         ref = request.environ.get("HTTP_REFERER", self.prefix)
-        host = request.environ.get("HTTP_HOST", "")
+        host = request_authority(request)
         if "/lang?" in ref or "/lang" in ref:
             return self.prefix
         if is_safe_url(ref, allowed_host=host):
@@ -614,7 +614,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             forwarded = request.environ.get("HTTP_X_FORWARDED_FOR", "")
             remote_addr = request.environ.get("REMOTE_ADDR", "")
             if forwarded and self._is_proxy_trusted(remote_addr, trusted_proxies):
-                return forwarded.split(",")[0].strip()
+                return forwarded.split(",")[-1].strip()
         return request.environ.get("REMOTE_ADDR", "unknown")
 
     def _login_rate_key(self, request: Any) -> str:

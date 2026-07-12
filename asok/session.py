@@ -1,3 +1,10 @@
+"""
+Session management system for the Asok framework.
+
+Provides the dictionary-like Session object and SessionStore implementations
+(in-memory and Redis-backed) to manage client state.
+"""
+
 from __future__ import annotations
 
 import json
@@ -14,15 +21,18 @@ class Session(dict):
     """A dictionary-like object representing a user session that tracks its own modification state."""
 
     def __init__(self, *args: Any, **kwargs: Any):
+        """Initialize the Session instance and track modification status."""
         super().__init__(*args, **kwargs)
         self.modified: bool = False
         self.sid: Optional[str] = None
 
     def __setitem__(self, key: Any, value: Any) -> None:
+        """Set an item in the session and mark the session as modified."""
         self.modified = True
         super().__setitem__(key, value)
 
     def __delitem__(self, key: Any) -> None:
+        """Delete an item from the session and mark the session as modified."""
         self.modified = True
         super().__delitem__(key)
 
@@ -40,6 +50,36 @@ class Session(dict):
         """Remove all items from the session. Marks the session as modified."""
         self.modified = True
         super().clear()
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        """Insert key with a value of default if key is not in the dictionary.
+        Marks the session as modified if key was not present.
+        """
+        if key not in self:
+            self.modified = True
+        return super().setdefault(key, default)
+
+
+def _safe_json_size(v: Any) -> int:
+    try:
+        return len(json.dumps(v))
+    except Exception:
+        return 999999
+
+
+def _find_largest_key(data: dict[str, Any], protect: str) -> str | None:
+    keys = list(data.keys())
+    if len(keys) > 1 and protect in keys:
+        keys.remove(protect)
+
+    largest_key = None
+    largest_size = -1
+    for k in keys:
+        v_size = _safe_json_size(data[k])
+        if v_size > largest_size:
+            largest_size = v_size
+            largest_key = k
+    return largest_key
 
 
 class SessionStore:
@@ -264,11 +304,21 @@ class SessionStore:
         import logging
 
         logging.getLogger("asok.session").warning(
-            "Session data too large (%d bytes), truncating", size
+            "Session data too large (%d bytes), truncating to fit 100KB limit", size
         )
-        if isinstance(data, dict) and len(data) > 1000:
-            return dict(list(data.items())[:1000])
-        return data
+        if not isinstance(data, dict):
+            return data
+
+        pruned = dict(data)
+        while len(pruned) > 0 and len(json.dumps(pruned)) > 100_000:
+            largest_key = _find_largest_key(pruned, "_user_id")
+            if largest_key is not None:
+                del pruned[largest_key]
+            else:
+                pruned.clear()
+                break
+
+        return pruned
 
     def _purge_expired_memory(self, now: float) -> None:
         expired = [k for k, v in self._memory.items() if now - v["ts"] > self.ttl]

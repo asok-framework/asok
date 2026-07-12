@@ -28,8 +28,11 @@ window.asokWS = function (path) {
 
 (function () {
   let ws;
-  const timers = {};
+  // Keyed by DOM element: a plain object would coerce every element to the same
+  // "[object HTMLInputElement]" string key and cross-cancel debounce timers.
+  const timers = new WeakMap();
   let connecting = false;
+  let reconnectAttempts = 0;
 
   function connect() {
     if (connecting) return;
@@ -42,6 +45,7 @@ window.asokWS = function (path) {
 
     ws.onopen = function () {
       connecting = false;
+      reconnectAttempts = 0;
       if (window._asokPendingInits && window._asokPendingInits.length) {
         const pending = window._asokPendingInits.slice();
         window._asokPendingInits = [];
@@ -94,11 +98,12 @@ window.asokWS = function (path) {
             if (window.__asokClearCache) window.__asokClearCache();
           }
 
-          // SECURITY: Sanitize HTML before parsing (defense-in-depth)
-          const safeHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
-            window.AsokSecurity.sanitizeHtml(d.html) : d.html;
-
-          const newEl = new DOMParser().parseFromString(safeHtml, "text/html").body.firstElementChild;
+          // Component HTML is rendered and HMAC-signed server-side (trusted), so
+          // it is NOT run through the untrusted-content sanitizer: doing so would
+          // strip legitimate scoped <script>/<style> and embeds and break the
+          // scoped-script re-execution below on every live re-render.
+          const newEl = new DOMParser().parseFromString(d.html, "text/html").body.firstElementChild;
+          if (!newEl) return;
           el.replaceWith(newEl);
           const updated = document.getElementById("asok-" + d.cid);
           if (updated) {
@@ -151,7 +156,12 @@ window.asokWS = function (path) {
 
     ws.onclose = function () {
       connecting = false;
-      setTimeout(connect, 2000);
+      // Exponential backoff with jitter, capped at ~30s, to avoid hammering a
+      // downed server with reconnect attempts.
+      reconnectAttempts = Math.min(reconnectAttempts + 1, 6);
+      const base = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+      const delay = base / 2 + Math.random() * (base / 2);
+      setTimeout(connect, delay);
     };
 
     ws.onerror = function () {
@@ -194,6 +204,11 @@ window.asokWS = function (path) {
 
     ["click", "input", "change", "submit", "keyup", "keydown"].forEach(function (ev) {
       el.querySelectorAll("[ws-" + ev + "]").forEach(function (n) {
+        // Guard against stacking duplicate listeners if initWS runs twice on
+        // the same node; also lets ws-<ev> and ws-model coexist on one element.
+        const flag = "__asokWsBound_" + ev;
+        if (n[flag]) return;
+        n[flag] = true;
         const attr = n.getAttribute("ws-" + ev);
         const parts = attr.split(".");
         const meth = parts[0];
@@ -212,23 +227,25 @@ window.asokWS = function (path) {
 
           if (deb) {
             const ms = parseInt(deb.split("-")[1]) || 300;
-            clearTimeout(timers[n]);
-            timers[n] = setTimeout(function () {
+            clearTimeout(timers.get(n));
+            timers.set(n, setTimeout(function () {
               send(msg, n);
-            }, ms);
+            }, ms));
           } else {
             send(msg, n);
           }
         };
-        n["on" + ev] = handler;
+        n.addEventListener(ev, handler);
       });
     });
 
     el.querySelectorAll("[ws-model]").forEach(function (n) {
+      if (n.__asokWsModelBound) return;
+      n.__asokWsModelBound = true;
       const prop = n.getAttribute("ws-model");
-      n.oninput = function () {
+      n.addEventListener("input", function () {
         send({ op: "sync", cid: cid, prop: prop, val: n.value }, n);
-      };
+      });
     });
 
     el.__asokWsReady = true;

@@ -5,6 +5,7 @@ import math
 import re
 from typing import Any, Generic, Optional, TypeVar, Union
 
+from .exceptions import _UNSET
 from .list import ModelList
 from .model import Model
 from .utils import MODELS_REGISTRY, interpolate_sql
@@ -66,7 +67,7 @@ def _extract_nulls_suffix(item: str) -> tuple[str, str]:
     for sfx in (" NULLS FIRST", " NULLS LAST"):
         if item_upper.endswith(sfx):
             suffix = item[len(item) - len(sfx) :]
-            return item[:-len(sfx)].strip(), suffix
+            return item[: -len(sfx)].strip(), suffix
     return item, ""
 
 
@@ -274,16 +275,33 @@ class Query(Generic[T]):
             f"'{self.__class__.__name__}' object or model '{self.model.__name__}' has no attribute '{name}'"
         )
 
-    def where(self, column: str, op_or_val: Any, val: Any = None) -> Query[T]:
-        """Add a where clause. (column, val) or (column, operator, val)."""
-        if val is None:
-            op, val = "=", op_or_val
+    def _handle_where_null(self, column: str, op: str, prefix: str = "") -> None:
+        pfx = f"{prefix} " if prefix else ""
+        if op == "=":
+            self._wheres.append(f"{pfx}{column} IS NULL")
+        elif op in ("!=", "<>", "IS NOT"):
+            self._wheres.append(f"{pfx}{column} IS NOT NULL")
         else:
-            op = op_or_val.upper()
-            if op not in self._OPERATORS:
-                raise ValueError(f"Invalid operator: {op_or_val}")
+            raise ValueError(f"Invalid operator {op} for None value")
+
+    def _parse_where_op_val(self, op_or_val: Any, val: Any) -> tuple[str, Any]:
+        if val is _UNSET:
+            return "=", op_or_val
+        op = op_or_val.upper()
+        if op not in self._OPERATORS:
+            raise ValueError(f"Invalid operator: {op_or_val}")
+        return op, val
+
+    def where(self, column: str, op_or_val: Any, val: Any = _UNSET) -> Query[T]:
+        """Add a where clause. (column, val) or (column, operator, val)."""
+        op, val = self._parse_where_op_val(op_or_val, val)
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
+
+        if val is None:
+            self._handle_where_null(column, op)
+            return self
+
         field = self.model._fields.get(column)
         if field:
             val = self.model.get_engine().prepare_value(field, val)
@@ -368,27 +386,24 @@ class Query(Generic[T]):
             )
         return self.where(column, "LIKE", pattern)
 
-    def or_where(self, column: str, op_or_val: Any, val: Any = None) -> Query[T]:
+    def or_where(self, column: str, op_or_val: Any, val: Any = _UNSET) -> Query[T]:
         """Append an OR condition."""
-        op, val = self._normalize_op_value(op_or_val, val)
+        op, val = self._parse_where_op_val(op_or_val, val)
         if not self.model._valid_column(column):
             raise ValueError(f"Invalid column: {column}")
         if not self._wheres:
             return self.where(column, op, val)
+
+        if val is None:
+            self._handle_where_null(column, op, prefix="OR")
+            return self
+
         field = self.model._fields.get(column)
         if field:
             val = self.model.get_engine().prepare_value(field, val)
         self._wheres.append(f"OR {column} {op} ?")
         self._args.append(val)
         return self
-
-    def _normalize_op_value(self, op_or_val: Any, val: Any) -> tuple[str, Any]:
-        if val is None:
-            return "=", op_or_val
-        op = op_or_val.upper()
-        if op not in self._OPERATORS:
-            raise ValueError(f"Invalid operator: {op_or_val}")
-        return op, val
 
     def where_null(self, column: str) -> Query[T]:
         """Filter rows where column is NULL."""
@@ -817,8 +832,9 @@ class Query(Generic[T]):
 
     def first(self) -> Optional[T]:
         """Execute the query and return the first matching record or None."""
-        self._limit = 1
-        rows = self.get()
+        clone = self.clone()
+        clone._limit = 1
+        rows = clone.get()
         return rows[0] if rows else None
 
     def last(self) -> Optional[T]:
@@ -1048,7 +1064,8 @@ class Query(Generic[T]):
         """
         total = self.count() if count else None
         pages = math.ceil(total / per_page) if total is not None else None
-        items = self.limit(per_page).offset((page - 1) * per_page).get()
+        clone = self.clone()
+        items = clone.limit(per_page).offset((page - 1) * per_page).get()
 
         return {
             "items": items,

@@ -64,9 +64,10 @@ class SecurityMixin:
         expected_signed = self._sign(val)
         if hmac.compare_digest(expected_signed, signed_value):
             return val
-        # SECURITY: Log failed signature validation attempts for monitoring
+        # SECURITY: log the failed attempt for monitoring, but never the expected
+        # signature or the raw value — that would leak forgeable signature material.
         logger.warning(
-            "Invalid HMAC signature detected (possible tampering or expired session)"
+            "Invalid HMAC signature detected (possible tampering or expired session)."
         )
         return None
 
@@ -110,7 +111,7 @@ class SecurityMixin:
         if not _is_safe_lang_value(lang):
             return None
         cookie = f"asok_lang={lang}; Path=/; SameSite=Lax; Max-Age=31536000"
-        if not self.config.get("DEBUG"):
+        if request.scheme == "https":
             cookie += "; Secure"
         return cookie
 

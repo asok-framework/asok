@@ -170,11 +170,17 @@
             const response = await fetch(finalUrl, fetchOptions);
             const html = await response.text();
 
-            // SECURITY FIX: Ne pas exécuter data-swap="delete" si la requête a échoué (403, 500, etc.)
-            // Vérifier response.ok (status 200-299) avant de traiter la réponse
+            // If we receive the login page (e.g., due to session expiration), redirect the entire window
+            if (response.url && (response.url.includes('/login') || html.includes('login-page') || html.includes('login-card'))) {
+                window.location.href = response.url;
+                return;
+            }
+
+            // SECURITY FIX: Do not execute data-swap="delete" if the request failed (403, 500, etc.)
+            // Verify response.ok (status 200-299) before processing the response
             if (!response.ok) {
-                // La réponse est une erreur (403, 404, 500, etc.)
-                // Afficher la page d'erreur au lieu de faire le swap
+                // The response is an error (403, 404, 500, etc.)
+                // Display the error page instead of doing the swap
                 const finalTarget = '#page-body';
                 processResponse(html, finalTarget, 'innerHTML');
                 return;

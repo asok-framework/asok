@@ -1,4 +1,4 @@
-;(function() {
+; (function () {
   // Map of DOM elements to their Asok Context (state, refs, cleanup list, etc.)
   const contexts = new WeakMap();
   // Map of state property names to the Set of elements subscribing to them
@@ -50,7 +50,7 @@
     const owner = findStateOwner(el);
     const ctx = owner ? contexts.get(owner) : { refs: {} };
     const localState = ctx.state || state;
-    
+
     return [
       localState,
       window.Asok.store,
@@ -139,6 +139,9 @@
       }
     }
 
+    // Whether the author explicitly provided a numeric duration token. Only then
+    // do we override the CSS animation speed, so each effect keeps its own default.
+    const durationSpecified = tokens.slice(1).some(t => !isNaN(parseInt(t, 10)));
     const activeName = show ? enterName : leaveName;
     const activeDuration = show ? enterDuration : leaveDuration;
 
@@ -161,8 +164,10 @@
           // SECURITY: Validate and cap duration to prevent timing attacks
           const safeDur = window.AsokSecurity && window.AsokSecurity.safeDuration ?
             window.AsokSecurity.safeDuration(activeDuration, 5000) : Math.min(activeDuration, 5000);
+          if (durationSpecified) el.style.transitionDuration = safeDur + 'ms';
           setTimeout(() => {
             el.classList.remove(`asok-${baseName}-in`, 'is-entering');
+            if (durationSpecified) el.style.transitionDuration = '';
           }, safeDur);
         });
       } else {
@@ -173,9 +178,11 @@
           // SECURITY: Validate and cap duration to prevent timing attacks
           const safeDur = window.AsokSecurity && window.AsokSecurity.safeDuration ?
             window.AsokSecurity.safeDuration(activeDuration, 5000) : Math.min(activeDuration, 5000);
+          if (durationSpecified) el.style.transitionDuration = safeDur + 'ms';
           setTimeout(() => {
             if (callback) callback();
             el.classList.remove(`asok-${baseName}-out`, 'is-leaving');
+            if (durationSpecified) el.style.transitionDuration = '';
           }, safeDur);
         });
       }
@@ -204,7 +211,7 @@
   // Update DOM bindings for standard directives (text, html, show, class, bind)
   const updateBindings = (el, state) => {
     if (!el || !state) return;
-    
+
     const getAttr = el.getAttribute.bind(el);
 
     // asok-text
@@ -219,9 +226,11 @@
     if (el.hasAttribute('asok-html-ref')) {
       const val = evaluateExpression(getAttr('asok-html-ref'), state, el);
       if (val !== undefined) {
-        // SECURITY: Sanitize HTML to prevent XSS attacks
-        // Use AsokSecurity.sanitizeHtml if available, fallback to textContent
-        if (window.AsokSecurity && window.AsokSecurity.sanitizeHtml) {
+        // SECURITY: sanitize untrusted HTML. Prefer inserting sanitized *nodes*
+        // (single parse) over re-serializing to a string, which avoids mutation-XSS.
+        if (window.AsokSecurity && window.AsokSecurity.sanitizeToFragment) {
+          el.replaceChildren(window.AsokSecurity.sanitizeToFragment(String(val)));
+        } else if (window.AsokSecurity && window.AsokSecurity.sanitizeHtml) {
           el.innerHTML = window.AsokSecurity.sanitizeHtml(String(val));
         } else {
           // Fallback: use textContent for safety if security utils not loaded
@@ -235,7 +244,7 @@
       const isShown = evaluateExpression(getAttr('asok-show-ref'), state, el);
       if (!el._asokShowInitialized) {
         el._asokShowInitialized = true;
-        el.style.display = isShown ? 'block' : 'none';
+        el.style.display = isShown ? '' : 'none';
       } else {
         const isCurrentlyShown = el.style.display !== 'none';
         if (isShown) {
@@ -244,7 +253,7 @@
             el.removeAttribute('data-hide-active');
             el.setAttribute('data-show-active', '');
             applyTransition(el, true, () => {
-              el.style.display = 'block';
+              el.style.display = '';
             });
           }
         } else {
@@ -334,7 +343,7 @@
 
           // SECURITY: Validate URLs in href/src attributes
           if ((attrName === 'href' || attrName === 'src') &&
-              window.AsokSecurity && !window.AsokSecurity.isSafeUrl(strVal)) {
+            window.AsokSecurity && !window.AsokSecurity.isSafeUrl(strVal)) {
             console.warn('[Asok] Blocked unsafe URL in attribute:', attrName);
             return;
           }
@@ -399,7 +408,7 @@
     } catch (e) {
       itemsJSON = 'circular-' + Date.now();
     }
-    
+
     if (el._lastItems === itemsJSON) return;
     el._lastItems = itemsJSON;
 
@@ -423,7 +432,7 @@
       const fragment = el.content.cloneNode(true);
       const child = fragment.firstElementChild;
       const subState = createReactiveProxy({ [itemVar]: item, [indexVar]: index }, () => updateScope(findStateOwner(el)), state);
-      
+
       contexts.set(child, { state: subState, refs: {}, cleanup: [] });
       el.parentNode.insertBefore(fragment, el._marker);
       el._children.push(child);
@@ -435,7 +444,7 @@
   const updateScope = (scope, isRootCall = 1) => {
     const ctx = contexts.get(scope);
     if (!ctx) return;
-    
+
     currentSubscriber = scope;
     if (scope.tagName === 'TEMPLATE') {
       if (scope.hasAttribute('asok-if-ref')) updateIfDirective(scope, ctx.state);
@@ -461,19 +470,19 @@
         if (el.hasAttribute('asok-for-ref')) updateForDirective(el, ownerState);
         return;
       }
-      
+
       let parent = el.parentElement;
       while (parent && parent !== scope) {
         if (parent && parent.hasAttribute('asok-state-ref')) return;
         parent = parent.parentElement;
       }
-      
+
       const owner = findStateOwner(el);
       if (owner) {
         updateBindings(el, contexts.get(owner).state);
       }
     });
-    
+
     currentSubscriber = null;
     if (isRootCall && ctx._teleportedScopes) {
       ctx._teleportedScopes.forEach(t => updateScope(t, 0));
@@ -483,7 +492,7 @@
   // Create reactive proxy wrapper around state objects
   const createReactiveProxy = (obj, onChange, parentState) => {
     if (!obj || typeof obj !== 'object' || obj._isProxy) return obj;
-    
+
     return new Proxy(obj, {
       get(target, prop) {
         if (prop === '_isProxy') return true;
@@ -530,7 +539,7 @@
       const proxyState = createReactiveProxy(rawState, () => updateScope(el));
       contexts.set(el, { state: proxyState, cleanup: [], refs: {}, _teleportedScopes: [] });
       el._stateInitialized = 1;
-      
+
       if (el.hasAttribute('asok-init-ref')) {
         executeEventExpression(el.getAttribute('asok-init-ref'), proxyState, null, el);
       }
@@ -546,7 +555,7 @@
     const modelAttr = el.getAttribute('asok-model');
     const owner = findStateOwner(el);
     if (!modelAttr || !owner) return;
-    
+
     const state = contexts.get(owner).state;
     el._modelInitialized = 1;
 
@@ -575,16 +584,16 @@
               selectionStart = el.selectionStart;
               selectionEnd = el.selectionEnd;
               hasSelection = typeof selectionStart === 'number' && typeof selectionEnd === 'number';
-            } catch (e) {}
-            
+            } catch (e) { }
+
             el.value = displayVal;
-            
+
             if (hasSelection) {
               try {
                 el.setSelectionRange(selectionStart, selectionEnd);
-              } catch (e) {}
+              } catch (e) { }
             }
-            try { el.focus(); } catch (e) {}
+            try { el.focus(); } catch (e) { }
           } else {
             el.value = displayVal;
           }
@@ -604,7 +613,7 @@
 
     el.addEventListener('input', handleInput);
     el.addEventListener('change', handleInput);
-    
+
     contexts.get(owner).cleanup.push(() => {
       el.removeEventListener('input', handleInput);
       el.removeEventListener('change', handleInput);
@@ -616,13 +625,13 @@
     if (el._eventsInitialized) return;
     const owner = findStateOwner(el);
     if (!owner) return;
-    
+
     const state = contexts.get(owner).state;
     el._eventsInitialized = 1;
 
     Array.from(el.attributes).forEach(attr => {
       if (!attr.name.startsWith('asok-on-ref:')) return;
-      
+
       const eventName = attr.name.substring(12);
       const ref = attr.value;
       const [eventBase, ...modifiers] = eventName.split('.');
@@ -630,7 +639,7 @@
       const handler = (e) => {
         if (modifiers.includes('prevent')) e.preventDefault();
         if (modifiers.includes('stop')) e.stopPropagation();
-        
+
         const hasKeyMod = modifiers.some(m => ['enter', 'escape', 'space', 'tab'].includes(m));
         if (hasKeyMod) {
           const keyMatches = modifiers.some(m => {
@@ -640,7 +649,7 @@
           });
           if (!keyMatches) return;
         }
-        
+
         executeEventExpression(ref, state, e, el);
       };
 
@@ -655,7 +664,7 @@
       } else {
         const debounceMod = modifiers.find(m => m.startsWith('debounce'));
         const delay = debounceMod ? parseInt(debounceMod.split('-')[1]) || 300 : 0;
-        
+
         if (delay) {
           let timeoutId;
           const debouncedHandler = (e) => {
@@ -680,7 +689,7 @@
     const trigger = el.getAttribute('asok-fetch-on') || 'load';
     const owner = findStateOwner(el);
     if (!url || !owner) return;
-    
+
     const state = contexts.get(owner).state;
     el._fetchInitialized = 1;
 
@@ -715,7 +724,7 @@
     const trigger = el.getAttribute('asok-fetch-on') || 'click';
     const owner = findStateOwner(el);
     if (!ref || !owner) return;
-    
+
     const state = contexts.get(owner).state;
     el._fetchAsyncInitialized = 1;
 
@@ -756,7 +765,7 @@
         ctx.cleanup.forEach(fn => {
           try {
             fn();
-          } catch (e) {}
+          } catch (e) { }
         });
         ctx.cleanup = [];
       }
@@ -790,15 +799,34 @@
     init(root);
   };
 
+  const isInsideUnhydratedIsland = (el) => {
+    let current = el;
+    while (current && current !== document.documentElement) {
+      if (current.hasAttribute('client:load') || current.hasAttribute('client:visible') || current.hasAttribute('client:idle')) {
+        if (!current.__asokIslandInited) {
+          return true;
+        }
+      }
+      current = current.parentElement;
+    }
+    return false;
+  };
+
   // Main compilation and initialization
   const init = (root = document) => {
     // Islands check
     if (root === document) {
       const islands = Array.from(document.querySelectorAll('[client\\:load], [client\\:visible], [client\\:idle]'));
       if (islands.length > 0) {
-        // Handle cloaking globally immediately
-        document.removeAttribute('asok-cloak');
-        document.querySelectorAll('[asok-cloak]').forEach(e => e.removeAttribute('asok-cloak'));
+        // Handle cloaking globally immediately for non-island elements
+        if (document.documentElement) {
+          document.documentElement.removeAttribute('asok-cloak');
+        }
+        document.querySelectorAll('[asok-cloak]').forEach(e => {
+          if (!isInsideUnhydratedIsland(e)) {
+            e.removeAttribute('asok-cloak');
+          }
+        });
         document.querySelectorAll('script').forEach(s => s.dataset.run = '1');
 
         const initIsland = (island) => {
@@ -832,18 +860,18 @@
             }
           }
         });
-        return;
       }
     }
 
     const elements = root === document ? document.querySelectorAll('*') : [root, ...root.querySelectorAll('*')];
-    
+
     // First pass: scan structures and state scopes
     elements.forEach(el => {
+      if (isInsideUnhydratedIsland(el)) return;
       if (el.hasAttribute('asok-state-ref')) {
         initState(el);
       }
-      
+
       // Handle refs registry
       if (el.hasAttribute('asok-ref') && !el._refInitialized) {
         const owner = findStateOwner(el);
@@ -862,7 +890,7 @@
           const ownerCtx = contexts.get(owner);
           const fragment = el.content.cloneNode(true);
           const child = fragment.firstElementChild;
-          
+
           contexts.set(child, {
             state: ownerCtx.state,
             refs: ownerCtx.refs,
@@ -870,7 +898,7 @@
             _teleportedScopes: []
           });
           ownerCtx._teleportedScopes.push(child);
-          
+
           target.appendChild(fragment);
           if (window.Asok && window.Asok.init) window.Asok.init(child); else init(child);
           el._teleportInitialized = 1;
@@ -891,6 +919,7 @@
 
     // Second pass: initialize bindings and events
     elements.forEach(el => {
+      if (isInsideUnhydratedIsland(el)) return;
       const owner = findStateOwner(el);
       if (owner) {
         updateBindings(el, contexts.get(owner).state);
@@ -913,9 +942,15 @@
     const cleanRoot = root === document ? document : root;
     if (cleanRoot.querySelectorAll) {
       if (cleanRoot.hasAttribute && cleanRoot.hasAttribute('asok-cloak')) {
-        cleanRoot.removeAttribute('asok-cloak');
+        if (!isInsideUnhydratedIsland(cleanRoot)) {
+          cleanRoot.removeAttribute('asok-cloak');
+        }
       }
-      cleanRoot.querySelectorAll('[asok-cloak]').forEach(e => e.removeAttribute('asok-cloak'));
+      cleanRoot.querySelectorAll('[asok-cloak]').forEach(e => {
+        if (!isInsideUnhydratedIsland(e)) {
+          e.removeAttribute('asok-cloak');
+        }
+      });
     }
     if (root === document) {
       document.querySelectorAll('script').forEach(s => s.dataset.run = '1');
@@ -948,7 +983,7 @@
     forceInit,
     cleanupOld,
     resetFlags,
-    version: '1.0.0',
+    version: '2.0.0',
     w: contexts
   };
   window.Asok.store = globalStore;

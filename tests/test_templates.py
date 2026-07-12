@@ -393,3 +393,142 @@ def test_tilde_string_concatenation():
     tpl = '{% set name = "User #" ~ user.id %}{{ name }}'
     res = render_template_string(tpl, {"user": {"id": 42}})
     assert res == "User #42"
+
+
+def test_template_error_line_number_and_filename():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = "Line 1\nLine 2\n{{ 1 / 0 }}\nLine 4"
+
+    with pytest.raises(TemplateError) as exc_info:
+        render_template_string(tpl, {}, template_name="user_profile.html")
+
+    error_msg = str(exc_info.value)
+    assert "user_profile.html" in error_msg
+    assert "line 3" in error_msg
+    assert "division by zero" in error_msg
+
+
+def test_template_error_debug_html_rendering():
+    from asok.core import Asok
+    from asok.request import Request
+
+    app = Asok()
+    app.config["DEBUG"] = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+    req = Request(environ)
+    req.params["foo_variable"] = "bar_value"
+
+    try:
+        # Cause a rendering error
+        render_template_string("Hello {{ 1 / 0 }}", {}, template_name="test.html")
+    except Exception as e:
+        html_response = app._handle_template_error(req, e)
+
+    assert "test.html" in html_response
+    assert "Template rendering failed" in html_response
+    assert "Traceback" in html_response
+    assert "foo_variable" in html_response
+    assert "bar_value" in html_response
+
+
+def test_unclosed_template_delimiter_error():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = """{% block title %}Welcome{% endblock %}
+
+{% block main %}
+    <div>
+        <p>Bonjour {{ name </p>
+    </div>
+{% endblock %}"""
+
+    with pytest.raises(TemplateError) as exc_info:
+        render_template_string(tpl, {}, template_name="home.html")
+
+    error_msg = str(exc_info.value)
+    assert "home.html" in error_msg
+    assert "Unclosed template expression" in error_msg
+    assert "line 5" in error_msg
+
+
+def test_shared_class_and_module():
+    import os
+
+    from asok.core import Asok
+    from asok.request import Request
+
+    class CustomModel:
+        def __init__(self, request):
+            self.request = request
+            self.val = "instantiated"
+
+    app = Asok()
+    # Share a class definition and a module
+    app.share(CustomModel=CustomModel, os_module=os)
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+    req = Request(environ)
+
+    # Resolving CustomModel class should return the class definition itself,
+    # not an auto-instantiated instance, even though its __init__ has "request".
+    resolved_model = req.shared("CustomModel")
+    assert resolved_model is CustomModel
+
+    # Resolving os should return the module itself
+    resolved_os = req.shared("os_module")
+    assert resolved_os is os
+
+
+def test_dynamic_shared_callables():
+    from asok.core import Asok
+    from asok.request import Request
+
+    db_data = ["Alice", "Bob"]
+
+    def get_names():
+        return list(db_data)
+
+    app = Asok()
+    # Share:
+    # 1. Zero-argument callable (should be executed per-request)
+    # 2. Request-argument callable (should be executed per-request)
+    # 3. Callable with required args (should NOT be auto-executed)
+    app.share(
+        names_zero=get_names,
+        names_req=lambda request: list(db_data),
+        helper_with_args=lambda x: f"hello-{x}",
+    )
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+
+    # Request 1
+    req1 = Request(environ)
+    assert req1.shared("names_zero") == ["Alice", "Bob"]
+    assert req1.shared("names_req") == ["Alice", "Bob"]
+    assert callable(req1.shared("helper_with_args"))
+
+    # Update database data
+    db_data.append("Charlie")
+
+    # Request 2 (simulating a new request/page load)
+    req2 = Request(environ)
+    assert req2.shared("names_zero") == ["Alice", "Bob", "Charlie"]
+    assert req2.shared("names_req") == ["Alice", "Bob", "Charlie"]

@@ -48,6 +48,193 @@ class _DefaultErrorBody(str):
     __slots__ = ()
 
 
+def _format_compiled_code(error_msg: str) -> tuple[str, str]:
+    import html
+
+    if "Compiled Code:" not in error_msg:
+        return error_msg, ""
+
+    parts = error_msg.split("Compiled Code:\n", 1)
+    error_msg_clean = parts[0].strip()
+    code_block = parts[1].split("\n\nContext keys:", 1)[0].strip()
+    # Add line numbers to compiled code block
+    lines = code_block.split("\n")
+    numbered_lines = []
+    for i, line in enumerate(lines, 1):
+        numbered_lines.append(
+            f'<span style="color:#888; user-select:none; margin-right: 15px;">{i:3d}</span>{html.escape(line)}'
+        )
+    numbered_code = "\n".join(numbered_lines)
+    compiled_code_section = f"""
+    <div style="margin-top: 30px;">
+        <h3 style="color: #cbd5e1; font-size: 1.1rem; border-bottom: 1px solid #334155; padding-bottom: 8px; margin-bottom: 12px;">Compiled Python Code</h3>
+        <pre style="background: #0f172a; padding: 15px; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.9rem; line-height: 1.5; color: #38bdf8; border: 1px solid #1e293b;">{numbered_code}</pre>
+    </div>
+    """
+    return error_msg_clean, compiled_code_section
+
+
+def _render_debug_template_error_page(request: Request, e: Exception) -> str:
+    import html
+
+    # In DEBUG mode, render a rich, user-friendly HTML error report
+    tb_html = html.escape(traceback.format_exc())
+    error_msg = html.escape(str(e))
+
+    # Parse context variables keys and values (safely stringified)
+    ctx_details = []
+    for k, v in sorted(request.params.items()):
+        try:
+            v_str = html.escape(repr(v))
+        except Exception:
+            v_str = "[unrenderable]"
+        ctx_details.append(
+            f"<tr><td><strong>{html.escape(k)}</strong></td><td><code>{v_str}</code></td></tr>"
+        )
+    ctx_table = "".join(ctx_details)
+
+    ctx_section = (
+        f"<table><thead><tr><th>Variable</th><th>Value</th></tr></thead><tbody>{ctx_table}</tbody></table>"
+        if ctx_table
+        else "<p style='color: #9ca3af; font-style: italic;'>No context parameters set.</p>"
+    )
+
+    error_msg_clean, compiled_code_section = _format_compiled_code(error_msg)
+
+    html_body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Template Error — Asok Debugger</title>
+    <style>
+        body {{
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #0b0f19;
+            color: #f1f5f9;
+            margin: 0;
+            padding: 40px 20px;
+            line-height: 1.5;
+        }}
+        .container {{
+            max-width: 900px;
+            margin: 0 auto;
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }}
+        .header {{
+            background: #ef4444;
+            color: #fff;
+            padding: 24px 32px;
+            border-bottom: 1px solid #dc2626;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .content {{
+            padding: 32px;
+        }}
+        .error-message {{
+            background: #271c1c;
+            border: 1px solid #7f1d1d;
+            color: #fca5a5;
+            padding: 16px 20px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin-bottom: 24px;
+            word-break: break-word;
+        }}
+        .section-title {{
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #e2e8f0;
+            margin: 24px 0 12px 0;
+            border-bottom: 1px solid #374151;
+            padding-bottom: 8px;
+        }}
+        pre {{
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.9rem;
+            color: #cbd5e1;
+            border: 1px solid #334155;
+            margin: 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }}
+        th, td {{
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid #1f2937;
+        }}
+        th {{
+            background: #1f2937;
+            color: #9ca3af;
+            font-weight: 600;
+        }}
+        tr:hover td {{
+            background: #1e293b;
+        }}
+        code {{
+            font-family: monospace;
+            color: #a855f7;
+            background: #2e1065;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }}
+        .badge {{
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: #f87171;
+            color: #7f1d1d;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><span class="badge">Error</span> Template rendering failed</h1>
+        </div>
+        <div class="content">
+            <div class="error-message">
+                {error_msg_clean}
+            </div>
+
+            <h3 class="section-title">Traceback</h3>
+            <pre>{tb_html}</pre>
+
+            {compiled_code_section}
+
+            <h3 class="section-title">Context Variables (Request Params)</h3>
+            {ctx_section}
+        </div>
+    </div>
+</body>
+</html>
+"""
+    return html_body
+
+
 class WSGIMixin:
     """Mixin class for Asok that handles the main WSGI entry point, middleware execution,
     static file serving, hot reload checks, and error rendering.
@@ -636,7 +823,9 @@ class WSGIMixin:
             "static": req.static,
             "get_flashed_messages": req.get_flashed_messages,
         }
-        return render_template_string(content_raw, tpl_ctx, root_dir=self._tpl_root)
+        return render_template_string(
+            content_raw, tpl_ctx, root_dir=self._tpl_root, template_name=page_file
+        )
 
     @staticmethod
     def _resolve_if_coro(req: Request, r: Any) -> Any:
@@ -816,12 +1005,11 @@ class WSGIMixin:
 
     def _handle_template_error(self, request: Request, e: Exception) -> Any:
         request.status = "500 Internal Server Error"
-        if self.config.get("DEBUG"):
-            msg = f"Template Error: {e}"
-        else:
+        if not self.config.get("DEBUG"):
             logger.error("Template rendering error: %s", str(e))
             msg = "Template Error: An error occurred while rendering the template."
-        return self._render_error_page(request, 500, message=msg)
+            return self._render_error_page(request, 500, message=msg)
+        return _render_debug_template_error_page(request, e)
 
     def _handle_unknown_exception(self, request: Request, e: Exception) -> Any:
         error_id = str(uuid.uuid4())[:8]
@@ -831,15 +1019,18 @@ class WSGIMixin:
             str(e),
             traceback.format_exc(),
         )
-        # SECURITY: never reveal traces; surface only the error ID to the client.
-        body = self._render_error_page(
-            request,
-            500,
-            message=(
-                f"An unexpected error occurred. Error ID: {error_id}. "
-                "Please contact support with this ID if the problem persists."
-            ),
-        )
+        if self.config.get("DEBUG"):
+            body = self._render_debug_exception_page(request, e)
+        else:
+            # SECURITY: never reveal traces; surface only the error ID to the client.
+            body = self._render_error_page(
+                request,
+                500,
+                message=(
+                    f"An unexpected error occurred. Error ID: {error_id}. "
+                    "Please contact support with this ID if the problem persists."
+                ),
+            )
         body = self._inject_assets(body, request, getattr(request, "nonce", ""))
         raise _FinalResponseException(body, 500)
 
@@ -1271,10 +1462,13 @@ class WSGIMixin:
             str(e),
             traceback.format_exc(),
         )
-        # SECURITY: never expose traces to the client; logs hold details.
-        error_page = self._render_error_page(
-            request, 500, message="An internal error occurred."
-        )
+        if self.config.get("DEBUG"):
+            error_page = self._render_debug_exception_page(request, e)
+        else:
+            # SECURITY: never expose traces to the client; logs hold details.
+            error_page = self._render_error_page(
+                request, 500, message="An internal error occurred."
+            )
         headers = [("Content-Type", "text/html; charset=utf-8")]
         if request is not None and environ is not None:
             headers += self._cookie_headers(request, environ)

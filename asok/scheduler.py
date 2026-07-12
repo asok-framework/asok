@@ -1,3 +1,10 @@
+"""
+Task scheduling and cron worker manager for the Asok framework.
+
+Manages one-shot intervals, recurring background triggers,
+and Redis-backed task queuing schedules.
+"""
+
 from __future__ import annotations
 
 import logging

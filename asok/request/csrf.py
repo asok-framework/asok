@@ -14,8 +14,11 @@ class CsrfMixin:
 
     def csrf_input(self: Any) -> SafeString:
         """Return a hidden input field containing the CSRF token."""
+        import html
+
+        escaped_token = html.escape(self.csrf_token_value or "")
         return SafeString(
-            f'<input type="hidden" name="csrf_token" value="{self.csrf_token_value}" />'
+            f'<input type="hidden" name="csrf_token" value="{escaped_token}" />'
         )
 
     def _verify_csrf_origin(self: Any) -> None:
@@ -80,13 +83,15 @@ class CsrfMixin:
 
     def _extract_csrf_token(self: Any) -> Optional[str]:
         """Extract CSRF token from header, form, or JSON body."""
-        # Priority: 1. Header (most reliable for AJAX/SPA), 2. Form, 3. JSON
         token = self._get_csrf_header_token()
-        if not token:
-            token = self.form.get("csrf_token")
-        if not token:
-            token = self._get_csrf_json_token()
-        return token
+        if token:
+            return token
+
+        form_token = self.form.get("csrf_token")
+        if form_token and "csrf_token" not in getattr(self, "args", {}):
+            return form_token
+
+        return self._get_csrf_json_token()
 
     def _verify_token_match(self: Any, token: Optional[str]) -> None:
         expected = str(self.csrf_token_value or "")

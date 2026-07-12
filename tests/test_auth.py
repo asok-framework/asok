@@ -199,3 +199,121 @@ class TestBearerToken:
         token = BearerToken.create(req_a, user_id=1)
         result = BearerToken.verify(req_b, token)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# MagicLink
+# ---------------------------------------------------------------------------
+
+
+class TestMagicLink:
+    def test_magic_link_expiry_text_hours(self, monkeypatch):
+        """Magic link expiration text correctly formats hours."""
+        req = make_request()
+        app = req.environ["asok.app"]
+        app.config["MAGIC_LINK_TTL"] = 7200  # 2 hours
+        app.config["APP_URL"] = "http://localhost"
+
+        sent_emails = []
+        monkeypatch.setattr(
+            "asok.mail.Mail.send", lambda **kwargs: sent_emails.append(kwargs)
+        )
+
+        from asok.auth import MagicLink
+
+        MagicLink.send(req, "test@example.com")
+
+        assert len(sent_emails) == 1
+        assert "2 hours" in sent_emails[0]["body"]
+        assert "2 hours" in sent_emails[0]["html"]
+
+    def test_magic_link_expiry_text_minutes(self, monkeypatch):
+        """Magic link expiration text correctly formats minutes."""
+        req = make_request()
+        app = req.environ["asok.app"]
+        app.config["MAGIC_LINK_TTL"] = 1800  # 30 minutes
+        app.config["APP_URL"] = "http://localhost"
+
+        sent_emails = []
+        monkeypatch.setattr(
+            "asok.mail.Mail.send", lambda **kwargs: sent_emails.append(kwargs)
+        )
+
+        from asok.auth import MagicLink
+
+        MagicLink.send(req, "test@example.com")
+
+        assert len(sent_emails) == 1
+        assert "30 minutes" in sent_emails[0]["body"]
+        assert "30 minutes" in sent_emails[0]["html"]
+
+    def test_magic_link_host_validation_valid_debug(self, monkeypatch):
+        """Magic link allows localhost/127.0.0.1 in debug mode when APP_URL is unset."""
+        req = make_request()
+        app = req.environ["asok.app"]
+        app.config["DEBUG"] = True
+        app.config["APP_URL"] = None
+        req.environ["HTTP_HOST"] = "127.0.0.1:8000"
+
+        sent_emails = []
+        monkeypatch.setattr(
+            "asok.mail.Mail.send", lambda **kwargs: sent_emails.append(kwargs)
+        )
+
+        from asok.auth import MagicLink
+
+        link = MagicLink.send(req, "test@example.com")
+        assert "http://127.0.0.1:8000" in link
+
+    def test_magic_link_host_validation_invalid_debug(self, monkeypatch):
+        """Magic link rejects unrecognized host headers in debug mode to prevent Host header injection."""
+        import pytest
+
+        req = make_request()
+        app = req.environ["asok.app"]
+        app.config["DEBUG"] = True
+        app.config["APP_URL"] = None
+        req.environ["HTTP_HOST"] = "evil-domain.com"
+
+        from asok.auth import MagicLink
+
+        with pytest.raises(ValueError, match="Unrecognized Host header"):
+            MagicLink.send(req, "test@example.com")
+
+    def test_magic_link_host_validation_ipv6_debug(self, monkeypatch):
+        """Magic link accepts bracketed IPv6 localhost hosts in debug mode."""
+        req = make_request()
+        app = req.environ["asok.app"]
+        app.config["DEBUG"] = True
+        app.config["APP_URL"] = None
+        req.environ["HTTP_HOST"] = "[::1]:8000"
+
+        sent_emails = []
+        monkeypatch.setattr(
+            "asok.mail.Mail.send", lambda **kwargs: sent_emails.append(kwargs)
+        )
+
+        from asok.auth import MagicLink
+
+        link = MagicLink.send(req, "test@example.com")
+        assert "http://[::1]:8000" in link
+
+    def test_magic_link_expiry_text_seconds(self, monkeypatch):
+        """Magic link expiration text correctly formats seconds."""
+        req = make_request()
+        app = req.environ["asok.app"]
+        app.config["MAGIC_LINK_TTL"] = 30
+        app.config["APP_URL"] = "http://localhost"
+
+        sent_emails = []
+        monkeypatch.setattr(
+            "asok.mail.Mail.send", lambda **kwargs: sent_emails.append(kwargs)
+        )
+
+        from asok.auth import MagicLink
+
+        MagicLink.send(req, "test@example.com")
+
+        assert len(sent_emails) == 1
+        assert "30 seconds" in sent_emails[0]["body"]
+        assert "30 seconds" in sent_emails[0]["html"]

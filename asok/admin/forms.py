@@ -187,8 +187,6 @@ def _collect_fallback_morph_models(current_model_name: str) -> list[tuple[str, A
     return out
 
 
-
-
 def _add_config_targets(
     commentable: list[tuple[str, Any]], seen: set[str], config_targets: tuple[str, ...]
 ) -> None:

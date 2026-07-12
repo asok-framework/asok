@@ -1024,7 +1024,9 @@ def render_wysiwyg(field: Any, val: str, merged: dict[str, Any]) -> str:
     # before any save) or values written through non-admin paths (Model.create, GraphQL,
     # public forms). sanitize_html() keeps legitimate WYSIWYG markup so contenteditable
     # renders correctly, while stripping <script>, on* handlers and javascript: URIs.
-    html_out += f"<div{_render_attrs(editor_attrs)}>{sanitize_html(current_content)}</div>"
+    html_out += (
+        f"<div{_render_attrs(editor_attrs)}>{sanitize_html(current_content)}</div>"
+    )
 
     # Hidden input: esc() in the attribute is correct — browsers decode HTML entities
     # before form submission, so the server receives the original HTML string.

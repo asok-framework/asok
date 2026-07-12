@@ -1,3 +1,10 @@
+"""
+Routing and request resolution mixin for the Asok framework.
+
+Handles file-based routing, API versioning, parameters matching,
+and route compilation.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -9,6 +16,8 @@ logger = logging.getLogger("asok.core")
 
 
 class RoutingMixin:
+    """Mixin class that implements file-based routing and request dispatching."""
+
     def _should_rewrite_version(self, parts: list[str], request: Optional[Any]) -> bool:
         if not request or len(parts) < 2:
             return False
@@ -51,10 +60,6 @@ class RoutingMixin:
     ) -> tuple[Optional[str], dict[str, Any]]:
         """Resolve a list of URL segments to a page file and captured parameters."""
         debug = self.config.get("DEBUG", False)
-
-        # BUG-2 fix: cache key must be built from the *original* parts (before
-        # API version rewriting), otherwise a versioned lookup can poison the
-        # cache for subsequent non-versioned requests to the same path.
         cache_key_parts = list(parts)
 
         if not debug:

@@ -26,8 +26,7 @@ def test_totp_encryption_roundtrip():
 
     # Verify tampered ciphertext fails integrity check
     parts = encrypted.split("$")
-    # Tamper the ciphertext part
-    parts[2] = parts[2][:-2] + "00"
+    parts[2] = "f" + parts[2][1:] if parts[2][0] != "f" else "0" + parts[2][1:]
     tampered = "$".join(parts)
     assert _decrypt_totp_secret(tampered, master_key) is None
 

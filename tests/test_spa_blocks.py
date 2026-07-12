@@ -1,5 +1,7 @@
 """Test SPA block rendering improvements."""
 
+from asok.request import Request
+
 
 def test_blocks_method_spa_vs_normal():
     """Test that blocks() method handles SPA and normal requests differently."""
@@ -32,6 +34,32 @@ def test_blocks_method_spa_vs_normal():
     assert request_spa.environ.get("HTTP_X_BLOCK") == "main,sidebar"
 
     print("✅ blocks() method tests passed")
+
+
+def test_stream_blocks_accepts_hash_prefix(monkeypatch):
+    """Streaming block rendering should normalize a leading '#' like html rendering does."""
+    request = Request(
+        {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": "/",
+            "wsgi.input": None,
+            "HTTP_X_BLOCK": "#main,sidebar",
+        }
+    )
+
+    monkeypatch.setattr(request, "_resolve_template", lambda filepath: ("tpl", "root"))
+    monkeypatch.setattr(
+        request,
+        "_yield_block_item",
+        lambda name, tpl_content, tpl_root, is_spa_request, **context: iter([name]),
+    )
+    monkeypatch.setattr(
+        request, "_yield_scoped_assets", lambda is_spa_request: iter(())
+    )
+
+    result = list(request._stream_blocks("page.html", "#main,sidebar"))
+
+    assert result == ["main", "sidebar"]
 
 
 if __name__ == "__main__":

@@ -40,9 +40,9 @@ def _build_html_attrs(attrs: dict[str, Any]) -> str:
 
 
 def _decode_base64_filter(value: Any, **attrs: Any) -> SafeString:
-    """Décode une chaîne base64 (signature, image) en balise <img>.
+    """Decode a base64 string (signature, image) into an <img> tag.
 
-    Filtre de template pour afficher des images base64.
+    Template filter to display base64 images.
 
     Usage:
         {{ user.signature | decode_base64 }}

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 
+from ..component import _BUILD_SIGNING_KEYS
 from ..utils.minify import minify_html
 from .style import Style
 
@@ -98,7 +99,7 @@ def _build_temporary_app(build_root: str):
     from ..core.asok import Asok
 
     if "SECRET_KEY" not in os.environ:
-        os.environ["SECRET_KEY"] = "static-build-key-temporary"
+        os.environ["SECRET_KEY"] = _BUILD_SIGNING_KEYS[1]
     return Asok(root_dir=build_root)
 
 
@@ -208,6 +209,9 @@ def _run_tailwind_compile(root: str, build_root: str, bin_path: str) -> None:
         return
     if os.path.exists(input_path):
         os.remove(input_path)
+    min_path = os.path.join(build_root, "src/partials/css/base.min.css")
+    if os.path.exists(min_path):
+        os.remove(min_path)
     Style.success("Tailwind CSS optimized and source removed.")
 
 
@@ -261,7 +265,43 @@ def _minify_one_asset(
 ) -> None:
     path = os.path.join(dir_path, filename)
     rel_path = os.path.relpath(path, build_root)
-    print(f"  {Style.DIM}Optimizing {rel_path}...{Style.RESET}")
+
+    is_static = _is_static_assets_dir(dir_path)
+    is_min = filename.endswith(".min.js") or filename.endswith(".min.css")
+
+    if is_static and not is_min:
+        _compile_static_asset(bin_path, path, dir_path, filename, root, rel_path)
+    else:
+        _minify_inplace_asset(bin_path, path, root, filename, rel_path)
+
+
+def _compile_static_asset(
+    bin_path: str,
+    path: str,
+    dir_path: str,
+    filename: str,
+    root: str,
+    rel_path: str,
+) -> None:
+    base, ext = os.path.splitext(filename)
+    output_filename = f"{base}.min{ext}"
+    output_path = os.path.join(dir_path, output_filename)
+    print(f"  {Style.DIM}Optimizing {rel_path} -> {output_filename}...{Style.RESET}")
+    res = subprocess.run(
+        [bin_path, path, "--minify", f"--outfile={output_path}", "--allow-overwrite"],
+        cwd=root,
+        capture_output=True,
+    )
+    if res.returncode == 0:
+        _safe_remove(path)
+    else:
+        Style.warn(f"Minify failed for {filename}: {res.stderr.decode()}")
+
+
+def _minify_inplace_asset(
+    bin_path: str, path: str, root: str, filename: str, rel_path: str
+) -> None:
+    print(f"  {Style.DIM}Optimizing {rel_path} (in-place)...{Style.RESET}")
     res = subprocess.run(
         [bin_path, path, "--minify", f"--outfile={path}", "--allow-overwrite"],
         cwd=root,
@@ -419,7 +459,9 @@ def _write_production_env(build_root: str) -> None:
     with open(env_prod, "w") as f:
         f.write("DEBUG=false\n")
         f.write("ASOK_BUILD=true\n")
-        f.write("SECRET_KEY=change-me-for-production\n")
+        f.write(
+            "SECRET_KEY=change-me-to-a-very-secure-production-secret-key-32-chars\n"
+        )
         f.write("ALLOWED_HOSTS=*\n")
         f.write("IMAGE_OPTIMIZATION=true\n")
 
@@ -435,6 +477,7 @@ def _ssg_stage(build_root: str) -> None:
         Style.warn("WSGI entry point not found in distribution; skipping SSG.")
         return
     app.root_dir = os.path.abspath(build_root)
+    app.config["DEBUG"] = False
     app.pre_generate_ssg_site()
     Style.success("Static site pre-rendering complete!")
 
@@ -443,12 +486,27 @@ def _import_built_wsgi_app(build_root: str):
     import importlib.util as _ilu
     import sys
 
-    os.environ["SECRET_KEY"] = "static-build-key-temporary"
-    wsgi_path = _find_wsgi_entry(build_root)
-    if wsgi_path is None:
-        return None
-    sys.path.insert(0, build_root)
+    orig_debug = os.environ.get("DEBUG")
+    orig_secret = os.environ.get("SECRET_KEY")
+
+    os.environ["DEBUG"] = "false"
+    # Sign SSG-prerendered state with the real production SECRET_KEY when it is
+    # provided at build time, so live components hydrate against the running
+    # server's key. Fall back to a public placeholder only when none is set —
+    # in that case SSG live components will NOT hydrate in production (secure
+    # by default), which we warn about below.
+    if not os.environ.get("SECRET_KEY"):
+        os.environ["SECRET_KEY"] = _BUILD_SIGNING_KEYS[0]
+        Style.warn(
+            "No SECRET_KEY set at build time. SSG-prerendered live components "
+            "will not hydrate in production. Export your production SECRET_KEY "
+            "before building to sign pre-rendered state with it."
+        )
     try:
+        wsgi_path = _find_wsgi_entry(build_root)
+        if wsgi_path is None:
+            return None
+        sys.path.insert(0, build_root)
         spec = _ilu.spec_from_file_location("wsgi_prod", wsgi_path)
         mod = _ilu.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -456,6 +514,19 @@ def _import_built_wsgi_app(build_root: str):
     finally:
         if sys.path and sys.path[0] == build_root:
             sys.path.pop(0)
+        _restore_env(orig_debug, orig_secret)
+
+
+def _restore_env(orig_debug: str | None, orig_secret: str | None) -> None:
+    if orig_debug is not None:
+        os.environ["DEBUG"] = orig_debug
+    elif "DEBUG" in os.environ:
+        del os.environ["DEBUG"]
+
+    if orig_secret is not None:
+        os.environ["SECRET_KEY"] = orig_secret
+    elif "SECRET_KEY" in os.environ:
+        del os.environ["SECRET_KEY"]
 
 
 def _find_wsgi_entry(build_root: str):

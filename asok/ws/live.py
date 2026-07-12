@@ -1,3 +1,10 @@
+"""
+WebSocket Live components connection handler for the Asok framework.
+
+Manages rendering updates, operational dispatches (join, call, sync),
+and session-persisted component states synchronization.
+"""
+
 from __future__ import annotations
 
 import inspect
@@ -5,7 +12,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from ..component import COMPONENTS_REGISTRY
 from ..utils.minify import minify_js
@@ -198,11 +205,30 @@ def _can_broadcast_to_room(conn, room) -> bool:
 def _handle_leave(server, conn, data, cid) -> None:
     # KEEP session state for persistence across SPA navigation; only drop
     # the in-memory component snapshot held on the connection.
-    if hasattr(conn, "_live_comps") and cid in conn._live_comps:
+    if cid in conn._live_comps:
         del conn._live_comps[cid]
 
 
 # ── Component lifecycle: join / call / sync ────────────────────────
+
+
+def _try_restore_from_session(server, conn, cls, cid) -> Optional[str]:
+    if not conn.session:
+        return None
+    session_state = conn.session.get(f"_comp_{cid}")
+    if not session_state:
+        return None
+
+    req = _build_pseudo_request(server, conn)
+    from ..context import request_context
+
+    with request_context(req):
+        comp = _restore_component_instance(cls, session_state, server.secret_key, cid)
+        if comp:
+            conn._live_comps[cid] = (cls, session_state)
+            _send_render(server, conn, comp, cid)
+            return session_state
+    return None
 
 
 def _handle_join(server, conn, data, cid) -> None:
@@ -213,8 +239,6 @@ def _handle_join(server, conn, data, cid) -> None:
     cls = COMPONENTS_REGISTRY.get(comp_name)
     if not cls:
         return
-    if not hasattr(conn, "_live_comps"):
-        conn._live_comps = {}
     # SECURITY: cap live components per connection to bound memory.
     if len(conn._live_comps) >= 100:
         logger.warning(
@@ -222,6 +246,12 @@ def _handle_join(server, conn, data, cid) -> None:
             len(conn._live_comps),
         )
         return
+
+    # Check if there is a persisted state in the session for this component.
+    # If so, restore it to preserve user state across refreshes on static (SSG) pages!
+    if _try_restore_from_session(server, conn, cls, cid):
+        return
+
     conn._live_comps[cid] = (cls, state_signed)
 
 
@@ -254,7 +284,7 @@ def _handle_call_or_sync(server, conn, data, cid) -> None:
     from ..context import request_context
 
     with request_context(req):
-        comp = cls._from_signed_state(state_signed, server.secret_key, cid=cid)
+        comp = _restore_component_instance(cls, state_signed, server.secret_key, cid)
         if not comp:
             return
         if conn.session:
@@ -267,8 +297,17 @@ def _handle_call_or_sync(server, conn, data, cid) -> None:
         _send_render(server, conn, comp, cid)
 
 
+def _restore_component_instance(
+    cls, state_signed: str, secret_key: str, cid: str
+) -> Any:
+    # State is authenticated solely by the running server's SECRET_KEY. SSG
+    # pre-rendered state is signed at build time with that same key (provide
+    # SECRET_KEY at build), so no public/build-key fallback is trusted here.
+    return cls._from_signed_state(state_signed, secret_key, cid=cid)
+
+
 def _has_live_component(conn, cid) -> bool:
-    return hasattr(conn, "_live_comps") and cid in conn._live_comps
+    return cid in conn._live_comps
 
 
 def _build_pseudo_request(server, conn):

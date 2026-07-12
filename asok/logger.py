@@ -1,3 +1,10 @@
+"""
+Structured logging system for the Asok framework.
+
+Provides standard log formatters, request tracing attachments,
+and production-ready JSON log formatters.
+"""
+
 from __future__ import annotations
 
 import json as _json
@@ -14,6 +21,7 @@ class _JSONFormatter(logging.Formatter):
     """Structured JSON log formatter for production environments."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format the log record as a structured JSON string."""
         entry = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level": record.levelname,

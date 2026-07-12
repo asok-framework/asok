@@ -1,3 +1,9 @@
+/*
+ *  Asok Transitions - Transitions support for Asok framework
+ *  author: Asok Team
+ *  license: MIT
+ *  version: 2.0.0
+*/
 (function () {
   window.Asok = window.Asok || {};
 
@@ -9,23 +15,17 @@
         return [];
       }
       if (m === "none") return [];
+      // Content passed to swap is server-rendered (same-origin, trusted), so it
+      // is inserted as-is to preserve scoped scripts/styles/forms. Sanitization
+      // is reserved for genuinely untrusted values (asok-html, WYSIWYG input).
       if (m === "outerHTML" || m === "replaceWith") {
-        // SECURITY: Sanitize HTML before creating fragment
-        const safeHtml = window.AsokSecurity && window.AsokSecurity.sanitizeHtml
-          ? window.AsokSecurity.sanitizeHtml(h)
-          : h;
-        const fragment = document.createRange().createContextualFragment(safeHtml);
+        const fragment = document.createRange().createContextualFragment(h);
         const newNodes = Array.from(fragment.childNodes);
         t.replaceWith(fragment);
         return newNodes;
       }
       if (m === "innerHTML") {
-        // SECURITY: Sanitize HTML before setting innerHTML
-        if (window.AsokSecurity && window.AsokSecurity.sanitizeHtml) {
-          t.innerHTML = window.AsokSecurity.sanitizeHtml(h);
-        } else {
-          t.textContent = h;
-        }
+        t.innerHTML = h;
         return Array.from(t.childNodes);
       }
       const fragment = document.createRange().createContextualFragment(h);
@@ -53,8 +53,12 @@
       const duration = window.AsokSecurity && window.AsokSecurity.safeDuration
         ? window.AsokSecurity.safeDuration(rawDuration, 5000)
         : Math.min(rawDuration, 5000);
+      // Only override the CSS animation speed when a numeric duration is given,
+      // so each effect keeps its own default timing otherwise.
+      const durationSpecified = !isNaN(parseInt(parts[1], 10));
 
       // Start transition out
+      if (durationSpecified) target.style.transitionDuration = duration + 'ms';
       target.classList.add("asok-" + type + "-out");
       requestAnimationFrame(() => {
         target.classList.add("is-leaving");
@@ -73,6 +77,7 @@
           target.classList.add("is-entering");
           setTimeout(() => {
             target.classList.remove("asok-" + type + "-in", "is-entering");
+            if (durationSpecified) target.style.transitionDuration = '';
           }, duration);
         });
       }, duration);

@@ -13,8 +13,44 @@ from asok.templates import (
 )
 from asok.utils.image import is_image
 
-# Generic type for shared variable resolution
 T = TypeVar("T")
+
+
+def _is_required_param(p: Any, empty_sentinel: Any) -> bool:
+    if p.default is not empty_sentinel:
+        return False
+    import inspect
+
+    return p.kind not in (
+        inspect.Parameter.VAR_POSITIONAL,
+        inspect.Parameter.VAR_KEYWORD,
+    )
+
+
+def _has_request_param(params: list[Any]) -> bool:
+    return bool(params and params[0].name in ("request", "req"))
+
+
+def _has_no_required_params(params: list[Any]) -> bool:
+    import inspect
+
+    empty = inspect.Parameter.empty
+    return not any(_is_required_param(p, empty) for p in params)
+
+
+def _try_eval_callable(req: Any, val: Any) -> Any:
+    try:
+        import inspect
+
+        sig = inspect.signature(val)
+        params = list(sig.parameters.values())
+        if _has_request_param(params):
+            return val(req)
+        if _has_no_required_params(params):
+            return val()
+    except Exception:
+        pass
+    return val
 
 
 class TemplateMixin:
@@ -159,16 +195,6 @@ class TemplateMixin:
 
         return app_ref._shared[name], False
 
-    def _is_request_factory(self, val: Any) -> bool:
-        try:
-            import inspect
-
-            sig = inspect.signature(val)
-            params = list(sig.parameters.keys())
-            return bool(params and params[0] in ("request", "req"))
-        except Exception:
-            return False
-
     def _is_form_template(self, val: Any) -> bool:
         from asok.forms import Form
 
@@ -177,9 +203,20 @@ class TemplateMixin:
     def _resolve_shared_value(self, val: Any) -> Any:
         if self._is_form_template(val):
             return val._bind(self)
-        if callable(val) and self._is_request_factory(val):
-            return val(self)
-        return val
+        if not callable(val):
+            return val
+        return self._eval_shared_callable(val)
+
+    def _eval_shared_callable(self, val: Any) -> Any:
+        if isinstance(
+            val, type
+        ):  # Avoid treating class definitions (like models) as factories
+            return val
+        import types
+
+        if isinstance(val, types.ModuleType):  # Avoid treating modules as factories
+            return val
+        return _try_eval_callable(self, val)
 
     def shared(
         self: Any, name: str, expected_type: Optional[Type[T]] = None
@@ -318,10 +355,18 @@ class TemplateMixin:
             )
         return "".join(parts)
 
+    def _parse_block_names(self: Any, block_header: str) -> list[str]:
+        names = []
+        for raw_name in block_header.split(","):
+            name = raw_name.strip().lstrip("#")
+            if name:
+                names.append(name)
+        return names
+
     def _render_block_header(
         self: Any, filepath: str, block_header: str, **context: Any
     ) -> str:
-        names = [b.strip().lstrip("#") for b in block_header.split(",") if b.strip()]
+        names = self._parse_block_names(block_header)
         try:
             self._validate_block_names(names)
             if len(names) == 1:
@@ -334,6 +379,7 @@ class TemplateMixin:
                 self._template_context(context),
                 root_dir=tpl_root,
                 inject_block_markers=True,
+                template_name=filepath,
             )
 
     def html(self: Any, filepath: str, **context: Any) -> str:
@@ -352,6 +398,7 @@ class TemplateMixin:
             self._template_context(context),
             root_dir=tpl_root,
             inject_block_markers=True,  # Inject markers for data-block targeting
+            template_name=filepath,
         )
 
     def stream(self: Any, filepath: str, **context: Any) -> Any:
@@ -370,11 +417,11 @@ class TemplateMixin:
         )
 
     def _validate_block_names(self: Any, names: list[str]) -> None:
-        """Raise ValueError if any block name starts with '#'."""
+        """Raise ValueError if any block name is empty after normalization."""
         for name in names:
-            if name and name.startswith("#"):
+            if not name:
                 raise ValueError(
-                    f"Invalid block name '{name}'. Use the block name directly without the '#' prefix."
+                    "Invalid block name. Use a non-empty block name without the '#' prefix."
                 )
 
     def _yield_scoped_css(self: Any, page_id: str) -> Iterator[str]:
@@ -452,7 +499,7 @@ class TemplateMixin:
         Wraps content in <template> tags ONLY for SPA block requests.
         For normal page loads, returns unwrapped content for better SEO and first paint.
         """
-        names = [b.strip() for b in block_header.split(",")]
+        names = self._parse_block_names(block_header)
         self._validate_block_names(names)
         tpl_content, tpl_root = self._resolve_template(filepath)
         is_spa_request = bool(self.environ.get("HTTP_X_BLOCK"))

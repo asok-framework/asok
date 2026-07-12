@@ -4,8 +4,11 @@ import json
 import re
 import secrets
 from http.cookies import SimpleCookie
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 from urllib.parse import parse_qsl, unquote
+
+if TYPE_CHECKING:
+    from asok.core.asok import Asok
 
 from asok.exceptions import (
     AbortException,
@@ -27,6 +30,13 @@ from .session import SessionMixin
 from .template import TemplateMixin
 from .upload import UploadedFile
 from .user_agent import UserAgent
+
+
+def _is_safe_csrf_token(token: Optional[str]) -> bool:
+    if not token or not (10 <= len(token) <= 128):
+        return False
+    return all(c.isalnum() or c in "_-+=" for c in token)
+
 
 # Pre-compiled regex for multipart parsing
 _RE_NAME = re.compile(r'name="([^"]+)"')
@@ -63,7 +73,8 @@ class Request(
         self.environ: dict[str, Any] = environ
         self.path: str = environ.get("PATH_INFO", "/")
         self.method: str = environ.get("REQUEST_METHOD", "GET")
-        self.query_string: str = unquote(environ.get("QUERY_STRING", ""))
+        self.raw_query_string: str = environ.get("QUERY_STRING", "")
+        self.query_string: str = unquote(self.raw_query_string)
         self._init_state()
         self._init_cookies(environ.get("HTTP_COOKIE", ""))
         self._init_csrf(environ)
@@ -74,8 +85,9 @@ class Request(
     def _init_state(self) -> None:
         self.body: bytes = b""
         self._csrf_verified = False
-        self.args: QueryDict = QueryDict(parse_qsl(self.query_string))
+        self.args: QueryDict = QueryDict(parse_qsl(self.raw_query_string))
         self.form: dict[str, str] = dict(self.args)
+        self.post_form: dict[str, str] = {}
         self.files: dict[str, UploadedFile] = {}
         self.all_files: list[UploadedFile] = []
         self._files_multi: dict[str, list[tuple[str, UploadedFile]]] = {}
@@ -128,12 +140,13 @@ class Request(
 
     def _init_csrf(self, environ: dict[str, Any]) -> None:
         self._csrf_cookie_name = "asok_csrf"
-        self.csrf_token_value = self.cookies_dict.get(self._csrf_cookie_name)
-        if self.csrf_token_value:
-            return
-        self.csrf_token_value = secrets.token_hex(32)
-        if "asok.csrf_token_new" not in environ:
-            environ["asok.csrf_token_new"] = self.csrf_token_value
+        token = self.cookies_dict.get(self._csrf_cookie_name)
+        if _is_safe_csrf_token(token):
+            self.csrf_token_value = token
+        else:
+            self.csrf_token_value = secrets.token_hex(32)
+            if "asok.csrf_token_new" not in environ:
+                environ["asok.csrf_token_new"] = self.csrf_token_value
 
     def _init_locale(self, environ: dict[str, Any]) -> None:
         self.lang = self.form.get("lang", self.cookies_dict.get("asok_lang"))
@@ -190,9 +203,13 @@ class Request(
 
     def _parse_body(self, enc_content_type: str) -> None:
         if "application/x-www-form-urlencoded" in enc_content_type:
-            self.form.update(dict(parse_qsl(self.body.decode("utf-8"))))
+            body_dict = dict(parse_qsl(self.body.decode("utf-8")))
+            self.form.update(body_dict)
+            self.post_form.update(body_dict)
         elif "application/json" in enc_content_type:
             self._parse_json_body()
+            if isinstance(self.json_body, dict):
+                self.post_form.update(self.json_body)
         elif "multipart/form-data" in enc_content_type:
             self._parse_multipart_body(enc_content_type)
 
@@ -264,7 +281,9 @@ class Request(
     def _store_multipart_field(self, name: str, cdisp: str, payload: bytes) -> None:
         filename_match = _RE_FILENAME.search(cdisp)
         if not filename_match:
-            self.form[name] = payload.decode("utf-8", errors="ignore")
+            val = payload.decode("utf-8", errors="ignore")
+            self.form[name] = val
+            self.post_form[name] = val
             return
         raw_filename = filename_match.group(1)
         if not raw_filename:
@@ -559,8 +578,8 @@ class Request(
     def _safe_next_url(self) -> str:
         # SECURITY: only relative URLs may be carried in `next` (no open redirect).
         next_url = self.path
-        if self.query_string:
-            next_url += "?" + self.query_string
+        if self.raw_query_string:
+            next_url += "?" + self.raw_query_string
         if next_url and ("://" in next_url or next_url.startswith("//")):
             import logging
 
@@ -569,6 +588,13 @@ class Request(
             )
             return "/"
         return next_url
+
+    @property
+    def app(self) -> Asok:
+        """Get the active Asok application instance for this request (like Flask's current_app)."""
+        app_ref = self.environ.get("asok.app")
+        # Assert type for runtime/static analysis
+        return app_ref  # type: ignore[return-value]
 
     @property
     def scheme(self) -> str:

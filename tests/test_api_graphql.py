@@ -385,6 +385,42 @@ def test_graphql_authorize_ws_hook(fresh_app):
     assert conn.closed is True
 
 
+def test_graphql_authorize_ws_hook_live_connection(fresh_app):
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_AUTHORIZE"] = lambda req: False
+
+    class MockSocket:
+        def sendall(self, data):
+            return None
+
+        def shutdown(self, how):
+            return None
+
+        def close(self):
+            return None
+
+    server = WebSocketServer(app=fresh_app)
+    route = server._route("/graphql")
+    conn = server._build_and_register_connection(
+        MockSocket(),
+        ("127.0.0.1", 1234),
+        "/graphql",
+        {
+            "host": "localhost",
+            "origin": "http://localhost",
+            "sec-websocket-key": "test-key",
+        },
+        {},
+        route,
+    )
+
+    on_graphql_ws_message(conn, json.dumps({"type": "connection_init"}))
+
+    assert conn._closed is True
+    assert conn.request is not None
+    assert conn.request.environ["PATH_INFO"] == "/graphql"
+
+
 def test_graphql_disable_introspection(fresh_app):
     fresh_app.config["GRAPHQL_ENABLED"] = True
     client = TestClient(fresh_app)

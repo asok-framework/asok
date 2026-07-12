@@ -1,3 +1,10 @@
+"""
+Caching system for the Asok framework.
+
+Implements memory-based and file-backed caching strategies,
+with support for key prefixes, expirations, and decorators.
+"""
+
 from __future__ import annotations
 
 import functools
@@ -352,7 +359,7 @@ def cache_page(
             cache = cache_instance or default_cache
             # Provide a safe fallback if request doesn't have path for some reason
             path = getattr(request, "path", "")
-            qs = getattr(request, "query_string", "")
+            qs = getattr(request, "raw_query_string", "")
 
             # SECURITY: Limit path and query string length to prevent DoS (max 2000 chars each)
             if len(path) > 2000:

@@ -1,3 +1,10 @@
+"""
+Email sending system for the Asok framework.
+
+Supports SMTP configurations, synchronous or background thread delivery,
+and template-rendered multi-part emails.
+"""
+
 from __future__ import annotations
 
 import logging

@@ -141,10 +141,21 @@ def _expr_hash(expr: str) -> str:
     return hashlib.md5(expr.strip().encode()).hexdigest()[:12]
 
 
+def _has_template_placeholder(val: str) -> bool:
+    """True if the value still contains an unrendered template placeholder."""
+    return ("{{" in val and "}}" in val) or ("{%" in val and "%}" in val)
+
+
 def _replace_directive(app, registry: dict[str, str], match) -> str:
     name = match.group(1)
     val = _html.unescape(match.group(3))
     if name.endswith("-ref"):
+        return match.group(0)
+    if _has_template_placeholder(val):
+        # The expression interpolates unrendered template variables (e.g.
+        # ``{ count: {{ count }} }``). It cannot be baked into the shared static
+        # registry at build time (the value is per-render), so leave it raw and
+        # let it be compiled per-request after the template renders.
         return match.group(0)
     if name == "asok-for":
         return _replace_for_directive(app, registry, name, val, match)
@@ -181,6 +192,24 @@ def _is_expr_attribute(name: str) -> bool:
     return any(name.startswith(p) for p in _DIRECTIVE_PREFIXES)
 
 
+_RAW_DIRECTIVE_ATTR_RE = re.compile(r'(?<![a-zA-Z0-9-])(asok-[a-zA-Z0-9:.\-]+)=[\'"]')
+
+
+def _content_has_raw_expr_directive(content: str) -> bool:
+    """True if *content* still holds a non-precompiled expression directive.
+
+    These appear when a directive's expression interpolated template variables
+    and was therefore skipped at build time; it must be compiled per-request.
+    """
+    for m in _RAW_DIRECTIVE_ATTR_RE.finditer(content):
+        name = m.group(1)
+        if name.endswith("-ref"):
+            continue
+        if name == "asok-for" or _is_expr_attribute(name):
+            return True
+    return False
+
+
 def _assert_safe_expression(app, name: str, val: str) -> None:
     if app._validate_directive_expression(val):
         return
@@ -204,6 +233,7 @@ class AssetInjector:
         include_scripts: bool,
         only_scripts: bool,
     ) -> None:
+        """Initialize the AssetInjector with request context and page content."""
         self.app = app
         self.request = request
         self.content = content
@@ -215,6 +245,7 @@ class AssetInjector:
         self.is_block = bool(request.environ.get("HTTP_X_BLOCK"))
 
     def inject(self) -> str:
+        """Execute the asset injection pipeline on the page content and return the result."""
         self._ensure_pending_buffers()
         self._inject_meta()
         self._inject_page_id_and_assets()
@@ -628,11 +659,15 @@ class AssetInjector:
         debug = self.app.config.get("DEBUG", False)
         if debug:
             return False
-        registry_file = self._registry_file_path()
-        return os.path.exists(registry_file)
+        return os.path.exists(self._registry_file_path()) or os.path.exists(
+            self._registry_min_file_path()
+        )
 
     def _registry_file_path(self) -> str:
         return os.path.join(self.app._partials_path, "js", "directives_registry.js")
+
+    def _registry_min_file_path(self) -> str:
+        return os.path.join(self.app._partials_path, "js", "directives_registry.min.js")
 
     def _inject_precompiled_directives(self) -> None:
         if getattr(self.request, "_asok_directives_done", False) or self.is_block:
@@ -643,17 +678,33 @@ class AssetInjector:
         self.request._asok_pending_styles += f'<style nonce="{nonce}">{css}</style>'
         registry_url = self._versioned_registry_url()
         js = self.app.get_asset("asok_directives.min.js")
+        supplementary = self._compile_dynamic_directives()
         self.request._asok_pending_scripts += (
             f'<script nonce="{nonce}">\n'
             f'window.Asok = window.Asok || {{}}; window.Asok.nonce = "{nonce}";\n'
+            f"{supplementary}"
             f"</script>\n"
             f'<script src="{registry_url}" nonce="{nonce}"></script>\n'
             f'<script nonce="{nonce}">\n{js}\n</script>'
         )
 
+    def _compile_dynamic_directives(self) -> str:
+        """Compile directives left raw at build time (template-interpolated
+        expressions) into a supplementary inline registry that merges with the
+        static one. Returns "" when the page has no such directives."""
+        if not _content_has_raw_expr_directive(self.content):
+            return ""
+        self.content, self.registry = precompile_directives(self.app, self.content)
+        return self._build_registry_js()
+
     def _versioned_registry_url(self) -> str:
-        registry_url = "/js/directives_registry.js"
-        h = self.app._static_hash("js/directives_registry.js")
+        min_file = self._registry_min_file_path()
+        if os.path.exists(min_file):
+            registry_url = "/js/directives_registry.min.js"
+            h = self.app._static_hash("js/directives_registry.min.js")
+        else:
+            registry_url = "/js/directives_registry.js"
+            h = self.app._static_hash("js/directives_registry.js")
         if h:
             registry_url += f"?v={h}"
         return registry_url

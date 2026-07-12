@@ -1,3 +1,10 @@
+"""
+Static Site Generation (SSG) and Incremental Static Regeneration (ISR) mixin for Asok.
+
+Handles page caching, static page pre-generation, dynamic paths rendering,
+and revalidation lifecycle.
+"""
+
 from __future__ import annotations
 
 import inspect
@@ -13,6 +20,20 @@ from ..background import background
 from ..request import Request
 
 logger = logging.getLogger("asok.ssg_isr")
+
+
+def _normalize_html(raw_html: Any) -> str:
+    if isinstance(raw_html, str):
+        return raw_html
+    if hasattr(raw_html, "__iter__"):
+        chunks = []
+        for chunk in raw_html:
+            if isinstance(chunk, bytes):
+                chunks.append(chunk.decode("utf-8"))
+            else:
+                chunks.append(str(chunk))
+        return "".join(chunks)
+    return str(raw_html)
 
 
 class SSGISRMixin:
@@ -215,6 +236,12 @@ class SSGISRMixin:
         if not is_ssg_or_isr or not page_file:
             return None
 
+        # Assign page metadata (page_id, scoped assets) to the current request so that
+        # dynamically injected scoped assets/IDs are correct when serving from SSG cache.
+        request.params.update(route_params)
+        request._current_page_file = page_file
+        self._assign_page_metadata(request, page_file)
+
         cache_file = self._get_ssg_cache_file(request.path)
         res = self._serve_ssg_cache(request, cache_file, revalidate, start_response)
         if res is not None:
@@ -223,6 +250,27 @@ class SSGISRMixin:
         return self._generate_ssg_on_demand(
             request, page_file, cache_file, revalidate, route_params, start_response
         )
+
+    def _is_custom_error_page(self, page_file: str) -> bool:
+        if not page_file:
+            return False
+        normalized_path = page_file.replace("\\", "/")
+        return any(
+            f"/{code}/" in normalized_path
+            for code in ("400", "403", "404", "429", "500")
+        )
+
+    def _should_cache_rendered_html(self, status: str, page_file: str) -> bool:
+        if status.startswith("2"):
+            return True
+        if os.environ.get("ASOK_BUILD") == "true":
+            return True
+        return self._is_custom_error_page(page_file)
+
+    def _write_ssg_cache_file(self, cache_file: str, content: str) -> None:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as f:
+            f.write(content)
 
     def _render_and_cache_html(
         self, request: Request, environ: dict[str, Any], cache_file: str
@@ -233,11 +281,13 @@ class SSGISRMixin:
 
             raw_html = async_to_sync(raw_html)
 
-        if raw_html and request.status.startswith("2"):
-            # Cache the raw rendering (without the request's specific nonces/csrf tokens)
-            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as f:
-                f.write(raw_html)
+        raw_html = _normalize_html(raw_html)
+        if not raw_html:
+            return None
+
+        page_file = getattr(request, "_current_page_file", "")
+        if self._should_cache_rendered_html(request.status, page_file):
+            self._write_ssg_cache_file(cache_file, raw_html)
             return raw_html
         return None
 
@@ -411,9 +461,19 @@ class SSGISRMixin:
         added_paths = self._add_sys_paths()
         logger.info("Starting Static Site Generation (SSG)...")
 
+        orig_build = os.environ.get("ASOK_BUILD")
+        os.environ["ASOK_BUILD"] = "true"
         try:
             self._walk_and_generate_ssg(pages_root)
         finally:
-            for p in added_paths:
-                if p in sys.path:
-                    sys.path.remove(p)
+            _cleanup_ssg_build_env(orig_build, added_paths)
+
+
+def _cleanup_ssg_build_env(orig_build: Optional[str], added_paths: list[str]) -> None:
+    if orig_build is not None:
+        os.environ["ASOK_BUILD"] = orig_build
+    elif "ASOK_BUILD" in os.environ:
+        del os.environ["ASOK_BUILD"]
+    for p in added_paths:
+        if p in sys.path:
+            sys.path.remove(p)

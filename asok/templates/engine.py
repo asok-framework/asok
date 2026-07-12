@@ -76,6 +76,7 @@ def render_block_string(
     block_name: str,
     context: dict[str, Any],
     root_dir: Optional[str] = None,
+    template_name: Optional[str] = None,
 ) -> str:
     """Render only a specific named block from a template string.
 
@@ -94,7 +95,7 @@ def render_block_string(
     body = _extract_named_block(preprocessed, block_name)
     if body is None:
         raise ValueError(f"Block '{block_name}' not found in template")
-    res = _compile_and_run(body, context, is_debug)
+    res = _compile_and_run(body, context, is_debug, template_name=template_name)
     return "".join(res) if res is not None else ""
 
 
@@ -116,6 +117,7 @@ def render_template_string(
     context: dict[str, Any],
     root_dir: Optional[str] = None,
     inject_block_markers: bool = False,
+    template_name: Optional[str] = None,
 ) -> str:
     """Compile and render a template string with the provided context.
 
@@ -132,7 +134,13 @@ def render_template_string(
         inject_markers=inject_block_markers,
         is_debug=is_debug,
     )
-    res = _compile_and_run(preprocessed, context, is_debug, cache_key=md5_key)
+    res = _compile_and_run(
+        preprocessed,
+        context,
+        is_debug,
+        cache_key=md5_key,
+        template_name=template_name,
+    )
     return "".join(res) if res is not None else ""
 
 
@@ -141,6 +149,7 @@ def stream_template_string(
     context: dict[str, Any],
     root_dir: Optional[str] = None,
     inject_block_markers: bool = False,
+    template_name: Optional[str] = None,
 ) -> Iterator[str]:
     """Compile and stream a template string, yielding results as they are generated.
 
@@ -157,4 +166,10 @@ def stream_template_string(
         inject_markers=inject_block_markers,
         is_debug=is_debug,
     )
-    return _compile_and_run(preprocessed, context, is_debug, cache_key=md5_key)
+    return _compile_and_run(
+        preprocessed,
+        context,
+        is_debug,
+        cache_key=md5_key,
+        template_name=template_name,
+    )

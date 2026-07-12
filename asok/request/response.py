@@ -8,7 +8,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from asok.exceptions import RedirectException
-from asok.utils.security import is_safe_url, secure_filename
+from asok.utils.security import is_safe_url, request_authority, secure_filename
 
 
 class ResponseMixin:
@@ -60,9 +60,7 @@ class ResponseMixin:
 
         If safe=True (default), redirects to external domains are blocked.
         """
-        if safe and not is_safe_url(
-            url, allowed_host=self.environ.get("HTTP_HOST") or self.host
-        ):
+        if safe and not is_safe_url(url, allowed_host=request_authority(self)):
             raise ValueError(
                 f"Potentially unsafe redirect blocked: {url}. "
                 "Use safe=False for external redirects."
@@ -88,9 +86,7 @@ class ResponseMixin:
     def _is_same_origin(self: Any, parsed: Any) -> bool:
         # Get current request's origin
         current_scheme = self.environ.get("wsgi.url_scheme", "http")
-        current_host = self.environ.get("HTTP_HOST") or self.environ.get(
-            "SERVER_NAME", ""
-        )
+        current_host = request_authority(self)
         return parsed.scheme == current_scheme and parsed.netloc == current_host
 
     def _parse_and_check_url(self: Any, url: str) -> bool:

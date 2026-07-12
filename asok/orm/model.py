@@ -37,6 +37,8 @@ from .utils import (
 if TYPE_CHECKING:
     from .query import Query
 
+from .exceptions import _UNSET
+
 T = TypeVar("T", bound="Model")
 logger = logging.getLogger("asok.orm")
 
@@ -969,7 +971,7 @@ class Model(metaclass=ModelMeta):
         return Query(cls, with_trashed=with_trashed)
 
     @classmethod
-    def where(cls: type[T], column: str, op_or_val: Any, val: Any = None) -> Query[T]:
+    def where(cls: type[T], column: str, op_or_val: Any, val: Any = _UNSET) -> Query[T]:
         """Start a new query with an initial where clause."""
         from .query import Query
 

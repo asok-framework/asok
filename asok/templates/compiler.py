@@ -114,19 +114,47 @@ def _emit_for_token(state: CompilerState, token: str) -> None:
         _handle_literal_token(state, token)
 
 
+def _check_unclosed_delimiters(
+    token: str, current_line: int, template_name: Optional[str]
+) -> None:
+    if "{{" in token:
+        idx = token.find("{{")
+        line_offset = token[:idx].count("\n")
+        prefix = f"Template '{template_name}'" if template_name else "Template"
+        raise TemplateError(
+            f"{prefix} Syntax Error: Unclosed template expression '{{' on line {current_line + line_offset}"
+        )
+    if "{%" in token:
+        idx = token.find("{%")
+        line_offset = token[:idx].count("\n")
+        prefix = f"Template '{template_name}'" if template_name else "Template"
+        raise TemplateError(
+            f"{prefix} Syntax Error: Unclosed template statement '{{%' on line {current_line + line_offset}"
+        )
+
+
 def _build_compiled_callable(
-    template_string: str, is_debug: bool
+    template_string: str, is_debug: bool, template_name: Optional[str] = None
 ) -> Callable[..., Any]:
     state = CompilerState(is_debug)
+    current_line = 1
     for token in _RE_TOKENS.split(template_string):
-        _emit_for_token(state, token)
+        if token.startswith("{{") or token.startswith("{%"):
+            state.emit(f"__template_line__ = {current_line}")
+            _emit_for_token(state, token)
+        else:
+            _check_unclosed_delimiters(token, current_line, template_name)
+            _emit_for_token(state, token)
+        current_line += token.count("\n")
     compiled_code = "\n".join(state.code)
-    run_fn = _exec_template_code(compiled_code)
+    run_fn = _exec_template_code(compiled_code, template_name)
     run_fn._compiled_code = compiled_code
     return run_fn
 
 
-def _exec_template_code(compiled_code: str) -> Callable[..., Any]:
+def _exec_template_code(
+    compiled_code: str, template_name: Optional[str] = None
+) -> Callable[..., Any]:
     # SECURITY: empty __builtins__ blocks ``exec``/``eval``/``open``/``__import__``
     # from compiled templates. Safe builtins (range, len, str, ...) are resolved
     # explicitly through _resolve_name() at run time.
@@ -152,8 +180,9 @@ def _exec_template_code(compiled_code: str) -> Callable[..., Any]:
     try:
         exec(compiled_code, env)
     except Exception as e:
+        prefix = f"Template '{template_name}'" if template_name else "Template"
         raise TemplateError(
-            f"Template Compilation Error: {str(e)}\n\nCode:\n{compiled_code}"
+            f"{prefix} Compilation Error: {str(e)}\n\nCode:\n{compiled_code}"
         )
     return env["__run_template"]
 
@@ -163,6 +192,7 @@ def _compile_and_run(
     context: dict[str, Any],
     is_debug: bool = False,
     cache_key: Optional[str] = None,
+    template_name: Optional[str] = None,
 ) -> Any:
     """Compile a pre-processed template string and execute it."""
     if cache_key is None:
@@ -171,7 +201,7 @@ def _compile_and_run(
         cache_key += "_debug"
     run_fn = _compiled_cache.get(cache_key)
     if run_fn is None:
-        run_fn = _build_compiled_callable(template_string, is_debug)
+        run_fn = _build_compiled_callable(template_string, is_debug, template_name)
         _compiled_cache[cache_key] = run_fn
     gen = run_fn(
         context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug
@@ -181,9 +211,31 @@ def _compile_and_run(
         try:
             yield from gen
         except Exception as e:
+            import sys
+
+            tb = sys.exc_info()[2]
+            line_no = None
+            while tb:
+                frame = tb.tb_frame
+                if "__template_line__" in frame.f_locals:
+                    line_no = frame.f_locals["__template_line__"]
+                tb = tb.tb_next
+
             code_str = getattr(run_fn, "_compiled_code", "unknown")
-            raise type(e)(
-                f"{str(e)}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}"
+            msg = str(e)
+            prefix = ""
+            if template_name:
+                prefix = f"Error rendering template '{template_name}'"
+                if line_no is not None:
+                    prefix += f" on line {line_no}"
+            elif line_no is not None:
+                prefix = f"Error rendering template on line {line_no}"
+
+            if prefix:
+                msg = f"{prefix}: {msg}"
+
+            raise TemplateError(
+                f"{msg}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}"
             ) from e
 
     return _generator_wrapper()

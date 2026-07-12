@@ -1,3 +1,10 @@
+"""
+Testing client utilities and response assertion wrappers for Asok.
+
+Provides the TestClient and TestResponse wrappers to simulate WSGI requests
+and inspect responses in unit test suites.
+"""
+
 from __future__ import annotations
 
 import io
@@ -27,6 +34,7 @@ class TestResponse:
         return json.loads(self.text)
 
     def __contains__(self, item):
+        """Check if the given item substring is present in the response text."""
         return item in self.text
 
 

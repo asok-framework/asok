@@ -1,3 +1,10 @@
+"""
+Rate limiting system for the Asok framework.
+
+Implements slide-window memory-based limiters and Redis/Cache-backed
+throttling to secure endpoints from brute force and DoS attacks.
+"""
+
 from __future__ import annotations
 
 import functools
@@ -92,13 +99,19 @@ class RateLimit:
         return request.ip or "unknown"
 
     def _check_storage(self, key: str, now: float) -> dict[str, Any]:
-        bucket = self.storage.get(key)
-        if not bucket or bucket["reset"] <= now:
-            bucket = {"count": 0, "reset": now + self.window}
+        count_key = f"{key}:count"
+        reset_key = f"{key}:reset"
 
-        bucket["count"] += 1
-        self.storage.set(key, bucket, ttl=int(bucket["reset"] - now) + 1)
-        return bucket
+        count = self.storage.get(count_key)
+        if count is None:
+            reset = now + self.window
+            self.storage.set(reset_key, reset, ttl=self.window)
+            self.storage.set(count_key, 1, ttl=self.window)
+            return {"count": 1, "reset": reset}
+
+        new_count = self.storage.incr(count_key, 1, ttl=self.window)
+        reset = self.storage.get(reset_key) or (now + self.window)
+        return {"count": new_count, "reset": reset}
 
     def _cleanup_expired_local(self, now: float) -> None:
         if now - self._last_cleanup >= self.window:

@@ -1,9 +1,17 @@
+"""
+Base components system for isomorphic server-rendered reactive views.
+
+Provides classes and decorators to build state-synchronized UI widgets
+that update live over WebSockets or through client-side directives.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import hmac
 import html
 import json
+import logging
 import os
 import secrets
 import time
@@ -11,7 +19,20 @@ from typing import Any, Optional, Union
 
 from .templates import SafeString, render_template_string
 
+logger = logging.getLogger("asok.component")
 COMPONENTS_REGISTRY = {}
+
+# Placeholder SECRET_KEY values used only during the static build when the
+# developer provides no real SECRET_KEY. They are NOT secret (they live in this
+# source file) and are never trusted to authenticate state at runtime: state
+# signed with them will simply fail to validate against the production key, so
+# SSG live components only hydrate when the same real SECRET_KEY is used at both
+# build and run time. Index 0 is used by the build's WSGI import, index 1 by the
+# directive-precompile bootstrap.
+_BUILD_SIGNING_KEYS = (
+    "static-build-key-temporary-32-chars-long-key",
+    "static-build-key-temporary",
+)
 
 
 def _is_safe_list(val: Union[list, tuple]) -> bool:
@@ -69,18 +90,27 @@ def _verify_signature(signed: str, secret_key: str) -> Optional[str]:
         ).hexdigest()
         if hmac.compare_digest(sig, expected):
             return data_str
-    except Exception:
-        pass
+        # SECURITY: never log the expected signature or the signed payload here;
+        # doing so would leak forgeable signature material into log sinks.
+        logger.warning(
+            "HMAC signature mismatch (possible tampering, key rotation, or expired session)."
+        )
+    except Exception as e:
+        logger.warning("HMAC signature verification error: %s", type(e).__name__)
     return None
 
 
 def _verify_state_timestamp(state: dict[str, Any]) -> bool:
+    # _ts == 0 marks build-time pre-rendered (SSG) state, which has no
+    # expiration because it may be served long after the build. This is safe:
+    # any valid signature (including _ts == 0) can only be produced by a holder
+    # of the signing key, so it is never reachable through an untrusted key.
     ts = state.pop("_ts", 0)
+    if ts == 0:
+        return True
     if time.time() - ts > 3600:
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Expired state signature (age: %d seconds)", time.time() - ts
+        logger.warning(
+            "Expired state signature (age: %d seconds)", int(time.time() - ts)
         )
         return False
     return True
@@ -98,6 +128,7 @@ class ComponentMeta(type):
     """
 
     def __new__(mcs, name, bases, attrs):
+        """Create and register the component class in the global components registry."""
         cls = super().__new__(mcs, name, bases, attrs)
         if name != "Component":
             COMPONENTS_REGISTRY[name] = cls
@@ -196,8 +227,15 @@ class Component(metaclass=ComponentMeta):
     def _sign_state(self, secret_key: str) -> str:
         """Sign the current component state with a secret key for secure transmission."""
         state = self._get_state()
-        # SECURITY: Add timestamp and nonce to prevent replay attacks
-        state["_ts"] = int(time.time())
+        # SECURITY: Add timestamp and nonce to prevent replay attacks.
+        # Build-time pre-rendered (SSG) state uses _ts == 0 (no expiration) since
+        # it may be served long after the build. It is signed with whatever key
+        # is configured at build time: provide the production SECRET_KEY at build
+        # so this state authenticates against the running server's key.
+        if os.getenv("ASOK_BUILD") == "true":
+            state["_ts"] = 0
+        else:
+            state["_ts"] = int(time.time())
         state["_nonce"] = secrets.token_hex(8)
         dump = json.dumps(state, sort_keys=True)
         sig = hmac.new(secret_key.encode(), dump.encode(), hashlib.sha256).hexdigest()
@@ -220,7 +258,8 @@ class Component(metaclass=ComponentMeta):
             if cid:
                 state["_cid"] = cid
             return cls(**state)
-        except Exception:
+        except Exception as e:
+            logger.debug("Exception in _from_signed_state: %s", type(e).__name__)
             return None
 
     def __str__(self) -> str:

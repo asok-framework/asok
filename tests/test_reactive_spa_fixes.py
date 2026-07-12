@@ -751,3 +751,10 @@ def test_spa_csrf_default_value_updated():
         or "defaultValue" in spa_js
     )
     assert "defaultValue" in spa_min_js
+
+
+def test_directives_coexistence_with_islands():
+    """Verify that asok_directives.js contains isInsideUnhydratedIsland logic."""
+    app = Asok()
+    directives_js = app.get_asset("asok_directives.js")
+    assert "isInsideUnhydratedIsland" in directives_js

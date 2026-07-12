@@ -43,10 +43,10 @@ class AuthMixin:
         # SECURITY: Rotate the server-side session ID to prevent session fixation
         self.session_regenerate()
 
-        # Stocker dans la session serveur
+        # Store in the server-side session
         self.session["user_id"] = user.id
 
-        # Lier le cookie de session au sid pour la révocation côté serveur
+        # Bind the session cookie to the sid for server-side revocation
         signed_id = self._sign(f"{user.id}:{self.session.sid}")
         self.environ["asok.session_cookie"] = self._session_cookie(signed_id, max_age)
 

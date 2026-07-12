@@ -208,8 +208,12 @@ def _load_wsgi_app(wsgi_path: str) -> Any:
         spec.loader.exec_module(mod)
         return mod.app
     except Exception as e:
-        print(f"Error loading WSGI entry point: {e}")
-        traceback.print_exc()
+        err_msg = str(e)
+        if "SECURITY ERROR" in err_msg or "SECRET_KEY" in err_msg:
+            Style.error(err_msg)
+        else:
+            print(f"Error loading WSGI entry point: {e}")
+            traceback.print_exc()
         return None
 
 
@@ -246,8 +250,12 @@ def _load_wsgi_and_setup_logging(wsgi_path: str) -> Any:
             _configure_debug_logging()
         return app
     except Exception as e:
-        print(f"Error loading WSGI entry point: {e}")
-        traceback.print_exc()
+        err_msg = str(e)
+        if "SECURITY ERROR" in err_msg or "SECRET_KEY" in err_msg:
+            Style.error(err_msg)
+        else:
+            print(f"Error loading WSGI entry point: {e}")
+            traceback.print_exc()
         sys.exit(1)
 
 
@@ -390,10 +398,13 @@ def _load_env_file(env_path: str) -> None:
 
 
 def _prepare_preview_env() -> None:
-    env_path = os.path.join(os.getcwd(), ".env")
-    if os.path.exists(env_path):
-        _load_env_file(env_path)
+    for name in (".env", ".env.production"):
+        env_path = os.path.join(os.getcwd(), name)
+        if os.path.exists(env_path):
+            _load_env_file(env_path)
+            break
     os.environ["DEBUG"] = "false"
+    os.environ.pop("ASOK_BUILD", None)
 
 
 def _build_preview_assets() -> None:

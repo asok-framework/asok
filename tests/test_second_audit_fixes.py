@@ -44,6 +44,14 @@ def test_resolve_redirect_referer_safe_url():
     req = Request(environ)
     assert admin._resolve_redirect_referer(req) == admin.prefix
 
+    # 5. Malformed host header with userinfo must not be trusted
+    environ = {
+        "HTTP_HOST": "localhost:8000@evil.com",
+        "HTTP_REFERER": "http://localhost:8000/admin/dashboard",
+    }
+    req = Request(environ)
+    assert admin._resolve_redirect_referer(req) == admin.prefix
+
     # 3. Relative referer (safe)
     environ = {
         "HTTP_HOST": "localhost:8000",

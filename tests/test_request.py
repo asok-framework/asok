@@ -221,3 +221,17 @@ class TestRequestGeo:
         assert geo_fr["dial_code"] == "+33"
         assert geo_fr["city"] == "Paris"
         assert geo_fr["timezone"] == "Europe/Paris"
+
+
+def test_request_app_property():
+    from asok.core import Asok
+    from asok.request import Request
+
+    app = Asok()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+    req = Request(environ)
+    assert req.app is app

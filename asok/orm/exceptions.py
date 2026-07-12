@@ -4,6 +4,8 @@ from typing import Optional
 
 from ..exceptions import AsokException
 
+_UNSET = object()
+
 
 class ModelError(AsokException):
     """Raised on ORM save/create errors with a user-friendly message."""

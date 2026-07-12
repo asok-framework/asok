@@ -2,6 +2,7 @@ import os
 import re
 import unicodedata
 from typing import Optional
+from urllib.parse import urlsplit
 
 _RE_FILENAME = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -102,6 +103,55 @@ def is_safe_url(url: str, allowed_host: Optional[str] = None) -> bool:
 
     # Relative URL check
     return _is_safe_relative_url(url)
+
+
+def _request_app_url(request) -> str:
+    app = request.environ.get("asok.app")
+    if not app:
+        return ""
+    return (app.config.get("APP_URL") or "").strip()
+
+
+def _parse_request_host(request) -> str:
+    raw_host = request.environ.get("HTTP_HOST") or request.host
+    try:
+        parsed = urlsplit(f"//{raw_host}", scheme=request.scheme)
+    except Exception:
+        return request.host
+
+    if not _is_valid_request_host(parsed):
+        return request.host
+    return parsed.netloc
+
+
+def _is_valid_request_host(parsed) -> bool:
+    return _has_request_hostname(parsed) and not _has_invalid_request_host_parts(parsed)
+
+
+def _has_request_hostname(parsed) -> bool:
+    return bool(parsed.hostname)
+
+
+def _has_invalid_request_host_parts(parsed) -> bool:
+    return _has_request_credentials(parsed) or _has_request_path_parts(parsed)
+
+
+def _has_request_credentials(parsed) -> bool:
+    return bool(parsed.username or parsed.password)
+
+
+def _has_request_path_parts(parsed) -> bool:
+    return bool(parsed.path or parsed.query or parsed.fragment)
+
+
+def request_authority(request) -> str:
+    """Return the canonical authority used for same-origin checks."""
+    app_url = _request_app_url(request)
+    if app_url:
+        parsed_app = urlsplit(app_url)
+        if parsed_app.netloc:
+            return parsed_app.netloc
+    return _parse_request_host(request)
 
 
 def internal_only(fn):

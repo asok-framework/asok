@@ -1,3 +1,9 @@
+"""
+WebSocket Server implementation for the Asok framework.
+
+Manages connections, protocol handshake, frame parsing, routing, and channels broadcasting.
+"""
+
 from __future__ import annotations
 
 import json
@@ -186,8 +192,8 @@ class WebSocketServer:
             except Exception as e:
                 logger.error(f"Error in room authorizer: {e}", exc_info=True)
                 return False
-        # Par défaut, sans authorizer personnalisé, seuls les salons "model:"
-        # (qui possèdent leur propre mécanisme de validation interne) sont autorisés.
+        # By default, without a custom authorizer, only "model:" rooms
+        # (which possess their own internal validation mechanism) are authorized.
         return room.startswith("model:")
 
     def get_online_users(self) -> list[int]:
@@ -305,15 +311,21 @@ class WebSocketServer:
     def _ensure_secret_key(self) -> None:
         if self.secret_key is not None:
             return
-        if self.app and hasattr(self.app, "secret_key"):
-            self.secret_key = self.app.secret_key
-            return
-        self.secret_key = os.getenv("SECRET_KEY")
+        self.secret_key = self._get_secret_key_from_app_or_env()
         if not self.secret_key:
             raise RuntimeError(
                 "SECRET_KEY is not configured. This should never happen if Asok() "
                 "is properly initialized."
             )
+
+    def _get_secret_key_from_app_or_env(self) -> Optional[str]:
+        if not self.app:
+            return os.getenv("SECRET_KEY")
+        key = getattr(self.app, "secret_key", None)
+        if key:
+            return key
+        config = getattr(self.app, "config", {})
+        return config.get("SECRET_KEY") or os.getenv("SECRET_KEY")
 
     def _bind_listening_socket(self) -> bool:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -677,6 +689,12 @@ class WebSocketServer:
             params=params,
             server=self,
         )
+        try:
+            from .live import _build_pseudo_request
+
+            conn.request = _build_pseudo_request(self, conn)
+        except Exception:
+            pass
         self._register(conn)
         self._fire_on_connect(route, conn)
         return conn
