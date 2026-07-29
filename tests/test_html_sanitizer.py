@@ -39,6 +39,13 @@ class TestXSSPrevention:
         assert "javascript:" not in result.lower()
         assert "alert" not in result
 
+    def test_entity_encoded_protocols_blocked(self):
+        """Test that entity-encoded javascript: protocols are blocked."""
+        malicious = '<a href="&#x6a;avascript:alert(1)">Click</a>'
+        result = sanitize_html(malicious)
+        assert "javascript:" not in result.lower()
+        assert "alert" not in result
+
     def test_data_protocol_in_link_removed(self):
         """Test that data: protocol in links is removed."""
         malicious = '<a href="data:text/html,<script>alert(1)</script>">Click</a>'
@@ -223,7 +230,9 @@ class TestQuillFormattingClasses:
         assert "ql-code-block" in out
 
     def test_alignment_and_indent_classes_preserved(self):
-        assert 'class="ql-align-center"' in sanitize_html('<p class="ql-align-center">x</p>')
+        assert 'class="ql-align-center"' in sanitize_html(
+            '<p class="ql-align-center">x</p>'
+        )
         assert 'class="ql-indent-2"' in sanitize_html('<p class="ql-indent-2">x</p>')
 
     def test_unlisted_class_tokens_dropped(self):
@@ -232,7 +241,9 @@ class TestQuillFormattingClasses:
         assert "ql-code-block" in out
 
     def test_class_does_not_smuggle_handlers(self):
-        out = sanitize_html('<p class="ql-align-right" onclick="steal()"><script>alert(1)</script>ok</p>')
+        out = sanitize_html(
+            '<p class="ql-align-right" onclick="steal()"><script>alert(1)</script>ok</p>'
+        )
         assert "onclick" not in out
         assert "<script" not in out
         assert "ql-align-right" in out
@@ -249,7 +260,7 @@ class TestNoDoubleEscaping:
         assert "Future&lt;String&gt;" in out
 
     def test_sanitize_is_idempotent(self):
-        src = '<p>a &amp; b</p><pre>x &lt; y</pre>'
+        src = "<p>a &amp; b</p><pre>x &lt; y</pre>"
         once = sanitize_html(src)
         assert sanitize_html(once) == once
 

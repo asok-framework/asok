@@ -56,4 +56,3 @@ def test_all_hydration_strategies_kwargs():
     c5 = IslandComponent(client_media="(max-width: 768px)")
     assert 'client:media="(max-width: 768px)"' in str(c5)
     assert 'data-asok-client="media:(max-width: 768px)"' in str(c5)
-

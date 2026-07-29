@@ -1,4 +1,4 @@
-.PHONY: install dev test coverage build clean lint format compile complexity
+.PHONY: install dev test coverage build clean lint format compile complexity bandit vulture pyright audit secrets
 
 PYTHON ?= python3
 
@@ -32,6 +32,26 @@ lint:
 # Format the code using Ruff
 format:
 	$(PYTHON) -m ruff format asok/ tests/
+
+# Run security analysis using Bandit (fails on High severity issues)
+bandit:
+	$(PYTHON) -m bandit -r asok/ -lll
+
+# Audit dependencies for known CVE vulnerabilities
+audit:
+	$(PYTHON) -m pip_audit 2>&1 | grep -v "Cache entry deserialization failed" || true
+
+# Check for hardcoded secrets, passwords and tokens using Dodgy
+secrets:
+	$(PYTHON) -m dodgy -i venv .venv build dist
+
+# Find dead / unused code using Vulture
+vulture:
+	$(PYTHON) -m vulture asok/ || true
+
+# Type checking using Pyright
+pyright:
+	pyright asok/ || true
 
 # Check cyclomatic complexity using Radon (Grade C or worse fails the check)
 complexity:

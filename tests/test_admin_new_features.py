@@ -20,9 +20,33 @@ def test_session_store_user_sessions_and_revocation(tmp_path):
     sid2 = store.generate_sid()
     sid3 = store.generate_sid()
 
-    store.save(sid1, {"user_id": 42, "_ip": "127.0.0.1", "_user_agent": "Mozilla/5.0", "_last_seen": time.time()})
-    store.save(sid2, {"user_id": 42, "_ip": "10.0.0.1", "_user_agent": "Chrome/100", "_last_seen": time.time() - 10})
-    store.save(sid3, {"user_id": 99, "_ip": "192.168.1.1", "_user_agent": "Safari/15", "_last_seen": time.time()})
+    store.save(
+        sid1,
+        {
+            "user_id": 42,
+            "_ip": "127.0.0.1",
+            "_user_agent": "Mozilla/5.0",
+            "_last_seen": time.time(),
+        },
+    )
+    store.save(
+        sid2,
+        {
+            "user_id": 42,
+            "_ip": "10.0.0.1",
+            "_user_agent": "Chrome/100",
+            "_last_seen": time.time() - 10,
+        },
+    )
+    store.save(
+        sid3,
+        {
+            "user_id": 99,
+            "_ip": "192.168.1.1",
+            "_user_agent": "Safari/15",
+            "_last_seen": time.time(),
+        },
+    )
 
     sessions = store.get_user_sessions(42)
     assert len(sessions) == 2
@@ -63,7 +87,9 @@ def test_admin_trash_and_restore_views(tmp_path):
     User.create_table()
     User.get_engine().execute("DELETE FROM users")
 
-    u = User.create(_trust=True, email="admin@test.com", password="secretpassword", is_admin=True)
+    u = User.create(
+        _trust=True, email="admin@test.com", password="secretpassword", is_admin=True
+    )
 
     Article.create(_trust=True, title="Active Article")
     art2 = Article.create(_trust=True, title="Soft Deleted Article")
@@ -116,30 +142,38 @@ def test_admin_me_active_sessions_and_revoke(tmp_path):
     User.create_table()
     User.get_engine().execute("DELETE FROM users")
 
-    u = User.create(_trust=True, email="admin@test.com", password="secretpassword", is_admin=True)
+    u = User.create(
+        _trust=True, email="admin@test.com", password="secretpassword", is_admin=True
+    )
 
     client = TestClient(app)
 
     # Main session
     sid1 = app._session_store.generate_sid()
-    app._session_store.save(sid1, {
-        "user_id": u.id,
-        "_user_id": u.id,
-        "_ip": "127.0.0.1",
-        "_user_agent": "TestBrowser/1.0",
-        "_last_seen": time.time(),
-    })
+    app._session_store.save(
+        sid1,
+        {
+            "user_id": u.id,
+            "_user_id": u.id,
+            "_ip": "127.0.0.1",
+            "_user_agent": "TestBrowser/1.0",
+            "_last_seen": time.time(),
+        },
+    )
     client.cookies["asok_sid"] = app._sign(sid1)
 
     # Second active session on another device
     sid2 = app._session_store.generate_sid()
-    app._session_store.save(sid2, {
-        "user_id": u.id,
-        "_user_id": u.id,
-        "_ip": "10.0.0.5",
-        "_user_agent": "MobileSafari/15.0",
-        "_last_seen": time.time() - 300,
-    })
+    app._session_store.save(
+        sid2,
+        {
+            "user_id": u.id,
+            "_user_id": u.id,
+            "_ip": "10.0.0.5",
+            "_user_agent": "MobileSafari/15.0",
+            "_last_seen": time.time() - 300,
+        },
+    )
 
     # Access /admin/me profile page
     res_me = client.get("/admin/me")

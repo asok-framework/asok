@@ -39,8 +39,14 @@ def engine():
 
 def test_add_notnull_int_column_backfills_zero(engine):
     _Editor(engine).add_column(
-        "Note", "author_id",
-        {"sql_type": "INTEGER", "nullable": False, "default": None, "is_foreign_key": True},
+        "Note",
+        "author_id",
+        {
+            "sql_type": "INTEGER",
+            "nullable": False,
+            "default": None,
+            "is_foreign_key": True,
+        },
     )
     rows = engine.execute("SELECT author_id FROM notes_mig")
     assert rows[0]["author_id"] == 0
@@ -48,7 +54,8 @@ def test_add_notnull_int_column_backfills_zero(engine):
 
 def test_add_notnull_text_column_backfills_empty(engine):
     _Editor(engine).add_column(
-        "Note", "slug",
+        "Note",
+        "slug",
         {"sql_type": "TEXT", "nullable": False, "default": None},
     )
     rows = engine.execute("SELECT slug FROM notes_mig")
@@ -57,7 +64,8 @@ def test_add_notnull_text_column_backfills_empty(engine):
 
 def test_explicit_default_is_respected(engine):
     _Editor(engine).add_column(
-        "Note", "views",
+        "Note",
+        "views",
         {"sql_type": "INTEGER", "nullable": False, "default": 5},
     )
     rows = engine.execute("SELECT views FROM notes_mig")
@@ -66,7 +74,8 @@ def test_explicit_default_is_respected(engine):
 
 def test_nullable_column_stays_null(engine):
     _Editor(engine).add_column(
-        "Note", "subtitle",
+        "Note",
+        "subtitle",
         {"sql_type": "TEXT", "nullable": True, "default": None},
     )
     rows = engine.execute("SELECT subtitle FROM notes_mig")

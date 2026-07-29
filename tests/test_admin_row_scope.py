@@ -33,7 +33,9 @@ def _own_posts_scope(request, query):
 @pytest.fixture
 def ctx():
     app = Asok()
-    app.config.update({"SECRET_KEY": "test-secret", "AUTH_MODEL": "User", "CSRF": False})
+    app.config.update(
+        {"SECRET_KEY": "test-secret", "AUTH_MODEL": "User", "CSRF": False}
+    )
     MODELS_REGISTRY["Post"] = Post
     Post.get_engine().execute("DROP TABLE IF EXISTS posts_scope")
     Post.create_table()
@@ -86,20 +88,26 @@ def _post(app, actor, body):
 
 def test_list_is_scoped_to_own_rows(ctx):
     admin, entry, _ = ctx
-    titles = {p.title for p in admin._build_query(_get(admin.app, _writer(1)), entry).get()}
+    titles = {
+        p.title for p in admin._build_query(_get(admin.app, _writer(1)), entry).get()
+    }
     assert titles == {"w1-a", "w1-b"}  # only author_id == 1
 
 
 def test_admin_sees_all_rows(ctx):
     admin, entry, _ = ctx
-    titles = {p.title for p in admin._build_query(_get(admin.app, _superadmin()), entry).get()}
+    titles = {
+        p.title for p in admin._build_query(_get(admin.app, _superadmin()), entry).get()
+    }
     assert titles == {"w1-a", "w2-a", "w1-b"}
 
 
 def test_single_item_lookup_blocks_foreign_row(ctx):
     admin, entry, (p1, p2, _p3) = ctx
     # writer 1 can open their own post
-    assert admin._lookup_admin_item(_get(admin.app, _writer(1)), entry, p1.id) is not None
+    assert (
+        admin._lookup_admin_item(_get(admin.app, _writer(1)), entry, p1.id) is not None
+    )
     # ...but NOT writer 2's post (IDOR via /admin/posts/<id>/edit)
     assert admin._lookup_admin_item(_get(admin.app, _writer(1)), entry, p2.id) is None
 
@@ -116,5 +124,7 @@ def test_no_scope_is_unrestricted(ctx):
     # a model registered without a scope behaves as before
     admin.register(Post, scope=None)
     entry = next(e for e in admin._registered.values() if e["model"] is Post)
-    titles = {p.title for p in admin._build_query(_get(admin.app, _writer(1)), entry).get()}
+    titles = {
+        p.title for p in admin._build_query(_get(admin.app, _writer(1)), entry).get()
+    }
     assert titles == {"w1-a", "w2-a", "w1-b"}

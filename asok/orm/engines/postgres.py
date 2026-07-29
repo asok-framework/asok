@@ -138,7 +138,7 @@ class PostgresEngine(BaseEngine):
                 )
 
     def quote_identifier(self, name: str) -> str:
-        clean = name.strip('"\'`').replace('"', '""')
+        clean = name.strip("\"'`").replace('"', '""')
         return f'"{clean}"'
 
     def translate_query(

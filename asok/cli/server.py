@@ -89,7 +89,9 @@ def _collect_watch_dirs() -> list[str]:
 
 
 def _is_ignored_file(f: str) -> bool:
-    if f == "base.build.css" or f.endswith((".sqlite3", ".sqlite", ".db", ".meta.json")):
+    if f == "base.build.css" or f.endswith(
+        (".sqlite3", ".sqlite", ".db", ".meta.json")
+    ):
         return True
     if f.startswith(".") and f != ".env":
         return True

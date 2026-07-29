@@ -34,9 +34,13 @@ def test_user_role_assignment_discovery_order(tmp_path):
     User.get_engine().execute("DELETE FROM role_user")
 
     # Create admin user and moderator role
-    admin_user = User.create(_trust=True, email="admin@test.com", password="password123", is_admin=True)
+    admin_user = User.create(
+        _trust=True, email="admin@test.com", password="password123", is_admin=True
+    )
     mod_role = Role.create(_trust=True, name="moderator", label="Moderator")
-    target_user = User.create(_trust=True, email="target@test.com", password="password123", is_admin=False)
+    target_user = User.create(
+        _trust=True, email="target@test.com", password="password123", is_admin=False
+    )
 
     client = TestClient(app)
 
@@ -46,10 +50,13 @@ def test_user_role_assignment_discovery_order(tmp_path):
     client.cookies["asok_sid"] = app._sign(sid)
 
     # Assign moderator role to target_user
-    res = client.post(f"/admin/users/{target_user.id}", data={
-        "email": "target@test.com",
-        "m2m_roles": str(mod_role.id),
-    })
+    res = client.post(
+        f"/admin/users/{target_user.id}",
+        data={
+            "email": "target@test.com",
+            "m2m_roles": str(mod_role.id),
+        },
+    )
 
     assert res.status_code in (200, 302)
 

@@ -53,7 +53,9 @@ _ADMIN_STATIC_ROUTES = {
     "/revoke-session": lambda self, req: self._revoke_session(req),
     "/active-sessions": lambda self, req: self._active_sessions_view(req),
     "/active-sessions/revoke": lambda self, req: self._active_sessions_revoke(req),
-    "/active-sessions/revoke-user": lambda self, req: self._active_sessions_revoke_user(req),
+    "/active-sessions/revoke-user": lambda self, req: self._active_sessions_revoke_user(
+        req
+    ),
     "/search": lambda self, req: self._search(req),
 }
 
@@ -171,8 +173,12 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         self._ensure_model_file("user.py", auth_name, _DEFAULT_USER_MODEL_SRC)
         self._ensure_model_file("role.py", "Role", _DEFAULT_ROLE_MODEL_SRC)
         self._ensure_model_file("admin_log.py", "AdminLog", _DEFAULT_LOG_MODEL_SRC)
-        self._ensure_model_file("admin_trash.py", "AdminTrash", _DEFAULT_TRASH_MODEL_SRC)
-        self._ensure_model_file("admin_session.py", "AdminSession", _DEFAULT_SESSION_MODEL_SRC)
+        self._ensure_model_file(
+            "admin_trash.py", "AdminTrash", _DEFAULT_TRASH_MODEL_SRC
+        )
+        self._ensure_model_file(
+            "admin_session.py", "AdminSession", _DEFAULT_SESSION_MODEL_SRC
+        )
 
     def _ensure_role_pivot(self) -> None:
         """Ensure the role_user pivot table exists in the database."""
@@ -194,7 +200,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         except Exception as e:
             import logging
 
-            logging.getLogger(__name__).warning("Could not ensure role_user pivot table: %s", e)
+            logging.getLogger(__name__).warning(
+                "Could not ensure role_user pivot table: %s", e
+            )
 
     def _ensure_2fa_columns(self) -> None:
         """No longer auto-alters the user table. Relies on migrations."""
@@ -243,7 +251,10 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if not isinstance(model_obj, str):
             return model_obj
         for m in getattr(self.app, "models", []):
-            if getattr(m, "__name__", "") == model_obj or getattr(m, "_table", "") == model_obj:
+            if (
+                getattr(m, "__name__", "") == model_obj
+                or getattr(m, "_table", "") == model_obj
+            ):
                 return m
         return None
 
@@ -285,7 +296,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             @admin.register(show_in_dashboard=False)
             class ContactMessage(Model): ...
         """
-        if model_or_name is not None and (callable(model_or_name) or isinstance(model_or_name, str)):
+        if model_or_name is not None and (
+            callable(model_or_name) or isinstance(model_or_name, str)
+        ):
             return self._apply_model_registration(model_or_name, opts)
 
         def decorator(cls: Any) -> Any:
@@ -331,7 +344,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _resolve_entry_group(self, opts: Any, model_name: str) -> str:
         raw_group = self._get_opt(opts, "group", None)
-        return raw_group if raw_group is not None else self._infer_smart_group(model_name)
+        return (
+            raw_group if raw_group is not None else self._infer_smart_group(model_name)
+        )
 
     def _resolve_show_in_overview(self, opts: Any, model_name: str) -> bool:
         show_ov = self._get_opt(opts, "show_in_overview", None)
@@ -341,7 +356,13 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     @staticmethod
     def _is_log_model(model_name: str) -> bool:
-        return model_name.lower() in ("adminlog", "auditlog", "systemlog", "activitylog", "log")
+        return model_name.lower() in (
+            "adminlog",
+            "auditlog",
+            "systemlog",
+            "activitylog",
+            "log",
+        )
 
     @staticmethod
     def _is_readonly_system_model(model_name: str) -> bool:
@@ -356,21 +377,34 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     def _resolve_can_add(self, opts: Any, model_name: str) -> bool:
         val = self._get_opt(opts, "can_add", None)
-        return val if val is not None else (not self._is_readonly_system_model(model_name))
+        return (
+            val if val is not None else (not self._is_readonly_system_model(model_name))
+        )
 
     def _resolve_can_edit(self, opts: Any, model_name: str) -> bool:
         val = self._get_opt(opts, "can_edit", None)
-        return val if val is not None else (not self._is_readonly_system_model(model_name))
+        return (
+            val if val is not None else (not self._is_readonly_system_model(model_name))
+        )
 
     def _resolve_can_delete(self, opts: Any, model_name: str) -> bool:
         val = self._get_opt(opts, "can_delete", None)
-        return val if val is not None else (not self._is_readonly_system_model(model_name))
+        return (
+            val if val is not None else (not self._is_readonly_system_model(model_name))
+        )
 
     def _build_registry_entry(self, model, opts, slug: str) -> dict:
         model_name = getattr(model, "__name__", "")
-        label = self._get_opt(opts, "label", None) or model._table.replace("_", " ").capitalize()
-        columns = self._get_opt(opts, "list_display", None) or self._default_columns(model)
-        searchable = self._get_opt(opts, "search_fields", None) or self._default_searchable(model)
+        label = (
+            self._get_opt(opts, "label", None)
+            or model._table.replace("_", " ").capitalize()
+        )
+        columns = self._get_opt(opts, "list_display", None) or self._default_columns(
+            model
+        )
+        searchable = self._get_opt(
+            opts, "search_fields", None
+        ) or self._default_searchable(model)
 
         return {
             "model": model,
@@ -400,7 +434,14 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     @staticmethod
     def _infer_smart_group(model_name: str) -> str:
         name_lower = model_name.lower()
-        if name_lower in ("user", "role", "address", "permission", "userrole", "roleuser"):
+        if name_lower in (
+            "user",
+            "role",
+            "address",
+            "permission",
+            "userrole",
+            "roleuser",
+        ):
             return "Users & Access"
         if name_lower in (
             "product",
@@ -429,7 +470,16 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             "faq",
         ):
             return "Content & Communications"
-        if name_lower in ("adminlog", "systemlog", "auditlog", "activitylog", "log", "adminsession", "session", "sessions"):
+        if name_lower in (
+            "adminlog",
+            "systemlog",
+            "auditlog",
+            "activitylog",
+            "log",
+            "adminsession",
+            "session",
+            "sessions",
+        ):
             return "System & Audit"
         return "General"
 
@@ -526,11 +576,14 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if clean in self._ADMIN_INTERNAL_STATIC:
             return True
         base, ext = os.path.splitext(clean)
-        min_name = f"{base}.min{ext}" if not base.endswith(".min") and ext in (".js", ".css") else clean
-        return (
-            os.path.isfile(os.path.join(_PKG_DIR, "static", clean))
-            or os.path.isfile(os.path.join(_PKG_DIR, "static", min_name))
+        min_name = (
+            f"{base}.min{ext}"
+            if not base.endswith(".min") and ext in (".js", ".css")
+            else clean
         )
+        return os.path.isfile(
+            os.path.join(_PKG_DIR, "static", clean)
+        ) or os.path.isfile(os.path.join(_PKG_DIR, "static", min_name))
 
     def _admin_static_url(self, p: str) -> str:
         p = p.lstrip("/")
@@ -578,7 +631,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             import hashlib
 
             with open(full_path, "rb") as f:
-                return hashlib.md5(f.read()).hexdigest()[:8]
+                return hashlib.md5(f.read(), usedforsecurity=False).hexdigest()[:8]
         except Exception:
             return None
 
@@ -1158,7 +1211,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                     entity_id=request.user.id,
                     changes={"sid": [sid[:8], "revoked"]},
                 )
-                request.flash("success", self.t(request, "Session revoked successfully"))
+                request.flash(
+                    "success", self.t(request, "Session revoked successfully")
+                )
             else:
                 request.flash("error", self.t(request, "Failed to revoke session"))
         raise RedirectException(self.prefix + "/me")
@@ -1198,7 +1253,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         return any(term in ua_lower for term in ("iphone", "android", "mobile"))
 
     @staticmethod
-    def _is_session_matching_filter(age: float, active_filter: str, is_active: bool) -> bool:
+    def _is_session_matching_filter(
+        age: float, active_filter: str, is_active: bool
+    ) -> bool:
         if active_filter == "15m":
             return is_active and age <= 900
         if active_filter == "24h":
@@ -1218,7 +1275,11 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
     @staticmethod
     def _format_city_country(city: Any, country: Any) -> str:
-        parts = [p for p in (Admin._clean_geo_part(city), Admin._clean_geo_part(country)) if p]
+        parts = [
+            p
+            for p in (Admin._clean_geo_part(city), Admin._clean_geo_part(country))
+            if p
+        ]
         return ", ".join(parts) if parts else "Localisation inconnue"
 
     @staticmethod
@@ -1278,6 +1339,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         except ValueError:
             try:
                 from datetime import datetime
+
                 val_clean = val.replace("T", " ").split(".")[0]
                 return datetime.strptime(val_clean, "%Y-%m-%d %H:%M:%S").timestamp()
             except Exception:
@@ -1312,7 +1374,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         return email if email else f"User #{uid_str}"
 
     @staticmethod
-    def _parse_session_user_agent_info(s: dict, locale: str = "en") -> tuple[str, Any, str, str]:
+    def _parse_session_user_agent_info(
+        s: dict, locale: str = "en"
+    ) -> tuple[str, Any, str, str]:
         from ..request.user_agent import UserAgent
 
         ua_raw = s.get("user_agent") or s.get("_user_agent", "")
@@ -1328,13 +1392,19 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         from datetime import datetime
 
         user_name = Admin._get_session_user_display_name(u_obj, uid_str)
-        ua_raw, ua, browser_name, os_name = Admin._parse_session_user_agent_info(s, locale)
+        ua_raw, ua, browser_name, os_name = Admin._parse_session_user_agent_info(
+            s, locale
+        )
 
         created_at_ts = Admin._to_timestamp(s.get("created_at"), ts)
-        created_at_dt = datetime.fromtimestamp(created_at_ts).strftime("%d/%m/%Y à %H:%M")
+        created_at_dt = datetime.fromtimestamp(created_at_ts).strftime(
+            "%d/%m/%Y à %H:%M"
+        )
 
         is_active = bool(s.get("is_active", True))
-        duration_sec = Admin._calc_session_duration_sec(s, is_active, created_at_ts, ts, now)
+        duration_sec = Admin._calc_session_duration_sec(
+            s, is_active, created_at_ts, ts, now
+        )
         duration_str = Admin._format_duration(duration_sec)
 
         ip = s.get("ip", "Inconnu")
@@ -1392,7 +1462,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                     desktop_count += 1
 
             u_obj = users_cache.get(uid_str)
-            sessions.append(self._build_session_dict(s, uid_str, u_obj, ts, now, locale))
+            sessions.append(
+                self._build_session_dict(s, uid_str, u_obj, ts, now, locale)
+            )
         return sessions, unique_users, mobile_count, desktop_count
 
     @staticmethod
@@ -1497,7 +1569,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _fetch_all_raw_sessions(self) -> list[dict]:
         store_sessions = []
         if hasattr(self.app, "_session_store"):
-            store_sessions = self.app._session_store.get_all_active_sessions(max_age=86400 * 30)
+            store_sessions = self.app._session_store.get_all_active_sessions(
+                max_age=86400 * 30
+            )
         self._sync_sessions_to_db(store_sessions)
 
         AdminSession = MODELS_REGISTRY.get("AdminSession")
@@ -1556,7 +1630,12 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         prefix: str, active_filter: str, items: list[dict], start: int
     ) -> None:
         if start > 1:
-            items.append({"n": 1, "url": f"{prefix}/active-sessions?filter={active_filter}&page=1"})
+            items.append(
+                {
+                    "n": 1,
+                    "url": f"{prefix}/active-sessions?filter={active_filter}&page=1",
+                }
+            )
             if start > 2:
                 items.append({"n": 0, "url": ""})
 
@@ -1567,7 +1646,12 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         if end < pages:
             if end < pages - 1:
                 items.append({"n": 0, "url": ""})
-            items.append({"n": pages, "url": f"{prefix}/active-sessions?filter={active_filter}&page={pages}"})
+            items.append(
+                {
+                    "n": pages,
+                    "url": f"{prefix}/active-sessions?filter={active_filter}&page={pages}",
+                }
+            )
 
     @staticmethod
     def _compute_sessions_page_range(
@@ -1579,7 +1663,12 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         items: list[dict] = []
         Admin._add_sessions_start_boundary(prefix, active_filter, items, start)
         for p in range(start, end + 1):
-            items.append({"n": p, "url": f"{prefix}/active-sessions?filter={active_filter}&page={p}"})
+            items.append(
+                {
+                    "n": p,
+                    "url": f"{prefix}/active-sessions?filter={active_filter}&page={p}",
+                }
+            )
         Admin._add_sessions_end_boundary(prefix, active_filter, items, end, pages)
         return items
 
@@ -1603,7 +1692,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
 
         req_page = Admin._parse_page_number(request.args.get("page", "1"))
         per_page = 10
-        p_sessions, page, total_pages = Admin._paginate_list(sessions, req_page, per_page)
+        p_sessions, page, total_pages = Admin._paginate_list(
+            sessions, req_page, per_page
+        )
         page_range = Admin._compute_sessions_page_range(
             self.prefix, active_filter, page, total_pages
         )
@@ -1678,7 +1769,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                 self._revoke_user_db_sessions(target_user_id)
                 count = 0
                 if hasattr(self.app, "_session_store"):
-                    count = self.app._session_store.revoke_all_user_sessions(target_user_id)
+                    count = self.app._session_store.revoke_all_user_sessions(
+                        target_user_id
+                    )
                 self._log(
                     request,
                     "force_logout_user",
@@ -1688,7 +1781,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                 )
                 request.flash(
                     "success",
-                    self.t(request, "All active sessions for this user have been revoked."),
+                    self.t(
+                        request, "All active sessions for this user have been revoked."
+                    ),
                 )
 
         active_filter = request.form.get("filter", "15m")
@@ -1938,9 +2033,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return self._global_trash_restore(request, trash_id)
         return self._global_trash_delete(request, trash_id)
 
-    def _handle_global_trash_routes(
-        self, request: Any, path: str, method: str
-    ) -> Any:
+    def _handle_global_trash_routes(self, request: Any, path: str, method: str) -> Any:
         if path == "/trash":
             return self._global_trash_list(request)
         if path == "/trash/empty" and method == "POST":
@@ -2089,9 +2182,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         request.flash("success", self.t(request, "Permanently deleted"))
         raise RedirectException(self.prefix + "/trash")
 
-    def _do_empty_trash(
-        self, request: Any, AdminTrash: Any, model_filter: str
-    ) -> None:
+    def _do_empty_trash(self, request: Any, AdminTrash: Any, model_filter: str) -> None:
         try:
             q = AdminTrash.query()
             if model_filter:
@@ -2100,9 +2191,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             for item in items:
                 item.delete()
             count = len(items)
-            self._log(
-                request, "empty_trash", "AdminTrash", changes={"count": count}
-            )
+            self._log(request, "empty_trash", "AdminTrash", changes={"count": count})
             request.flash(
                 "success",
                 self.t(request, "Trash emptied ({count} items)", count=count),
@@ -2403,9 +2492,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                     object_id=getattr(item, "id", None),
                     object_repr=str(item)[:500],
                     data=self._serialize_item_for_trash(item, entry),
-                    deleted_by_id=getattr(
-                        getattr(request, "user", None), "id", None
-                    ),
+                    deleted_by_id=getattr(getattr(request, "user", None), "id", None),
                 )
             except Exception:
                 pass
@@ -2464,16 +2551,22 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         return self._forbid(request)
 
     @staticmethod
-    def _should_include_in_dashboard(entry: dict, slug: str, dash_filter: list[str] | None) -> bool:
+    def _should_include_in_dashboard(
+        entry: dict, slug: str, dash_filter: list[str] | None
+    ) -> bool:
         if dash_filter is not None:
             model_name = getattr(entry["model"], "__name__", "")
             lower_filter = [str(x).lower() for x in dash_filter]
-            return (slug.lower() in lower_filter) or (model_name.lower() in lower_filter)
+            return (slug.lower() in lower_filter) or (
+                model_name.lower() in lower_filter
+            )
         return bool(entry.get("show_in_overview", entry.get("show_in_dashboard", True)))
 
     def _collect_dashboard_stats(self, request: Any) -> list[dict]:
         stats: list[dict] = []
-        dash_filter = getattr(self, "dashboard_models", None) or getattr(self.app, "dashboard_models", None)
+        dash_filter = getattr(self, "dashboard_models", None) or getattr(
+            self.app, "dashboard_models", None
+        )
         for slug, entry in self._registered.items():
             if not self._should_include_in_dashboard(entry, slug, dash_filter):
                 continue
@@ -2482,19 +2575,25 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             stats.append(self._build_dashboard_stat(request, slug, entry))
         return stats
 
-    def _collect_dashboard_stats_grouped(self, request: Any, flat: list[dict]) -> list[dict]:
+    def _collect_dashboard_stats_grouped(
+        self, request: Any, flat: list[dict]
+    ) -> list[dict]:
         """Returns stats grouped by model group, in the same order as the sidebar."""
         stats_by_slug = {s["slug"]: s for s in flat}
-        sorted_groups = self._sort_model_groups(self._collect_visible_model_groups(request))
+        sorted_groups = self._sort_model_groups(
+            self._collect_visible_model_groups(request)
+        )
         result = []
         for group in sorted_groups:
             group_stats = self._filter_group_stats(group["models"], stats_by_slug)
             if group_stats:
-                result.append({
-                    "name": group["name"],
-                    "stats": group_stats,
-                    "col_count": min(len(group_stats), 5),
-                })
+                result.append(
+                    {
+                        "name": group["name"],
+                        "stats": group_stats,
+                        "col_count": min(len(group_stats), 5),
+                    }
+                )
         return result
 
     @staticmethod
@@ -2585,7 +2684,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         return labels, data
 
     @staticmethod
-    def _count_log_activity_for_day(log_model: Any, now: datetime.date, days_ago: int) -> int:
+    def _count_log_activity_for_day(
+        log_model: Any, now: datetime.date, days_ago: int
+    ) -> int:
         if not log_model:
             return 0
         target_date = now - datetime.timedelta(days=days_ago)
@@ -2604,14 +2705,23 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return 0
 
     @classmethod
-    def _collect_activity_timeline_data(cls, log_model: Any) -> tuple[list[str], list[int]]:
+    def _collect_activity_timeline_data(
+        cls, log_model: Any
+    ) -> tuple[list[str], list[int]]:
         now = datetime.date.today()
-        timeline_labels = [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
-        timeline_data = [cls._count_log_activity_for_day(log_model, now, i) for i in range(6, -1, -1)]
+        timeline_labels = [
+            (now - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(6, -1, -1)
+        ]
+        timeline_data = [
+            cls._count_log_activity_for_day(log_model, now, i) for i in range(6, -1, -1)
+        ]
         return timeline_labels, timeline_data
 
     @staticmethod
-    def _count_log_activity_range(log_model: Any, start: str, end_exclusive: str) -> int:
+    def _count_log_activity_range(
+        log_model: Any, start: str, end_exclusive: str
+    ) -> int:
         if not log_model:
             return 0
         # Date-only bounds; end is EXCLUSIVE (next period start).
@@ -2625,7 +2735,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             return 0
 
     @classmethod
-    def _collect_monthly_timeline_data(cls, log_model: Any) -> tuple[list[str], list[int]]:
+    def _collect_monthly_timeline_data(
+        cls, log_model: Any
+    ) -> tuple[list[str], list[int]]:
         now = datetime.date.today()
         labels, data = [], []
         for i in range(11, -1, -1):
@@ -2635,11 +2747,17 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                 m += 12
                 y -= 1
             labels.append(f"{y:04d}-{m:02d}-01")
-            data.append(cls._count_log_activity_range(log_model, f"{y:04d}-{m:02d}-01", cls._next_month_start(y, m)))
+            data.append(
+                cls._count_log_activity_range(
+                    log_model, f"{y:04d}-{m:02d}-01", cls._next_month_start(y, m)
+                )
+            )
         return labels, data
 
     @classmethod
-    def _collect_quarterly_timeline_data(cls, log_model: Any) -> tuple[list[str], list[int]]:
+    def _collect_quarterly_timeline_data(
+        cls, log_model: Any
+    ) -> tuple[list[str], list[int]]:
         now = datetime.date.today()
         curr_q = (now.month - 1) // 3 + 1
         labels, data = [], []
@@ -2651,11 +2769,17 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
                 y -= 1
             sm, em = (q - 1) * 3 + 1, q * 3
             labels.append(f"{y:04d}-Q{q}")
-            data.append(cls._count_log_activity_range(log_model, f"{y:04d}-{sm:02d}-01", cls._next_month_start(y, em)))
+            data.append(
+                cls._count_log_activity_range(
+                    log_model, f"{y:04d}-{sm:02d}-01", cls._next_month_start(y, em)
+                )
+            )
         return labels, data
 
     @classmethod
-    def _collect_weekly_timeline_data(cls, log_model: Any) -> tuple[list[str], list[int]]:
+    def _collect_weekly_timeline_data(
+        cls, log_model: Any
+    ) -> tuple[list[str], list[int]]:
         now = datetime.date.today()
         start_of_current_week = now - datetime.timedelta(days=now.weekday())
         labels, data = [], []
@@ -2663,17 +2787,29 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
             w_start = start_of_current_week - datetime.timedelta(weeks=i)
             w_end_excl = w_start + datetime.timedelta(days=7)
             labels.append(w_start.strftime("%Y-%m-%d"))
-            data.append(cls._count_log_activity_range(log_model, w_start.strftime("%Y-%m-%d"), w_end_excl.strftime("%Y-%m-%d")))
+            data.append(
+                cls._count_log_activity_range(
+                    log_model,
+                    w_start.strftime("%Y-%m-%d"),
+                    w_end_excl.strftime("%Y-%m-%d"),
+                )
+            )
         return labels, data
 
     @classmethod
-    def _collect_yearly_timeline_data(cls, log_model: Any) -> tuple[list[str], list[int]]:
+    def _collect_yearly_timeline_data(
+        cls, log_model: Any
+    ) -> tuple[list[str], list[int]]:
         now = datetime.date.today()
         labels, data = [], []
         for i in range(4, -1, -1):
             y = now.year - i
             labels.append(str(y))
-            data.append(cls._count_log_activity_range(log_model, f"{y:04d}-01-01", f"{y + 1:04d}-01-01"))
+            data.append(
+                cls._count_log_activity_range(
+                    log_model, f"{y:04d}-01-01", f"{y + 1:04d}-01-01"
+                )
+            )
         return labels, data
 
     def _collect_dashboard_chart_data(

@@ -450,7 +450,9 @@ class Request(
         return self._nonce
 
     def _is_secure_cookie_required(self, app_ref: Optional[Any]) -> bool:
-        return self.scheme == "https" or bool(app_ref and not app_ref.config.get("DEBUG"))
+        return self.scheme == "https" or bool(
+            app_ref and not app_ref.config.get("DEBUG")
+        )
 
     def _session_cookie(self, value: str, max_age: Optional[int] = None) -> str:
         """Formats the session cookie header."""
@@ -616,7 +618,6 @@ class Request(
             )
             return "/"
         return next_url
-
 
     @property
     def app(self) -> Asok:

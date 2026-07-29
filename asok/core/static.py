@@ -27,7 +27,7 @@ class StaticMixin:
             full_path = os.path.join(base_dir, filepath.lstrip("/"))
             if os.path.isfile(full_path):
                 with open(full_path, "rb") as f:
-                    h = hashlib.md5(f.read()).hexdigest()[:8]
+                    h = hashlib.md5(f.read(), usedforsecurity=False).hexdigest()[:8]
                 self._static_hashes[filepath] = h
                 return h
         return None
@@ -60,7 +60,7 @@ class StaticMixin:
         mimetype = self._resolve_mimetype(static_path)
         with open(static_path, "rb") as f:
             content = f.read()
-        etag = hashlib.md5(content).hexdigest()
+        etag = hashlib.md5(content, usedforsecurity=False).hexdigest()
         if not debug:
             content_size = len(content)
             if self._static_cache_size + content_size > self._static_cache_max:
@@ -78,7 +78,9 @@ class StaticMixin:
             ("Content-Length", str(len(content))),
             (
                 "Cache-Control",
-                "public, max-age=31536000, immutable" if not debug else "no-cache, no-store",
+                "public, max-age=31536000, immutable"
+                if not debug
+                else "no-cache, no-store",
             ),
         ]
         if not debug:

@@ -341,18 +341,31 @@ def _sanitize_style(style: str) -> str:
     return "; ".join(safe_rules) if safe_rules else ""
 
 
+_DANGEROUS_PROTOCOLS = (
+    "javascript:",
+    "data:",
+    "vbscript:",
+    "java\tscript:",
+    "java\nscript:",
+    "java\rscript:",
+)
+_RE_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def _clean_url_html(url: str) -> str:
-    return "".join(c for c in url if ord(c) >= 32 and ord(c) != 127).strip().lower()
+    if not url:
+        return ""
+
+    decoded = unescape(url) if "&" in url else url
+    cleaned = _RE_CONTROL_CHARS.sub("", decoded)
+    return cleaned.strip().lower()
 
 
 def _is_dangerous_protocol_html(clean_url: str, allow_data_images: bool) -> bool:
-    if any(
-        clean_url.startswith(proto) for proto in ["javascript:", "data:", "vbscript:"]
-    ):
-        if allow_data_images and clean_url.startswith("data:image/"):
-            return False
-        return True
-    return False
+    if allow_data_images and clean_url.startswith("data:image/"):
+        return False
+
+    return clean_url.startswith(_DANGEROUS_PROTOCOLS)
 
 
 def _is_safe_url(url: str, allow_data_images: bool = False) -> bool:

@@ -112,7 +112,7 @@ class BackupManager:
     @classmethod
     def _get_target_file_path(cls, db_url: str) -> Optional[str]:
         if db_url.startswith("sqlite:///"):
-            return db_url[len("sqlite:///"):]
+            return db_url[len("sqlite:///") :]
         return db_url if "://" not in db_url else None
 
     @classmethod
@@ -125,7 +125,10 @@ class BackupManager:
     @classmethod
     def _collect_subclass_models(cls, models: list, seen: set) -> None:
         for m in Model.__subclasses__():
-            if m not in seen and getattr(m, "__name__", "") not in ("Model", "BaseModel"):
+            if m not in seen and getattr(m, "__name__", "") not in (
+                "Model",
+                "BaseModel",
+            ):
                 models.append(m)
                 seen.add(m)
 
@@ -135,6 +138,7 @@ class BackupManager:
             return
         try:
             from asok.cli.database import _find_project_root, _load_models
+
             root = _find_project_root()
             if root:
                 _load_models(root)
@@ -152,7 +156,9 @@ class BackupManager:
         return models
 
     @classmethod
-    def _create_backup_schema(cls, backup_engine: Any, table_name: str, model: Any) -> bool:
+    def _create_backup_schema(
+        cls, backup_engine: Any, table_name: str, model: Any
+    ) -> bool:
         try:
             model._execute_create_table(backup_engine)
             model._migrate_missing_columns(backup_engine)
@@ -161,24 +167,39 @@ class BackupManager:
             return False
 
     @classmethod
-    def _insert_batch(cls, backup_engine: Any, table_name: str, fields: list[str], rows: list[dict]) -> None:
+    def _insert_batch(
+        cls, backup_engine: Any, table_name: str, fields: list[str], rows: list[dict]
+    ) -> None:
         try:
             tbl_q = backup_engine.quote_identifier(table_name)
             quoted_fields = [backup_engine.quote_identifier(f) for f in fields]
             placeholders = ", ".join(["?"] * len(fields))
-            insert_sql = f"INSERT OR REPLACE INTO {tbl_q} (" + ", ".join(quoted_fields) + f") VALUES ({placeholders});"
+            insert_sql = (
+                f"INSERT OR REPLACE INTO {tbl_q} ("
+                + ", ".join(quoted_fields)
+                + f") VALUES ({placeholders});"
+            )
 
             with backup_engine.transaction():
                 for r in rows:
                     values = [r.get(f) for f in fields]
                     backup_engine.execute(insert_sql, values)
         except Exception as e:
-            logger.warning("Error inserting batch into backup table %s: %s", table_name, e)
+            logger.warning(
+                "Error inserting batch into backup table %s: %s", table_name, e
+            )
 
     @classmethod
-    def _read_primary_batch(cls, primary_engine: Any, tbl_q: str, batch_size: int, offset: int) -> list[dict]:
+    def _read_primary_batch(
+        cls, primary_engine: Any, tbl_q: str, batch_size: int, offset: int
+    ) -> list[dict]:
         try:
-            return primary_engine.execute(f"SELECT * FROM {tbl_q} LIMIT {batch_size} OFFSET {offset};") or []
+            return (
+                primary_engine.execute(
+                    f"SELECT * FROM {tbl_q} LIMIT {batch_size} OFFSET {offset};"
+                )
+                or []
+            )
         except Exception:
             return []
 
@@ -238,15 +259,19 @@ class BackupManager:
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-                db_file = meta_path[:-len(".meta.json")]
-                snap_id = meta.get("snapshot_id") or os.path.basename(db_file).replace(".sqlite3", "")
+                db_file = meta_path[: -len(".meta.json")]
+                snap_id = meta.get("snapshot_id") or os.path.basename(db_file).replace(
+                    ".sqlite3", ""
+                )
                 size = os.path.getsize(db_file) if os.path.exists(db_file) else 0
                 meta["snapshot_id"] = snap_id
                 meta["file_path"] = db_file
                 meta["file_size_human"] = _format_file_size(size)
                 ts = meta.get("timestamp", 0)
                 meta["datetime_str"] = (
-                    datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+                    datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                    if ts
+                    else "N/A"
                 )
                 return meta
         except Exception:
@@ -266,7 +291,9 @@ class BackupManager:
         return [m for m in metas if m]
 
     @classmethod
-    def list_snapshots(cls, app: Any = None, target_url: Optional[str] = None) -> list[dict]:
+    def list_snapshots(
+        cls, app: Any = None, target_url: Optional[str] = None
+    ) -> list[dict]:
         """List all point-in-time recovery snapshots sorted by timestamp descending."""
         url = target_url or cls.get_backup_url(app)
         snapshots = cls._collect_snapshot_metas(cls._get_snapshots_dir(url))
@@ -309,12 +336,17 @@ class BackupManager:
             cls._delete_file_if_exists(db_path + "-wal")
             return True
         except Exception as e:
-            logger.warning("Error deleting old snapshot %s: %s", old_snap.get("snapshot_id"), e)
+            logger.warning(
+                "Error deleting old snapshot %s: %s", old_snap.get("snapshot_id"), e
+            )
             return False
 
     @classmethod
     def cleanup_old_snapshots(
-        cls, app: Any = None, target_url: Optional[str] = None, max_snapshots: Optional[int] = None
+        cls,
+        app: Any = None,
+        target_url: Optional[str] = None,
+        max_snapshots: Optional[int] = None,
     ) -> int:
         """Cleanup old snapshots to enforce retention policy."""
         limit = cls._resolve_max_snapshots(app, max_snapshots)
@@ -328,7 +360,9 @@ class BackupManager:
         return sum(1 for snap in snapshots[limit:] if cls._delete_snapshot_files(snap))
 
     @classmethod
-    def _prepare_backup_target(cls, base_url: str) -> tuple[Optional[str], str, Optional[str], str]:
+    def _prepare_backup_target(
+        cls, base_url: str
+    ) -> tuple[Optional[str], str, Optional[str], str]:
         target_file = cls._get_target_file_path(base_url)
         snap_tag = time.strftime("%Y%m%d_%H%M%S")
         snap_id = f"backup_{snap_tag}"
@@ -343,7 +377,11 @@ class BackupManager:
 
     @classmethod
     def _sync_latest_backup(
-        cls, target_file: Optional[str], snap_file_path: Optional[str], base_url: str, result: dict
+        cls,
+        target_file: Optional[str],
+        snap_file_path: Optional[str],
+        base_url: str,
+        result: dict,
     ) -> None:
         if target_file and snap_file_path and os.path.exists(snap_file_path):
             os.makedirs(os.path.dirname(os.path.abspath(target_file)), exist_ok=True)
@@ -358,7 +396,9 @@ class BackupManager:
         """Execute a full database backup with point-in-time snapshot creation."""
         start_time = time.time()
         base_url = target_url or cls.get_backup_url(app)
-        target_file, snap_url, snap_file_path, snap_id = cls._prepare_backup_target(base_url)
+        target_file, snap_url, snap_file_path, snap_id = cls._prepare_backup_target(
+            base_url
+        )
 
         backup_engine = get_engine(snap_url)
         models = cls.get_models()
@@ -381,7 +421,12 @@ class BackupManager:
             _set_restricted_file_perm(snap_file_path, 0o600)
             return result
         except Exception as err:
-            return {"success": False, "error": str(err), "timestamp": int(time.time()), "target_url": base_url}
+            return {
+                "success": False,
+                "error": str(err),
+                "timestamp": int(time.time()),
+                "target_url": base_url,
+            }
         finally:
             backup_engine.close_connections()
             if result.get("success"):
@@ -398,12 +443,20 @@ class BackupManager:
 
     @classmethod
     def _execute_restore_transaction(
-        cls, primary_engine: Any, table_name: str, field_names: list[str], backup_rows: list[dict]
+        cls,
+        primary_engine: Any,
+        table_name: str,
+        field_names: list[str],
+        backup_rows: list[dict],
     ) -> int:
         tbl_q = primary_engine.quote_identifier(table_name)
         quoted_fields = [primary_engine.quote_identifier(f) for f in field_names]
         placeholders = ", ".join(["?"] * len(field_names))
-        insert_sql = f"INSERT OR REPLACE INTO {tbl_q} (" + ", ".join(quoted_fields) + f") VALUES ({placeholders});"
+        insert_sql = (
+            f"INSERT OR REPLACE INTO {tbl_q} ("
+            + ", ".join(quoted_fields)
+            + f") VALUES ({placeholders});"
+        )
 
         try:
             with primary_engine.transaction():
@@ -430,13 +483,19 @@ class BackupManager:
             pass
 
         field_names = _get_model_field_names(model)
-        return cls._execute_restore_transaction(primary_engine, table_name, field_names, backup_rows)
+        return cls._execute_restore_transaction(
+            primary_engine, table_name, field_names, backup_rows
+        )
 
     @classmethod
     def _validate_restore_file(cls, url: str) -> Optional[dict]:
         target_file = cls._get_target_file_path(url)
         if target_file and not os.path.exists(target_file):
-            return {"success": False, "error": f"Backup file not found at '{target_file}'", "timestamp": int(time.time())}
+            return {
+                "success": False,
+                "error": f"Backup file not found at '{target_file}'",
+                "timestamp": int(time.time()),
+            }
         return None
 
     @classmethod
@@ -451,7 +510,9 @@ class BackupManager:
         return table_stats, total_rows
 
     @classmethod
-    def _find_snapshot_url_by_id(cls, snaps_dir: str, snapshot_id: str) -> Optional[str]:
+    def _find_snapshot_url_by_id(
+        cls, snaps_dir: str, snapshot_id: str
+    ) -> Optional[str]:
         cand = os.path.join(snaps_dir, snapshot_id)
         if not cand.endswith(".sqlite3"):
             cand = f"{cand}.sqlite3"
@@ -462,20 +523,32 @@ class BackupManager:
     @classmethod
     def _get_latest_snapshot_url(cls, app: Any, url: str) -> str:
         snaps = cls.list_snapshots(app, url)
-        if snaps and snaps[0].get("file_path") and os.path.exists(snaps[0]["file_path"]):
+        if (
+            snaps
+            and snaps[0].get("file_path")
+            and os.path.exists(snaps[0]["file_path"])
+        ):
             return f"sqlite:///{snaps[0]['file_path']}"
         return url
 
     @classmethod
-    def _resolve_snapshot_restore_url(cls, app: Any, url: str, snapshot_id: Optional[str]) -> str:
+    def _resolve_snapshot_restore_url(
+        cls, app: Any, url: str, snapshot_id: Optional[str]
+    ) -> str:
         if snapshot_id:
-            found = cls._find_snapshot_url_by_id(cls._get_snapshots_dir(url), snapshot_id)
+            found = cls._find_snapshot_url_by_id(
+                cls._get_snapshots_dir(url), snapshot_id
+            )
             return found or url
         return cls._get_latest_snapshot_url(app, url)
 
     @classmethod
     def perform_restore(
-        cls, app: Any = None, source_url: Optional[str] = None, snapshot_id: Optional[str] = None, force: bool = False
+        cls,
+        app: Any = None,
+        source_url: Optional[str] = None,
+        snapshot_id: Optional[str] = None,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Restore data from a backup or specific point-in-time snapshot into primary DB."""
         start_time = time.time()
@@ -502,7 +575,12 @@ class BackupManager:
                 "tables": table_stats,
             }
         except Exception as err:
-            return {"success": False, "error": str(err), "timestamp": int(time.time()), "source_url": url}
+            return {
+                "success": False,
+                "error": str(err),
+                "timestamp": int(time.time()),
+                "source_url": url,
+            }
         finally:
             backup_engine.close_connections()
 
@@ -595,5 +673,7 @@ class BackupManager:
         def _job():
             cls.perform_backup(app)
 
-        cls._scheduled_task = ScheduledTask(interval=interval, fn=_job, run_initial=True)
+        cls._scheduled_task = ScheduledTask(
+            interval=interval, fn=_job, run_initial=True
+        )
         return cls._scheduled_task

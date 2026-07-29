@@ -86,8 +86,8 @@ def _format_snippet_line(i: int, line_content: str, is_error_line: bool) -> str:
     return (
         f'<div style="line-height: 1.6; padding: 3px 10px; {bg}">'
         f'<span style="color: {num_color}; font-weight: bold; display: inline-block; width: 45px; text-align: right; margin-right: 15px; user-select: none;">{marker}{i}</span>'
-        f'<code>{escaped_code}</code>'
-        f'</div>'
+        f"<code>{escaped_code}</code>"
+        f"</div>"
     )
 
 
@@ -104,7 +104,7 @@ def _build_source_snippet(source_code: str, line_no: int) -> str:
     <div style="margin-bottom: 25px;">
         <h3 style="margin: 0 0 10px 0; font-size: 1.1rem; color: #212529; border-bottom: 1px solid #dee2e6; padding-bottom: 8px;">Template Source Snippet</h3>
         <div style="background: #ffffff; border: 1px solid #ced4da; border-radius: 4px; overflow-x: auto; font-family: Consolas, Menlo, Monaco, monospace; font-size: 0.9rem; padding: 10px 0;">
-            {''.join(rendered_lines)}
+            {"".join(rendered_lines)}
         </div>
     </div>
     """
@@ -1074,7 +1074,9 @@ class WSGIMixin:
 
         error_id = str(uuid.uuid4())[:8]
         tb_str = traceback.format_exc()
-        sys.stderr.write(f"\n[ASOK EXCEPTION ID:{error_id}] {type(e).__name__}: {e}\n{tb_str}\n")
+        sys.stderr.write(
+            f"\n[ASOK EXCEPTION ID:{error_id}] {type(e).__name__}: {e}\n{tb_str}\n"
+        )
         sys.stderr.flush()
         logger.error(
             "[ERROR-ID:%s] Unhandled Exception: %s\n%s",
@@ -1468,7 +1470,6 @@ class WSGIMixin:
                 return res
         return None
 
-
     def _handle_lang_switch(
         self, request: Request, environ: dict[str, Any], start_response: Callable
     ) -> Optional[list[bytes]]:
@@ -1518,11 +1519,14 @@ class WSGIMixin:
         redirect_url: str, cookie: str, start_response: Callable
     ) -> list[bytes]:
         """Return a 200 + X-Asok-Redirect for SPA block requests."""
-        start_response("200 OK", [
-            ("Content-Type", "text/html; charset=utf-8"),
-            ("X-Asok-Redirect", redirect_url),
-            ("Set-Cookie", cookie),
-        ])
+        start_response(
+            "200 OK",
+            [
+                ("Content-Type", "text/html; charset=utf-8"),
+                ("X-Asok-Redirect", redirect_url),
+                ("Set-Cookie", cookie),
+            ],
+        )
         return [b""]
 
     @staticmethod
@@ -1530,14 +1534,15 @@ class WSGIMixin:
         redirect_url: str, cookie: str, start_response: Callable
     ) -> list[bytes]:
         """Return a plain 302 redirect for normal browser requests."""
-        start_response("302 Found", [
-            ("Location", redirect_url),
-            ("Set-Cookie", cookie),
-            ("Cache-Control", "no-store"),
-        ])
+        start_response(
+            "302 Found",
+            [
+                ("Location", redirect_url),
+                ("Set-Cookie", cookie),
+                ("Cache-Control", "no-store"),
+            ],
+        )
         return [b""]
-
-
 
     @staticmethod
     def _handle_health_check(

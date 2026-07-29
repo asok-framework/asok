@@ -205,8 +205,17 @@ def _parse_svg_string(svg_string: str) -> ET.Element:
     svg_string = re.sub(r"<!DOCTYPE[^>]*>", "", svg_string, flags=re.IGNORECASE)
     svg_string = re.sub(r"<!ENTITY[^>]*>", "", svg_string, flags=re.IGNORECASE)
     svg_string = re.sub(r"<!--.*?-->", "", svg_string, flags=re.DOTALL)
+    # SECURITY: fail closed if any DTD/entity declaration survived the strip above
+    # (e.g. a crafted DOCTYPE with a '>' inside a quoted internal subset). Blocks
+    # billion-laughs / entity-based XXE before the parser ever sees it.
+    if re.search(r"<!DOCTYPE|<!ENTITY", svg_string, re.IGNORECASE):
+        raise ValueError("SVG contains a forbidden DTD/entity declaration")
     try:
-        return ET.fromstring(svg_string.encode("utf-8"))
+        # SECURITY: stdlib ElementTree/expat does not resolve external entities
+        # or fetch external DTDs (no network/file access), and internal DTD/entity
+        # declarations are stripped + rejected above; input is size-limited by
+        # _validate_svg_content_limits. defusedxml is avoided to stay zero-dep.
+        return ET.fromstring(svg_string.encode("utf-8"))  # nosec B314
     except ET.ParseError as e:
         raise ValueError(f"Invalid SVG structure: {e}")
 

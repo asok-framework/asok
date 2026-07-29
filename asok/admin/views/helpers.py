@@ -59,7 +59,9 @@ class HelperViewsMixin:
     def _col_value_boolean(self, field: Any, col: str, v: Any) -> SafeString | None:
         if field and field.sql_type == "INTEGER" and self._is_boolean_column_name(col):
             if v:
-                return SafeString(f'<span class="badge badge-yes">{self._tr("Yes")}</span>')
+                return SafeString(
+                    f'<span class="badge badge-yes">{self._tr("Yes")}</span>'
+                )
             return SafeString(f'<span class="badge badge-no">{self._tr("No")}</span>')
         return None
 
@@ -204,7 +206,9 @@ class HelperViewsMixin:
             query = self._apply_date_upper_bound(query, f, field, val_to)
         return query
 
-    def _apply_date_upper_bound(self, query: Any, f: str, field: Any, val_to: str) -> Any:
+    def _apply_date_upper_bound(
+        self, query: Any, f: str, field: Any, val_to: str
+    ) -> Any:
         # For datetime/timestamp columns use an EXCLUSIVE next-day bound instead of
         # "<= '<date> 23:59:59'": created_at is stored ISO with a 'T' separator, and
         # 'T' sorts after a space, so the old bound dropped same-day rows.

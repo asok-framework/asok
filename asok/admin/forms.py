@@ -150,24 +150,6 @@ def _collect_explicit_morph_models(
     return out
 
 
-def _collect_config_morph_models(
-    admin_instance: Optional[Any],
-    current_model_name: str,
-    relation_name: str,
-    seen: set[str],
-) -> list[tuple[str, Any]]:
-    app = getattr(admin_instance, "app", None) if admin_instance else None
-    targets = _find_config_targets(app, current_model_name, relation_name)
-    out = []
-    for name in targets:
-        if name not in seen:
-            m = MODELS_REGISTRY.get(name)
-            if m:
-                out.append((name, m))
-                seen.add(name)
-    return out
-
-
 def _is_valid_fallback_model(name: str, model: Any, current_model_name: str) -> bool:
     ignore_models = {
         "User",
@@ -532,10 +514,7 @@ def _fetch_all_target_options(target: Any) -> list[dict[str, Any]]:
         # Use the related object's display label (name/title/…) for consistency
         # with FK selects and the roles widget — not "<Model> #<id>". _display
         # already falls back to "#<id>" when the object has no display attribute.
-        return [
-            {"id": o.id, "label": _display(o)}
-            for o in target.all(limit=500)
-        ]
+        return [{"id": o.id, "label": _display(o)} for o in target.all(limit=500)]
     except Exception:
         return []
 
@@ -853,7 +832,9 @@ class FormMixin:
 
         return form, meta
 
-    def _hidden_by_access(self, request: Any, entry: dict[str, Any], model: Any) -> set[str]:
+    def _hidden_by_access(
+        self, request: Any, entry: dict[str, Any], model: Any
+    ) -> set[str]:
         """Field names to hide from the form entirely (surface reduction).
 
         Two sources: the graphical per-role "champs verrouillés" rule
@@ -861,12 +842,18 @@ class FormMixin:
         owner FK (what stops a writer ever seeing every user). The apply path
         re-checks these (defense in depth).
         """
-        locked = user_locked_fields(getattr(request, "user", None), entry.get("slug", ""))
+        locked = user_locked_fields(
+            getattr(request, "user", None), entry.get("slug", "")
+        )
         return locked | self._own_owner_hidden(request, entry, model)
 
-    def _own_owner_hidden(self, request: Any, entry: dict[str, Any], model: Any) -> set[str]:
+    def _own_owner_hidden(
+        self, request: Any, entry: dict[str, Any], model: Any
+    ) -> set[str]:
         """The auto-managed owner FK, hidden for own-scoped users (else empty)."""
-        if not user_is_own_scoped(getattr(request, "user", None), entry.get("slug", "")):
+        if not user_is_own_scoped(
+            getattr(request, "user", None), entry.get("slug", "")
+        ):
             return set()
         owner_field = resolve_owner_field(model)
         return {owner_field} if owner_field else set()

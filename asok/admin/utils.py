@@ -210,19 +210,6 @@ def _decrypt_totp_secret(encrypted: str, master_key: str) -> str | None:
         return None
 
 
-def _slugify_name(name: str) -> str:
-    return name.lower() + "s"
-
-
-def _humanize(name: str) -> str:
-    out = []
-    for i, c in enumerate(name):
-        if i and c.isupper():
-            out.append(" ")
-        out.append(c)
-    return "".join(out) + "s"
-
-
 def _find_display_attribute(obj: Any) -> Optional[str]:
     for attr in ("name", "title", "label", "email", "username", "slug"):
         v = getattr(obj, attr, None)

@@ -94,7 +94,7 @@ def _handshake_response(client_key: str) -> bytes:
     via Origin header BEFORE this handshake.
     """
     accept = base64.b64encode(
-        hashlib.sha1((client_key + _WS_MAGIC).encode()).digest()
+        hashlib.sha1((client_key + _WS_MAGIC).encode(), usedforsecurity=False).digest()
     ).decode()
     return (
         "HTTP/1.1 101 Switching Protocols\r\n"

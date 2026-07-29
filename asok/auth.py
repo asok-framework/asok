@@ -279,6 +279,20 @@ class OAuth:
         return f"{config['auth_url']}?{urllib.parse.urlencode(params)}"
 
     @staticmethod
+    def _require_web_url(url: str, what: str) -> str:
+        """Reject non-http(s) URLs before an outbound OAuth request.
+
+        SECURITY: OAuth endpoint URLs come from provider config; constraining the
+        scheme stops a misconfigured/malicious provider from turning the
+        token/userinfo fetch into a file read or SSRF via an exotic scheme
+        (file:, gopher:, …).
+        """
+        scheme = urllib.parse.urlparse(url or "").scheme.lower()
+        if scheme not in ("http", "https"):
+            raise AuthError(f"OAuth {what} must be an http(s) URL")
+        return url
+
+    @staticmethod
     def _exchange_code(
         config: dict[str, str],
         client_id: str,
@@ -295,7 +309,7 @@ class OAuth:
         }
         headers = {"Accept": "application/json"}
         req = urllib.request.Request(
-            config["token_url"],
+            OAuth._require_web_url(config["token_url"], "token_url"),
             data=urllib.parse.urlencode(token_data).encode(),
             headers=headers,
         )
@@ -320,7 +334,9 @@ class OAuth:
             "Authorization": f"Bearer {access_token}",
             "User-Agent": "Asok-Framework",
         }
-        user_req = urllib.request.Request(config["user_url"], headers=user_headers)
+        user_req = urllib.request.Request(
+            OAuth._require_web_url(config["user_url"], "user_url"), headers=user_headers
+        )
         with urllib.request.urlopen(user_req, timeout=10) as response:
             response_data = response.read(100_000)
             return json.loads(response_data.decode())

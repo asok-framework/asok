@@ -115,7 +115,9 @@ def test_media_page_renders_grouped_sections(tmp_path):
     User._app = app
     User.create_table()
     User.get_engine().execute("DELETE FROM users")
-    u = User.create(_trust=True, email="a@t.com", password="secretpassword", is_admin=True)
+    u = User.create(
+        _trust=True, email="a@t.com", password="secretpassword", is_admin=True
+    )
 
     client = TestClient(app)
     sid = app._session_store.generate_sid()
@@ -154,7 +156,9 @@ def test_media_folder_view_is_paginated(tmp_path):
     User._app = app
     User.create_table()
     User.get_engine().execute("DELETE FROM users")
-    u = User.create(_trust=True, email="a@t.com", password="secretpassword", is_admin=True)
+    u = User.create(
+        _trust=True, email="a@t.com", password="secretpassword", is_admin=True
+    )
 
     client = TestClient(app)
     sid = app._session_store.generate_sid()

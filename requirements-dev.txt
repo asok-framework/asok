@@ -3,3 +3,10 @@ pytest
 pytest-cov
 build
 radon
+bandit
+vulture
+pyright
+pip-audit
+dodgy
+
+

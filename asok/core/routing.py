@@ -62,7 +62,9 @@ class RoutingMixin:
             return
 
         key = "/".join(parts)
-        if not hasattr(self, "_route_cache") or not isinstance(self._route_cache, OrderedDict):
+        if not hasattr(self, "_route_cache") or not isinstance(
+            self._route_cache, OrderedDict
+        ):
             self._route_cache = OrderedDict()
 
         cache = self._route_cache
@@ -301,7 +303,6 @@ class RoutingMixin:
         if not (base_name.startswith("[") and base_name.endswith("]")):
             return False
         return os.path.isfile(os.path.join(current_base, entry))
-
 
     def _find_dynamic_file_candidates(
         self, current_base: str, entries: list[str]

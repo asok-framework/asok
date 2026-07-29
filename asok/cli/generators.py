@@ -276,7 +276,7 @@ def _inspect_legacy_sqlite_fields(cursor: Any, table: str) -> dict:
     cols = cursor.fetchall()
     fields = {}
     for col in cols:
-        col_name = str(col[1]).strip('"\'`')
+        col_name = str(col[1]).strip("\"'`")
         col_type = col[2]
         nullable = col[3] == 0
         default = col[4]
@@ -431,19 +431,6 @@ def _announce_registered_models() -> None:
         Style.info(f"Detected models: {', '.join(MODELS_REGISTRY.keys())}")
     else:
         Style.warn("No models registered. Check your model definitions.")
-
-
-def _build_migration_sql(engine) -> tuple[list[str], list[str]]:
-    from ..orm.engines import SQLiteEngine
-
-    is_sqlite = isinstance(engine, SQLiteEngine)
-    up_sql: list[str] = []
-    down_sql: list[str] = []
-    for model_name, model_cls in MODELS_REGISTRY.items():
-        _build_model_migration_sql(
-            engine, model_name, model_cls, up_sql, down_sql, is_sqlite
-        )
-    return up_sql, down_sql
 
 
 def _build_model_migration_sql(

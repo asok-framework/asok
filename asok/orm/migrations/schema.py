@@ -314,7 +314,9 @@ class SQLiteSchemaEditor(BaseSchemaEditor):
             return c["name"], c["type"], c["notnull"] == 1, c["dflt_value"]
         return c[1], c[2], c[3] == 1, c[4]
 
-    def _build_existing_sqlite_col_sql(self, c_name: str, c_type: str, c_notnull: bool, c_dflt: Any) -> str:
+    def _build_existing_sqlite_col_sql(
+        self, c_name: str, c_type: str, c_notnull: bool, c_dflt: Any
+    ) -> str:
         col_def = f"{self.engine.quote_identifier(c_name)} {c_type}"
         if c_notnull:
             col_def += " NOT NULL"

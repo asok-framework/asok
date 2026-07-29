@@ -66,7 +66,7 @@ def _get_preprocessed_template(
     md5_key = None
     if not is_debug:
         added_macros = {k: context[k] for k in set(context.keys()) - keys_before}
-        md5_key = hashlib.md5(preprocessed.encode()).hexdigest()
+        md5_key = hashlib.md5(preprocessed.encode(), usedforsecurity=False).hexdigest()
         _preprocessed_cache[cache_key] = (preprocessed, added_macros, md5_key)
     return preprocessed, md5_key
 

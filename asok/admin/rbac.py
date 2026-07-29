@@ -227,9 +227,7 @@ def _extract_role_ids_attr(u: Any) -> list:
 
 def _extract_fallback_user_roles(u: Any) -> list:
     return (
-        _extract_role_attr(u)
-        or _extract_role_id_attr(u)
-        or _extract_role_ids_attr(u)
+        _extract_role_attr(u) or _extract_role_id_attr(u) or _extract_role_ids_attr(u)
     )
 
 

@@ -21,7 +21,9 @@ class FkAuthor(Model):
 class FkArticle(Model):
     __tablename__ = "articles_fk"
     title = Field.String()
-    author_id = Field.ForeignKey("FkAuthor")  # column + `article.author` accessor (auto)
+    author_id = Field.ForeignKey(
+        "FkAuthor"
+    )  # column + `article.author` accessor (auto)
 
 
 @pytest.fixture(autouse=True)

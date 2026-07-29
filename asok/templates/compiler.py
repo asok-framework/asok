@@ -154,7 +154,9 @@ def _build_compiled_callable(
             state.emit(f"__template_line__ = {current_line}")
             _emit_for_token(state, token)
         else:
-            _check_unclosed_delimiters(token, current_line, template_name, template_string)
+            _check_unclosed_delimiters(
+                token, current_line, template_name, template_string
+            )
             _emit_for_token(state, token)
         current_line += token.count("\n")
     compiled_code = "\n".join(state.code)
@@ -192,7 +194,10 @@ def _exec_template_code(
         "default_cache": default_cache,
     }
     try:
-        exec(compiled_code, env)
+        # SECURITY: compiled_code is produced by this template engine from
+        # developer-authored templates (like Jinja compiling to Python), not from
+        # end-user input; runtime value access goes through the sandbox resolver.
+        exec(compiled_code, env)  # nosec B102
     except Exception as e:
         prefix = f"Template '{template_name}'" if template_name else "Template"
         raise TemplateError(
@@ -214,7 +219,9 @@ def _compile_and_run(
 ) -> Any:
     """Compile a pre-processed template string and execute it."""
     if cache_key is None:
-        cache_key = hashlib.md5(template_string.encode()).hexdigest()
+        cache_key = hashlib.md5(
+            template_string.encode(), usedforsecurity=False
+        ).hexdigest()
     if is_debug:
         cache_key += "_debug"
     run_fn = _compiled_cache.get(cache_key)

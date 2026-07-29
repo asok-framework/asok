@@ -657,8 +657,6 @@ def test_show_in_overview_and_sidebar(tmp_path):
     assert admin._registered[q_slug]["show_in_overview"] is False
 
 
-
-
 def test_query_string_hpp():
     from asok.request import Request
 

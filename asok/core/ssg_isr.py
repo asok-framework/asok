@@ -243,7 +243,9 @@ class SSGISRMixin:
             return None
 
         try:
-            raw_html = self._generate_ssg_page_sync(request.path, page_file, cache_file, lang=lang)
+            raw_html = self._generate_ssg_page_sync(
+                request.path, page_file, cache_file, lang=lang
+            )
             if raw_html:
                 return self._build_and_send_generated_response(
                     request, raw_html, revalidate, start_response
@@ -253,7 +255,6 @@ class SSGISRMixin:
                 f"Failed to generate SSG page on-demand for {request.path}: {e}"
             )
         return None
-
 
     def _handle_ssg_isr_request(
         self, request: Request, environ: dict[str, Any], start_response: Callable
@@ -274,12 +275,20 @@ class SSGISRMixin:
         # Use a locale-aware cache key so each language has its own cached file.
         lang = self._lang_for_request(request)
         cache_file = self._get_ssg_cache_file(request.path, lang)
-        res = self._serve_ssg_cache(request, cache_file, revalidate, start_response, lang)
+        res = self._serve_ssg_cache(
+            request, cache_file, revalidate, start_response, lang
+        )
         if res is not None:
             return res
 
         return self._generate_ssg_on_demand(
-            request, page_file, cache_file, revalidate, route_params, start_response, lang
+            request,
+            page_file,
+            cache_file,
+            revalidate,
+            route_params,
+            start_response,
+            lang,
         )
 
     def _is_custom_error_page(self, page_file: str) -> bool:
@@ -445,7 +454,9 @@ class SSGISRMixin:
             cache_file = self._get_ssg_cache_file(route_path, lang)
             label = f"{route_path} [{lang}]" if lang else route_path
             logger.info(f"  Pre-rendering {kind} route {label}...")
-            self._render_single_locale(route_path, full_path, cache_file, label, lang, kind)
+            self._render_single_locale(
+                route_path, full_path, cache_file, label, lang, kind
+            )
 
     def _render_single_locale(
         self,
@@ -461,8 +472,6 @@ class SSGISRMixin:
             self._generate_ssg_page_sync(route_path, full_path, cache_file, lang=lang)
         except Exception as e:
             logger.error(f"  Failed to pre-render {kind} page {label}: {e}")
-
-
 
     def _get_dynamic_static_paths(self, module: Any) -> Optional[list[dict]]:
         from ..core.asgi import async_to_sync
@@ -483,7 +492,6 @@ class SSGISRMixin:
             rendered_route = re.sub(rf"\[{k}(:\w+)?\]", str(v), rendered_route)
 
         self._render_route_for_locales(rendered_route, full_path, kind="dynamic")
-
 
     def _pre_render_dynamic_route(self, route_path: str, full_path: str) -> None:
         if not full_path.endswith((".py", ".pyc")):

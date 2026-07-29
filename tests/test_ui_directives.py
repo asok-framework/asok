@@ -28,4 +28,3 @@ def test_ui_directives_asset_injector_markers():
     assert "asok-tab" in _DIRECTIVE_MARKERS
     assert "asok-tab-panel" in _DIRECTIVE_MARKERS
     assert "asok-progress" in _DIRECTIVE_MARKERS
-

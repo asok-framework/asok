@@ -78,7 +78,10 @@ def print_help() -> None:
             ("createsuperuser", "Create or update an administrative user"),
             ("dumpdata", "Dump database records to a JSON fixture file"),
             ("loaddata", "Load records from a JSON fixture file"),
-            ("backup", "Manage database backups & disaster recovery (run/status/restore)"),
+            (
+                "backup",
+                "Manage database backups & disaster recovery (run/status/restore)",
+            ),
         ],
         "Tools": [
             ("tailwind", "Manage Tailwind CSS (install/build/enable)"),
@@ -409,7 +412,9 @@ def _register_database_commands(subparsers) -> None:
     backup_list_p.add_argument("--target", default=None)
     backup_restore_p = backup_subparsers.add_parser("restore")
     backup_restore_p.add_argument("--source", default=None)
-    backup_restore_p.add_argument("--snapshot", default=None, help="Snapshot ID or filename to restore from")
+    backup_restore_p.add_argument(
+        "--snapshot", default=None, help="Snapshot ID or filename to restore from"
+    )
     backup_restore_p.add_argument("--force", action="store_true")
 
 

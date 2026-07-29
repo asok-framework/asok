@@ -44,6 +44,7 @@ _SESSIONS_CARD = """
 </div>
 """
 
+
 def _t(x):
     return x
 
@@ -80,8 +81,18 @@ class TestActiveSessionsTemplate:
 
     def test_session_count_badge(self):
         sessions = [
-            {"sid": "aaa", "ip": "1.2.3.4", "user_agent": "Chrome/120", "last_seen": time.time()},
-            {"sid": "bbb", "ip": "5.6.7.8", "user_agent": "Firefox/119", "last_seen": time.time()},
+            {
+                "sid": "aaa",
+                "ip": "1.2.3.4",
+                "user_agent": "Chrome/120",
+                "last_seen": time.time(),
+            },
+            {
+                "sid": "bbb",
+                "ip": "5.6.7.8",
+                "user_agent": "Firefox/119",
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "aaa")
         result = render_template_string(_SESSIONS_CARD, ctx)
@@ -92,7 +103,12 @@ class TestActiveSessionsTemplate:
 
     def test_current_device_badge_shown(self):
         sessions = [
-            {"sid": "current-sid", "ip": "10.0.0.1", "user_agent": "Safari/17", "last_seen": time.time()},
+            {
+                "sid": "current-sid",
+                "ip": "10.0.0.1",
+                "user_agent": "Safari/17",
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "current-sid")
         result = render_template_string(_SESSIONS_CARD, ctx)
@@ -101,7 +117,12 @@ class TestActiveSessionsTemplate:
 
     def test_revoke_button_shown_for_other_sessions(self):
         sessions = [
-            {"sid": "other-sid", "ip": "192.168.1.1", "user_agent": "Edge/120", "last_seen": time.time()},
+            {
+                "sid": "other-sid",
+                "ip": "192.168.1.1",
+                "user_agent": "Edge/120",
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "my-sid")
         result = render_template_string(_SESSIONS_CARD, ctx)
@@ -112,7 +133,12 @@ class TestActiveSessionsTemplate:
 
     def test_revoke_button_hidden_for_current_session(self):
         sessions = [
-            {"sid": "my-sid", "ip": "127.0.0.1", "user_agent": "Chrome/120", "last_seen": time.time()},
+            {
+                "sid": "my-sid",
+                "ip": "127.0.0.1",
+                "user_agent": "Chrome/120",
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "my-sid")
         result = render_template_string(_SESSIONS_CARD, ctx)
@@ -121,15 +147,27 @@ class TestActiveSessionsTemplate:
 
     def test_revoke_confirmation_data_attribute(self):
         sessions = [
-            {"sid": "other-sid", "ip": "1.1.1.1", "user_agent": "UA", "last_seen": time.time()},
+            {
+                "sid": "other-sid",
+                "ip": "1.1.1.1",
+                "user_agent": "UA",
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "my-sid")
         result = render_template_string(_SESSIONS_CARD, ctx)
-        assert "Revoke this session? The device will be logged out immediately." in result
+        assert (
+            "Revoke this session? The device will be logged out immediately." in result
+        )
 
     def test_ip_shown_for_each_session(self):
         sessions = [
-            {"sid": "s1", "ip": "42.42.42.42", "user_agent": "Bot/1", "last_seen": time.time()},
+            {
+                "sid": "s1",
+                "ip": "42.42.42.42",
+                "user_agent": "Bot/1",
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "other")
         result = render_template_string(_SESSIONS_CARD, ctx)
@@ -138,7 +176,12 @@ class TestActiveSessionsTemplate:
     def test_user_agent_truncated_in_display(self):
         long_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         sessions = [
-            {"sid": "s1", "ip": "1.1.1.1", "user_agent": long_ua, "last_seen": time.time()},
+            {
+                "sid": "s1",
+                "ip": "1.1.1.1",
+                "user_agent": long_ua,
+                "last_seen": time.time(),
+            },
         ]
         ctx = _make_ctx(sessions, "other")
         result = render_template_string(_SESSIONS_CARD, ctx)
@@ -157,12 +200,15 @@ class TestSessionTracking:
         store = SessionStore(backend="memory", ttl=3600)
         sid = store.generate_sid()
         now = time.time()
-        store.save(sid, {
-            "user_id": 1,
-            "_ip": "192.168.0.10",
-            "_user_agent": "TestAgent/1.0",
-            "_last_seen": now,
-        })
+        store.save(
+            sid,
+            {
+                "user_id": 1,
+                "_ip": "192.168.0.10",
+                "_user_agent": "TestAgent/1.0",
+                "_last_seen": now,
+            },
+        )
         sessions = store.get_user_sessions(1)
         assert len(sessions) == 1
         s = sessions[0]
@@ -227,12 +273,15 @@ class TestSessionTracking:
         store = SessionStore(backend="file", path=str(tmp_path / "sess"), ttl=3600)
         sid = store.generate_sid()
         now = time.time()
-        store.save(sid, {
-            "user_id": 100,
-            "_ip": "203.0.113.1",
-            "_user_agent": "FileUA/1",
-            "_last_seen": now,
-        })
+        store.save(
+            sid,
+            {
+                "user_id": 100,
+                "_ip": "203.0.113.1",
+                "_user_agent": "FileUA/1",
+                "_last_seen": now,
+            },
+        )
         sessions = store.get_user_sessions(100)
         assert len(sessions) == 1
         assert sessions[0]["ip"] == "203.0.113.1"

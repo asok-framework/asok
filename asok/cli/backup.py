@@ -15,6 +15,7 @@ from asok.cli.style import Style
 def _ensure_cli_models_loaded() -> None:
     try:
         from asok.cli.database import _find_project_root, _load_models
+
         root = _find_project_root()
         if root:
             _load_models(root)
@@ -51,7 +52,9 @@ def run_backup(args: argparse.Namespace) -> None:
         Style.info(f"Target: {res.get('target_url')}")
         if res.get("snapshot_id"):
             Style.info(f"Snapshot ID: {res.get('snapshot_id')}")
-        Style.info(f"Tables: {res.get('total_tables')} | Total rows: {res.get('total_rows')}")
+        Style.info(
+            f"Tables: {res.get('total_tables')} | Total rows: {res.get('total_rows')}"
+        )
     else:
         Style.error(f"Backup failed: {res.get('error')}")
         sys.exit(1)
@@ -75,8 +78,12 @@ def run_list(args: argparse.Namespace) -> None:
         tables = snap.get("total_tables", 0)
         tag = "[LATEST]" if idx == 1 else ""
 
-        print(f" {idx}. {Style.BOLD}{s_id}{Style.RESET} {Style.GREEN}{tag}{Style.RESET}")
-        print(f"    Date: {d_str} | Size: {size} | Tables: {tables} | Total Rows: {rows}")
+        print(
+            f" {idx}. {Style.BOLD}{s_id}{Style.RESET} {Style.GREEN}{tag}{Style.RESET}"
+        )
+        print(
+            f"    Date: {d_str} | Size: {size} | Tables: {tables} | Total Rows: {rows}"
+        )
         print()
 
 
@@ -88,20 +95,26 @@ def run_restore(args: argparse.Namespace) -> None:
 
     if not force:
         target_name = f"snapshot '{snapshot}'" if snapshot else "latest backup"
-        Style.warn(f"WARNING: This will overwrite data in primary database with {target_name}!")
+        Style.warn(
+            f"WARNING: This will overwrite data in primary database with {target_name}!"
+        )
         if not Style.confirm("Are you sure you want to proceed?", default=False):
             Style.info("Restoration cancelled.")
             return
 
     Style.info("Starting database restoration from backup...")
-    res = BackupManager.perform_restore(source_url=source, snapshot_id=snapshot, force=force)
+    res = BackupManager.perform_restore(
+        source_url=source, snapshot_id=snapshot, force=force
+    )
 
     if res.get("success"):
         Style.success(
             f"Database restored successfully in {res.get('duration_seconds')}s!"
         )
         Style.info(f"Source: {res.get('source_url')}")
-        Style.info(f"Restored tables: {res.get('total_tables')} | Total rows: {res.get('total_rows')}")
+        Style.info(
+            f"Restored tables: {res.get('total_tables')} | Total rows: {res.get('total_rows')}"
+        )
     else:
         Style.error(f"Restoration failed: {res.get('error')}")
         sys.exit(1)
@@ -120,7 +133,9 @@ def run_status(args: argparse.Namespace) -> None:
 
     last = status.get("last_backup")
     if last:
-        ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last.get("timestamp", 0)))
+        ts_str = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(last.get("timestamp", 0))
+        )
         print(f"Last Backup:     {ts_str}")
         print(f"Duration:        {last.get('duration_seconds')}s")
         print(f"Total Rows:      {last.get('total_rows')}")

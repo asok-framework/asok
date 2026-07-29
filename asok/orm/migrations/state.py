@@ -102,4 +102,3 @@ class ProjectState:
     def clone(self) -> ProjectState:
         models = {name: model.clone() for name, model in self.models.items()}
         return ProjectState(models)
-

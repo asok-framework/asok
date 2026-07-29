@@ -8,6 +8,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 
 # Environnement virtuel (si vous en utilisez un localement)
 venv/

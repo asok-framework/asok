@@ -153,7 +153,11 @@ class AddField(BaseOperation):
     def state_forwards(self, state: Any) -> None:
         from .state import VirtualModelState
 
-        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        model = (
+            state.get_model(self.model_name)
+            if hasattr(state, "get_model")
+            else state.models.get(self.model_name)
+        )
         if model is not None:
             model.fields[self.name] = self.field
         else:
@@ -165,7 +169,9 @@ class AddField(BaseOperation):
             )
 
     def database_forwards(self, schema_editor: Any) -> None:
-        schema_editor.add_column(self.model_name, self.name, self.field, table=self.table)
+        schema_editor.add_column(
+            self.model_name, self.name, self.field, table=self.table
+        )
 
     def database_backwards(self, schema_editor: Any) -> None:
         schema_editor.remove_column(self.model_name, self.name, table=self.table)
@@ -197,7 +203,11 @@ class RemoveField(BaseOperation):
         self.table = table
 
     def state_forwards(self, state: Any) -> None:
-        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        model = (
+            state.get_model(self.model_name)
+            if hasattr(state, "get_model")
+            else state.models.get(self.model_name)
+        )
         if model is not None:
             model.fields.pop(self.name, None)
 
@@ -205,7 +215,9 @@ class RemoveField(BaseOperation):
         schema_editor.remove_column(self.model_name, self.name, table=self.table)
 
     def database_backwards(self, schema_editor: Any) -> None:
-        schema_editor.add_column(self.model_name, self.name, self.field, table=self.table)
+        schema_editor.add_column(
+            self.model_name, self.name, self.field, table=self.table
+        )
 
     def deconstruct(self) -> str:
         tbl_repr = f", table={repr(self.table)}" if self.table else ""
@@ -238,7 +250,11 @@ class AlterField(BaseOperation):
     def state_forwards(self, state: Any) -> None:
         from .state import VirtualModelState
 
-        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        model = (
+            state.get_model(self.model_name)
+            if hasattr(state, "get_model")
+            else state.models.get(self.model_name)
+        )
         if model is not None:
             model.fields[self.name] = self.new_field
         else:
@@ -287,7 +303,11 @@ class RenameField(BaseOperation):
         self.table = table
 
     def state_forwards(self, state: Any) -> None:
-        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        model = (
+            state.get_model(self.model_name)
+            if hasattr(state, "get_model")
+            else state.models.get(self.model_name)
+        )
         if model is not None:
             if self.old_name in model.fields:
                 field_data = model.fields.pop(self.old_name)

@@ -249,7 +249,7 @@ class TemplateMixin:
         return _try_eval_callable(self, val)
 
     def shared(
-        self: Any, name: str, expected_type: Optional[Type[T]] = None
+        self: Any, name: str, _expected_type: Optional[Type[T]] = None
     ) -> Union[T, Any]:
         """Get a shared variable bound to this request (cached per request).
 

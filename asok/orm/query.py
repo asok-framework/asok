@@ -427,7 +427,9 @@ class Query(Generic[T]):
         Example:
             User.query().where_contains('name', 'John%')
         """
-        escaped = substring.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        escaped = (
+            substring.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
         return self.where(column, "LIKE", f"%{escaped}%")
 
     def or_where(self, column: str, op_or_val: Any, val: Any = _UNSET) -> Query[T]:
@@ -668,7 +670,7 @@ class Query(Generic[T]):
         if getattr(self, "_cache_key", None):
             return self._cache_key
         raw_key = f"{sql}_{all_args}_{self._eager}"
-        return "orm_" + hashlib.md5(raw_key.encode()).hexdigest()
+        return "orm_" + hashlib.md5(raw_key.encode(), usedforsecurity=False).hexdigest()
 
     def _maybe_store_cache(self, sql: str, all_args: list[Any], rows) -> None:
         if getattr(self, "_cache_ttl", None) is None:
@@ -702,7 +704,9 @@ class Query(Generic[T]):
         by_type = _bucket_by_morph_type(results, fk_id, fk_type)
         self._load_morph_buckets(by_type, rel_name, active_subs)
 
-    def _load_morph_buckets(self, by_type: dict, rel_name: str, active_subs: list) -> None:
+    def _load_morph_buckets(
+        self, by_type: dict, rel_name: str, active_subs: list
+    ) -> None:
         for t_type, pairs in by_type.items():
             target_model = MODELS_REGISTRY.get(t_type)
             if target_model:
@@ -1117,18 +1121,6 @@ class Query(Generic[T]):
             "next_page": page + 1 if has_next else None,
         }
 
-
-def _sanitize_page_args(page: int, per_page: int) -> tuple[int, int]:
-    return max(1, page), max(1, per_page)
-
-
-def _compute_page_counts(query: Any, count: bool, per_page: int) -> tuple[Optional[int], Optional[int]]:
-    if not count:
-        return None, None
-    total = query.count()
-    pages = math.ceil(total / per_page)
-    return total, pages
-
     # ── Async terminal methods ────────────────────────────────────────────────
 
     async def get_async(self) -> "ModelList[T]":
@@ -1244,6 +1236,20 @@ def _compute_page_counts(query: Any, count: bool, per_page: int) -> tuple[Option
         import asyncio
 
         return await asyncio.to_thread(self.paginate, page, per_page, count)
+
+
+def _sanitize_page_args(page: int, per_page: int) -> tuple[int, int]:
+    return max(1, page), max(1, per_page)
+
+
+def _compute_page_counts(
+    query: Any, count: bool, per_page: int
+) -> tuple[Optional[int], Optional[int]]:
+    if not count:
+        return None, None
+    total = query.count()
+    pages = math.ceil(total / per_page)
+    return total, pages
 
 
 _EAGER_LOADERS = {

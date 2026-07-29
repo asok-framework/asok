@@ -21,7 +21,6 @@ class BackupTestItem(Model):
 
 
 class TestBackupSystem(unittest.TestCase):
-
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.backup_path = os.path.join(self.temp_dir, "test_backup.sqlite3")
@@ -62,7 +61,9 @@ class TestBackupSystem(unittest.TestCase):
         self.assertEqual(BackupTestItem.count(), 0)
 
         # 3. Restore from isolated backup DB
-        res_restore = BackupManager.perform_restore(source_url=self.backup_url, force=True)
+        res_restore = BackupManager.perform_restore(
+            source_url=self.backup_url, force=True
+        )
         self.assertTrue(res_restore["success"])
         self.assertGreaterEqual(BackupTestItem.count(), 2)
 
@@ -74,7 +75,9 @@ class TestBackupSystem(unittest.TestCase):
         res_backup = BackupManager.perform_backup(target_url=self.backup_url)
         self.assertTrue(res_backup["success"])
 
-        args_status = argparse.Namespace(backup_subcommand="status", target=self.backup_url)
+        args_status = argparse.Namespace(
+            backup_subcommand="status", target=self.backup_url
+        )
         handle_backup_command(args_status)
 
         args_list = argparse.Namespace(backup_subcommand="list", target=self.backup_url)
@@ -84,7 +87,10 @@ class TestBackupSystem(unittest.TestCase):
         handle_backup_command(args_run)
 
         args_restore = argparse.Namespace(
-            backup_subcommand="restore", source=self.backup_url, snapshot=None, force=True
+            backup_subcommand="restore",
+            source=self.backup_url,
+            snapshot=None,
+            force=True,
         )
         handle_backup_command(args_restore)
 
@@ -98,7 +104,9 @@ class TestBackupSystem(unittest.TestCase):
         self.assertEqual(snaps[0]["snapshot_id"], snap_id1)
 
         # Cleanup retention test with max_snapshots=1
-        cleaned = BackupManager.cleanup_old_snapshots(target_url=self.backup_url, max_snapshots=1)
+        cleaned = BackupManager.cleanup_old_snapshots(
+            target_url=self.backup_url, max_snapshots=1
+        )
         self.assertGreaterEqual(cleaned, 0)
         snaps_after = BackupManager.list_snapshots(target_url=self.backup_url)
         self.assertEqual(len(snaps_after), 1)
@@ -123,15 +131,20 @@ class TestBackupSystem(unittest.TestCase):
         os.environ["DATABASE_BACKUP_URL"] = "backups/production.sqlite3"
         try:
             resolved_url = BackupManager.get_backup_url()
-            self.assertEqual(resolved_url, os.path.join(custom_dir, "production.sqlite3"))
+            self.assertEqual(
+                resolved_url, os.path.join(custom_dir, "production.sqlite3")
+            )
             self.assertTrue(os.path.exists(custom_dir))
         finally:
             os.environ.pop("DATABASE_BACKUP_PATH", None)
+
     def test_get_target_file_path_sqlite_relative_dsn(self):
         target = BackupManager._get_target_file_path("sqlite:///backups/backup.sqlite3")
         self.assertEqual(target, "backups/backup.sqlite3")
 
-        abs_target = BackupManager._get_target_file_path("sqlite:////var/data/backup.sqlite3")
+        abs_target = BackupManager._get_target_file_path(
+            "sqlite:////var/data/backup.sqlite3"
+        )
         self.assertEqual(abs_target, "/var/data/backup.sqlite3")
 
 

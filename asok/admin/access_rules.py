@@ -70,9 +70,10 @@ def _related_model_name(field: Any) -> str:
 
 
 def _is_user_fk(field: Any) -> bool:
-    return bool(getattr(field, "is_foreign_key", False)) and _related_model_name(
-        field
-    ) == "User"
+    return (
+        bool(getattr(field, "is_foreign_key", False))
+        and _related_model_name(field) == "User"
+    )
 
 
 def _user_fk_names(model: Any) -> list[str]:

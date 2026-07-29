@@ -200,7 +200,7 @@ def precompile_directives(app, html: str) -> tuple[str, dict[str, str]]:
 
 
 def _expr_hash(expr: str) -> str:
-    return hashlib.md5(expr.strip().encode()).hexdigest()[:12]
+    return hashlib.md5(expr.strip().encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def _has_template_placeholder(val: str) -> bool:
@@ -309,7 +309,7 @@ class AssetInjector:
     def inject(self) -> str:
         """Execute the asset injection pipeline on the page content and return the result."""
         self._ensure_pending_buffers()
-        self._inject_anti_fouc()       # ← FIRST: prevents all FOUC before any JS loads
+        self._inject_anti_fouc()  # ← FIRST: prevents all FOUC before any JS loads
         self._inject_meta()
         self._inject_page_id_and_assets()
         self._flush_styles_to_head()
@@ -372,9 +372,7 @@ class AssetInjector:
         nonce = self.nonce
         # Critical CSS: synchronous, no buffering — injected right after <head>
         critical = (
-            f'<style id="asok-critical" nonce="{nonce}">'
-            f"{self._ANTI_FOUC_CSS}"
-            f"</style>\n"
+            f'<style id="asok-critical" nonce="{nonce}">{self._ANTI_FOUC_CSS}</style>\n'
         )
         # Inline script: restore color-scheme/theme class before first paint
         # Uses localStorage key "asok-theme" (value: "dark" | "light").
@@ -745,8 +743,7 @@ class AssetInjector:
         )
         alive_js = self.app.get_asset("asok_alive.min.js")
         self.request._asok_pending_scripts += (
-            f"{ws_port_script}"
-            f'<script nonce="{nonce}">\n{alive_js}\n</script>\n'
+            f'{ws_port_script}<script nonce="{nonce}">\n{alive_js}\n</script>\n'
         )
 
     def _needs_alive(self) -> bool:

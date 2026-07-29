@@ -570,4 +570,3 @@ outer_index:{{ loop.index }}
 
     assert "outer_index:1" in res
     assert "outer_index:2" in res
-

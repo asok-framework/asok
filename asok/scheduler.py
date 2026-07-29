@@ -125,7 +125,9 @@ class ScheduledTask:
         try:
             self._fn(*self._args, **self._kwargs)
         except Exception:
-            logger.exception("Scheduled task %s failed", getattr(self._fn, "__name__", str(self._fn)))
+            logger.exception(
+                "Scheduled task %s failed", getattr(self._fn, "__name__", str(self._fn))
+            )
 
     def _run(self) -> None:
         """Internal loop that executes the function at the specified interval."""

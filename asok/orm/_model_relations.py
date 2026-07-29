@@ -22,7 +22,11 @@ def build_foreign_key_property(field_name: str, related_model: Any) -> property:
             return None
         # related_model may be a string ("User") — resolve it lazily at access
         # time (the target class may not be registered when the FK is declared).
-        model = MODELS_REGISTRY.get(related_model) if isinstance(related_model, str) else related_model
+        model = (
+            MODELS_REGISTRY.get(related_model)
+            if isinstance(related_model, str)
+            else related_model
+        )
         if model is None:
             return None
         from .router import database_router_context

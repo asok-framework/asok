@@ -331,7 +331,9 @@ class AuthViewsMixin:
             return
         allowed, _ = self._login_rate_check(request)
         if not allowed:
-            request.flash("error", self.t(request, "Too many attempts. Please try again later."))
+            request.flash(
+                "error", self.t(request, "Too many attempts. Please try again later.")
+            )
             return
         if _totp_verify(secret, form.code.value):
             self._enable_2fa_on_user(request, u, secret)

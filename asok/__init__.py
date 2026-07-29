@@ -1,7 +1,7 @@
 import os
 import sys
 
-__version__ = "0.5.5"
+__version__ = "0.6.0"
 
 # Disable bytecode generation (__pycache__) by default to keep the file-system based routing clean.
 # Can be overridden by setting ASOK_WRITE_BYTECODE=true in the environment.

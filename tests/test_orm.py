@@ -501,3 +501,36 @@ class TestFTS:
 
         res2 = Article.query().search("Python OR").get()
         assert len(res2) == 0
+
+
+class TestQueryAsync:
+    def test_query_async_terminal_methods(self, app):
+        import asyncio
+
+        async def _test():
+            u1 = User.create(
+                name="async1", email="async1@example.com", password="Secret123!"
+            )
+            u2 = User.create(
+                name="async2", email="async2@example.com", password="Secret123!"
+            )
+
+            res = await User.query().where("name", "async1").get_async()
+            assert len(res) == 1
+            assert res[0].id == u1.id
+
+            first_u = await User.query().where("name", "async2").first_async()
+            assert first_u is not None
+            assert first_u.id == u2.id
+
+            cnt = await User.query().where("name", "async1").count_async()
+            assert cnt == 1
+
+            ex = await User.query().where("name", "async1").exists_async()
+            assert ex is True
+
+            page = await User.query().paginate_async(page=1, per_page=10)
+            assert "items" in page
+            assert page["total"] >= 2
+
+        asyncio.run(_test())

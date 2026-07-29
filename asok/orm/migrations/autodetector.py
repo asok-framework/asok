@@ -37,9 +37,13 @@ class MigrationAutodetector:
         curr_table = curr_model.table if curr_model else None
         return self._search_historical_models(name.lower(), curr_table)
 
-    def _search_historical_models(self, name_lower: str, curr_table: Optional[str]) -> Optional[str]:
+    def _search_historical_models(
+        self, name_lower: str, curr_table: Optional[str]
+    ) -> Optional[str]:
         for hist_name, hist_model in self.historical_state.models.items():
-            if hist_name.lower() == name_lower or (curr_table and hist_model.table == curr_table):
+            if hist_name.lower() == name_lower or (
+                curr_table and hist_model.table == curr_table
+            ):
                 return hist_name
         return None
 
@@ -96,15 +100,31 @@ class MigrationAutodetector:
         removed_fields = hist_fields - curr_fields
         added_fields = curr_fields - hist_fields
 
-        self._handle_interactive_renaming(model_name, removed_fields, added_fields, ops, curr_model.table)
+        self._handle_interactive_renaming(
+            model_name, removed_fields, added_fields, ops, curr_model.table
+        )
 
         # Generate AddField operations
         for f_name in sorted(added_fields):
-            ops.append(AddField(model_name, f_name, curr_model.fields[f_name], table=curr_model.table))
+            ops.append(
+                AddField(
+                    model_name,
+                    f_name,
+                    curr_model.fields[f_name],
+                    table=curr_model.table,
+                )
+            )
 
         # Generate RemoveField operations
         for f_name in sorted(removed_fields):
-            ops.append(RemoveField(model_name, f_name, hist_model.fields[f_name], table=hist_model.table))
+            ops.append(
+                RemoveField(
+                    model_name,
+                    f_name,
+                    hist_model.fields[f_name],
+                    table=hist_model.table,
+                )
+            )
 
         # Generate AlterField operations
         common_fields = hist_fields & curr_fields
@@ -165,7 +185,9 @@ class MigrationAutodetector:
             h_f = hist_model.fields[f_name]
             c_f = curr_model.fields[f_name]
             if self._field_changed(h_f, c_f):
-                ops.append(AlterField(model_name, f_name, h_f, c_f, table=curr_model.table))
+                ops.append(
+                    AlterField(model_name, f_name, h_f, c_f, table=curr_model.table)
+                )
 
     def _field_changed(self, f1: Dict[str, Any], f2: Dict[str, Any]) -> bool:
         keys_to_compare = (

@@ -56,7 +56,9 @@ class CRUDViewsMixin:
         self._sync_sessions_if_needed(entry)
 
         default_per_page = entry["per_page"]
-        per_page = max(10, min(200, int(request.args.get("per_page") or default_per_page)))
+        per_page = max(
+            10, min(200, int(request.args.get("per_page") or default_per_page))
+        )
         page = max(1, int(request.args.get("page", 1) or 1))
         ordering = request.args.get("sort") or entry.get("ordering") or "-id"
 
@@ -69,9 +71,7 @@ class CRUDViewsMixin:
         items = query.limit(per_page).offset((page - 1) * per_page).get()
         return items, page, pages, total, per_page
 
-    def _prepend_page_boundary(
-        self, request: Any, items: list, start: int
-    ) -> None:
+    def _prepend_page_boundary(self, request: Any, items: list, start: int) -> None:
         if start > 1:
             items.append({"n": 1, "url": self._qs(request, page=1)})
             if start > 2:
@@ -85,9 +85,7 @@ class CRUDViewsMixin:
                 items.append({"n": 0, "url": ""})
             items.append({"n": pages, "url": self._qs(request, page=pages)})
 
-    def _compute_page_range(
-        self, request: Any, page: int, pages: int
-    ) -> list[dict]:
+    def _compute_page_range(self, request: Any, page: int, pages: int) -> list[dict]:
         window = 2
         start = max(1, page - window)
         end = min(pages, page + window)
@@ -202,11 +200,16 @@ class CRUDViewsMixin:
     def _generate_chart_labels(now: Any) -> list[str]:
         import datetime
 
-        return [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+        return [
+            (now - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(13, -1, -1)
+        ]
 
     @classmethod
     def _generate_chart_data(cls, model: Any, now: Any) -> list[int]:
-        return [cls._count_model_records_for_day(model, now, i) for i in range(13, -1, -1)]
+        return [
+            cls._count_model_records_for_day(model, now, i) for i in range(13, -1, -1)
+        ]
 
     @staticmethod
     def _count_model_records_range(model: Any, start: str, end_exclusive: str) -> int:
@@ -227,7 +230,9 @@ class CRUDViewsMixin:
         return f"{ny:04d}-{nm:02d}-01"
 
     @classmethod
-    def _generate_monthly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+    def _generate_monthly_chart(
+        cls, model: Any, now: Any
+    ) -> tuple[list[str], list[int]]:
         labels, data = [], []
         for i in range(11, -1, -1):
             m, y = now.month - i, now.year
@@ -235,11 +240,17 @@ class CRUDViewsMixin:
                 m += 12
                 y -= 1
             labels.append(f"{y:04d}-{m:02d}-01")
-            data.append(cls._count_model_records_range(model, f"{y:04d}-{m:02d}-01", cls._next_month_start(y, m)))
+            data.append(
+                cls._count_model_records_range(
+                    model, f"{y:04d}-{m:02d}-01", cls._next_month_start(y, m)
+                )
+            )
         return labels, data
 
     @classmethod
-    def _generate_quarterly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+    def _generate_quarterly_chart(
+        cls, model: Any, now: Any
+    ) -> tuple[list[str], list[int]]:
         curr_q = (now.month - 1) // 3 + 1
         labels, data = [], []
         for i in range(3, -1, -1):
@@ -249,11 +260,17 @@ class CRUDViewsMixin:
                 y -= 1
             sm, em = (q - 1) * 3 + 1, q * 3
             labels.append(f"{y:04d}-Q{q}")
-            data.append(cls._count_model_records_range(model, f"{y:04d}-{sm:02d}-01", cls._next_month_start(y, em)))
+            data.append(
+                cls._count_model_records_range(
+                    model, f"{y:04d}-{sm:02d}-01", cls._next_month_start(y, em)
+                )
+            )
         return labels, data
 
     @classmethod
-    def _generate_weekly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+    def _generate_weekly_chart(
+        cls, model: Any, now: Any
+    ) -> tuple[list[str], list[int]]:
         import datetime
 
         start_of_current_week = now - datetime.timedelta(days=now.weekday())
@@ -262,16 +279,26 @@ class CRUDViewsMixin:
             w_start = start_of_current_week - datetime.timedelta(weeks=i)
             w_end_excl = w_start + datetime.timedelta(days=7)
             labels.append(w_start.strftime("%Y-%m-%d"))
-            data.append(cls._count_model_records_range(model, w_start.strftime("%Y-%m-%d"), w_end_excl.strftime("%Y-%m-%d")))
+            data.append(
+                cls._count_model_records_range(
+                    model, w_start.strftime("%Y-%m-%d"), w_end_excl.strftime("%Y-%m-%d")
+                )
+            )
         return labels, data
 
     @classmethod
-    def _generate_yearly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+    def _generate_yearly_chart(
+        cls, model: Any, now: Any
+    ) -> tuple[list[str], list[int]]:
         labels, data = [], []
         for i in range(4, -1, -1):
             y = now.year - i
             labels.append(str(y))
-            data.append(cls._count_model_records_range(model, f"{y:04d}-01-01", f"{y + 1:04d}-01-01"))
+            data.append(
+                cls._count_model_records_range(
+                    model, f"{y:04d}-01-01", f"{y + 1:04d}-01-01"
+                )
+            )
         return labels, data
 
     @classmethod
@@ -337,12 +364,16 @@ class CRUDViewsMixin:
         q = self._get_q_param(request)
         sort = self._get_list_sort(request)
 
-        items, page, pages, total, per_page = self._fetch_list_items(request, entry, trash)
+        items, page, pages, total, per_page = self._fetch_list_items(
+            request, entry, trash
+        )
         item_dicts = self._build_item_dicts(items, entry["columns"], entry["model"])
         bulk_edit_fields = self._build_bulk_edit_fields(request, entry, trash)
         bulk_actions = self._build_bulk_actions(request, entry, trash)
         breadcrumbs = self._build_list_breadcrumbs(entry, trash)
-        list_chart = self._collect_model_list_chart(entry["model"]) if not trash else None
+        list_chart = (
+            self._collect_model_list_chart(entry["model"]) if not trash else None
+        )
 
         auth_model_name = self.app.config.get("AUTH_MODEL", "User")
         is_auth_model = entry["model"].__name__ == auth_model_name
@@ -441,9 +472,7 @@ class CRUDViewsMixin:
         """True when either a code `scope()` or the graphical `.own` rule applies."""
         if entry.get("scope"):
             return True
-        return user_is_own_scoped(
-            getattr(request, "user", None), entry.get("slug", "")
-        )
+        return user_is_own_scoped(getattr(request, "user", None), entry.get("slug", ""))
 
     def _scoped_allowed_ids(
         self, request: Any, entry: dict[str, Any], ids: list[int]
@@ -751,7 +780,9 @@ class CRUDViewsMixin:
             data[name] = getattr(item, name, None)
         return data
 
-    def _handle_admin_clone(self, request: Any, entry: dict, item: Any, slug: str) -> Any:
+    def _handle_admin_clone(
+        self, request: Any, entry: dict, item: Any, slug: str
+    ) -> Any:
         if not entry["can_add"] or not self._can(request, slug, "add"):
             return self._forbid(request)
         data = self._clone_item_data(entry["model"], item)
@@ -1306,7 +1337,9 @@ class CRUDViewsMixin:
 
         permission_matrix = self._role_permission_matrix(request, item, is_role)
 
-        can_edit_perm = bool(entry["can_edit"] and self._can(request, entry["slug"], "edit"))
+        can_edit_perm = bool(
+            entry["can_edit"] and self._can(request, entry["slug"], "edit")
+        )
         can_delete_perm = self._get_can_delete_perm(request, entry, viewing_self)
 
         return self._render(
@@ -1567,7 +1600,9 @@ class CRUDViewsMixin:
             name, field, set(entry["readonly_fields"]), set(entry["form_exclude"])
         ):
             return True
-        return name in user_locked_fields(getattr(request, "user", None), entry.get("slug", ""))
+        return name in user_locked_fields(
+            getattr(request, "user", None), entry.get("slug", "")
+        )
 
     def _apply_single_field(
         self,
@@ -1753,7 +1788,9 @@ class CRUDViewsMixin:
         )
         self._handle_save_redirect(request, entry["slug"], item.id)
 
-    def _apply_owner_default(self, request: Any, entry: dict[str, Any], item: Any) -> None:
+    def _apply_owner_default(
+        self, request: Any, entry: dict[str, Any], item: Any
+    ) -> None:
         """Own-scoped creators can't choose an owner: stamp it with their id.
 
         Pairs with the hidden owner field in `_build_form` — together they let a

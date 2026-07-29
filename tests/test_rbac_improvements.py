@@ -351,7 +351,9 @@ class TestUserWithRoleAllowed:
         engine = User.get_engine()
 
         # Create moderator role with permissions for posts
-        mod_role = Role(name="moderator", label="Moderator", permissions="posts.view,posts.edit")
+        mod_role = Role(
+            name="moderator", label="Moderator", permissions="posts.view,posts.edit"
+        )
         mod_role.save()
 
         # Create moderator user (is_admin=False)
@@ -376,7 +378,9 @@ class TestUserWithRoleAllowed:
         admin._require_admin(request)
 
         # 3. Verify impersonation model visibility
-        admin_user = User(email="admin@example.com", password="password123", is_admin=True)
+        admin_user = User(
+            email="admin@example.com", password="password123", is_admin=True
+        )
         admin_user.save()
 
         req = MagicMock()
@@ -395,14 +399,19 @@ class TestUserWithRoleAllowed:
         admin._discover()
 
         # Create moderator role in DB
-        mod_role = Role.create(_trust=True, name="moderator", label="Moderator", permissions="posts.view")
+        mod_role = Role.create(
+            _trust=True, name="moderator", label="Moderator", permissions="posts.view"
+        )
 
         # Create user with role "moderator"
-        user_with_str_role = User.create(_trust=True, email="mod_str@example.com", password="password123", is_admin=False)
+        user_with_str_role = User.create(
+            _trust=True,
+            email="mod_str@example.com",
+            password="password123",
+            is_admin=False,
+        )
         user_with_str_role.role = mod_role
 
         # Verify admin access and permission checks
         assert admin._has_admin_access(user_with_str_role) is True
         assert admin._can(MagicMock(user=user_with_str_role), "posts", "view") is True
-
-

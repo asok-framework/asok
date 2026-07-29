@@ -48,6 +48,7 @@ class LifecycleMixin:
     def _handle_coroutine_res(self, coro: Any) -> None:
         try:
             import asyncio
+
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(coro)

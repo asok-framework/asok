@@ -211,7 +211,9 @@ TEMPLATE_FILTERS = {
     "truncate": _truncate_filter,
     "replace": _replace_filter,
     "join": lambda v, sep=", ": sep.join(str(i) for i in v),
-    "default": lambda v, d="": d if isinstance(v, Undefined) or v is None or v == "" else v,
+    "default": lambda v, d="": (
+        d if isinstance(v, Undefined) or v is None or v == "" else v
+    ),
     "striptags": lambda v: _RE_STRIPTAGS.sub("", str(v)),
     "length": lambda v: len(v),
     "date": lambda v, f="%d/%m/%Y": _date_filter(v, f),

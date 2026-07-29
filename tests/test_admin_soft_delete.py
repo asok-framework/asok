@@ -49,6 +49,7 @@ _LIST_ROW_ACTIONS_TRASH = """
 {% endif %}
 """
 
+
 def _t(x):
     return x
 
@@ -68,35 +69,65 @@ def _ctx(**extra):
 
 class TestTrashHeader:
     def test_trash_button_shown_for_soft_delete_model(self):
-        ctx = _ctx(has_soft_delete=True, trash=False, user_can_delete=True,
-                   can_add=True, user_can_add=True, row_id=1)
+        ctx = _ctx(
+            has_soft_delete=True,
+            trash=False,
+            user_can_delete=True,
+            can_add=True,
+            user_can_add=True,
+            row_id=1,
+        )
         result = render_template_string(_LIST_TRASH_HEADER, ctx)
         assert "Trash" in result
         assert "/admin/posts/trash" in result
 
     def test_back_to_active_shown_in_trash_mode(self):
-        ctx = _ctx(has_soft_delete=True, trash=True, user_can_delete=True,
-                   can_add=True, user_can_add=True, row_id=1)
+        ctx = _ctx(
+            has_soft_delete=True,
+            trash=True,
+            user_can_delete=True,
+            can_add=True,
+            user_can_add=True,
+            row_id=1,
+        )
         result = render_template_string(_LIST_TRASH_HEADER, ctx)
         assert "Active Items" in result
         assert "/admin/posts" in result
         assert "Trash" not in result or "Active Items" in result
 
     def test_new_button_hidden_in_trash_mode(self):
-        ctx = _ctx(has_soft_delete=True, trash=True, user_can_delete=True,
-                   can_add=True, user_can_add=True, row_id=1)
+        ctx = _ctx(
+            has_soft_delete=True,
+            trash=True,
+            user_can_delete=True,
+            can_add=True,
+            user_can_add=True,
+            row_id=1,
+        )
         result = render_template_string(_LIST_TRASH_HEADER, ctx)
         assert "/admin/posts/new" not in result
 
     def test_trash_button_hidden_without_delete_permission(self):
-        ctx = _ctx(has_soft_delete=True, trash=False, user_can_delete=False,
-                   can_add=True, user_can_add=True, row_id=1)
+        ctx = _ctx(
+            has_soft_delete=True,
+            trash=False,
+            user_can_delete=False,
+            can_add=True,
+            user_can_add=True,
+            row_id=1,
+        )
         result = render_template_string(_LIST_TRASH_HEADER, ctx)
         assert "/admin/posts/trash" not in result
 
     def test_trash_button_hidden_for_hard_delete_model(self):
-        ctx = _ctx(has_soft_delete=False, trash=False, user_can_delete=True,
-                   can_add=True, user_can_add=True, row_id=1)
+        ctx = _ctx(
+            has_soft_delete=False,
+            trash=False,
+            user_can_delete=True,
+            can_add=True,
+            user_can_add=True,
+            row_id=1,
+        )
         result = render_template_string(_LIST_TRASH_HEADER, ctx)
         assert "/admin/posts/trash" not in result
 
@@ -150,7 +181,9 @@ class TestSessionStoreUserSessions:
     def test_get_user_sessions_returns_matching_sessions(self):
         store = SessionStore(backend="memory", ttl=3600)
         sid = store.generate_sid()
-        store.save(sid, {"user_id": 1, "_ip": "127.0.0.1", "_user_agent": "TestBrowser/1.0"})
+        store.save(
+            sid, {"user_id": 1, "_ip": "127.0.0.1", "_user_agent": "TestBrowser/1.0"}
+        )
         sessions = store.get_user_sessions(1)
         assert len(sessions) == 1
         assert sessions[0]["sid"] == sid
@@ -217,6 +250,7 @@ class TestSessionStoreUserSessions:
 
     def test_get_user_sessions_sorted_by_last_seen(self):
         import time
+
         store = SessionStore(backend="memory", ttl=3600)
         sid_old = store.generate_sid()
         sid_new = store.generate_sid()

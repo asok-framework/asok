@@ -29,11 +29,17 @@ def test_anti_fouc_theme_script_injected():
     req._asok_pending_scripts = ""
     req.nonce = "test-nonce"
 
-    html = '<!DOCTYPE html><html><head></head><body><button asok-theme-toggle>Toggle</button></body></html>'
+    html = "<!DOCTYPE html><html><head></head><body><button asok-theme-toggle>Toggle</button></body></html>"
     injector = AssetInjector(
-        app, req, html, nonce="test-nonce", stream=False, include_scripts=True, only_scripts=False
+        app,
+        req,
+        html,
+        nonce="test-nonce",
+        stream=False,
+        include_scripts=True,
+        only_scripts=False,
     )
     result = injector.inject()
 
-    assert 'localStorage.getItem(\'asok-theme\')' in result or 'asok-theme' in result
-    assert 'data-theme' in result
+    assert "localStorage.getItem('asok-theme')" in result or "asok-theme" in result
+    assert "data-theme" in result

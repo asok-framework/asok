@@ -194,7 +194,9 @@ class SessionStore:
             "created_at": data.get("_created_at", ts),
         }
 
-    def _try_load_file_session(self, fname: str, user_id_str: str) -> "dict[str, Any] | None":
+    def _try_load_file_session(
+        self, fname: str, user_id_str: str
+    ) -> "dict[str, Any] | None":
         sid = fname[:-5]
         fpath = os.path.join(self.path, fname)
         try:
@@ -203,7 +205,9 @@ class SessionStore:
             ts = entry.get("ts", 0)
             if time.time() - ts > self.ttl:
                 return None
-            return self._session_entry_if_match(sid, entry.get("data", {}), ts, user_id_str)
+            return self._session_entry_if_match(
+                sid, entry.get("data", {}), ts, user_id_str
+            )
         except Exception:
             return None
 
@@ -212,7 +216,9 @@ class SessionStore:
         raw = key.decode("utf-8") if isinstance(key, bytes) else key
         return raw.split(":", 1)[1]
 
-    def _try_load_redis_session(self, key: Any, user_id_str: str) -> "dict[str, Any] | None":
+    def _try_load_redis_session(
+        self, key: Any, user_id_str: str
+    ) -> "dict[str, Any] | None":
         val = self._redis.get(key)
         if not val:
             return None
@@ -221,7 +227,9 @@ class SessionStore:
             data = json.loads(raw)
         except Exception:
             return None
-        return self._session_entry_if_match(self._decode_redis_sid(key), data, time.time(), user_id_str)
+        return self._session_entry_if_match(
+            self._decode_redis_sid(key), data, time.time(), user_id_str
+        )
 
     def _get_user_sessions_memory(self, user_id_str: str) -> list[dict[str, Any]]:
         now = time.time()
@@ -230,7 +238,9 @@ class SessionStore:
             for sid, entry in list(self._memory.items()):
                 if now - entry["ts"] > self.ttl:
                     continue
-                hit = self._session_entry_if_match(sid, entry.get("data", {}), entry["ts"], user_id_str)
+                hit = self._session_entry_if_match(
+                    sid, entry.get("data", {}), entry["ts"], user_id_str
+                )
                 if hit:
                     sessions.append(hit)
         sessions.sort(key=itemgetter("last_seen"), reverse=True)
@@ -297,7 +307,9 @@ class SessionStore:
             "is_active": not is_revoked,
         }
 
-    def get_all_active_sessions(self, max_age: Optional[float] = None) -> list[dict[str, Any]]:
+    def get_all_active_sessions(
+        self, max_age: Optional[float] = None
+    ) -> list[dict[str, Any]]:
         """Return sessions for any authenticated user within max_age seconds.
 
         max_age defaults to self.ttl. Pass a larger value (e.g. 86400 * 30) to

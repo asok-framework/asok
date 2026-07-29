@@ -55,7 +55,9 @@ def test_from_model_autobinds_and_renders_csrf(app):
 
 def test_from_model_autobinds_and_validates_on_post(app):
     tok = "a" * 40
-    post_req = _req(app, "POST", f"name=Alice&csrf_token={tok}", cookies=f"asok_csrf={tok}")
+    post_req = _req(
+        app, "POST", f"name=Alice&csrf_token={tok}", cookies=f"asok_csrf={tok}"
+    )
     with request_context(post_req):
         form = Form.from_model(Contact)  # no request passed
         assert form.validate() is True

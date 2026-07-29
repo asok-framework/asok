@@ -55,7 +55,9 @@ def _role(perms):
 
 def _user(perms=None, is_admin=False, uid=1):
     roles = [_role(perms)] if perms is not None else []
-    return types.SimpleNamespace(id=uid, is_admin=is_admin, roles=roles, can=lambda p: False)
+    return types.SimpleNamespace(
+        id=uid, is_admin=is_admin, roles=roles, can=lambda p: False
+    )
 
 
 # ── owner-field detection (unit) ────────────────────────────────────
@@ -102,7 +104,9 @@ def test_own_scope_not_implied_by_verb_wildcard():
 
 
 def test_locked_fields_collects_locks():
-    assert user_locked_fields(_user("posts.edit,posts.lock:status"), "posts") == {"status"}
+    assert user_locked_fields(_user("posts.edit,posts.lock:status"), "posts") == {
+        "status"
+    }
 
 
 def test_locked_fields_scoped_per_slug():
@@ -112,7 +116,9 @@ def test_locked_fields_scoped_per_slug():
 
 
 def test_locked_fields_empty_for_superadmin():
-    assert user_locked_fields(_user("posts.lock:status", is_admin=True), "posts") == set()
+    assert (
+        user_locked_fields(_user("posts.lock:status", is_admin=True), "posts") == set()
+    )
 
 
 def test_locked_fields_empty_for_wildcard():
@@ -369,7 +375,9 @@ def test_own_scope_fails_closed_on_missing_owner_column():
     MODELS_REGISTRY["GpDrift"] = GpDrift
     eng = GpDrift.get_engine()
     eng.execute("DROP TABLE IF EXISTS gp_drift")
-    eng.execute("CREATE TABLE gp_drift (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)")
+    eng.execute(
+        "CREATE TABLE gp_drift (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)"
+    )
     eng.execute("INSERT INTO gp_drift (title) VALUES ('a'), ('b')")
     a = Admin(app)
     a.register(GpDrift)

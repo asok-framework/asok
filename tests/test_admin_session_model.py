@@ -121,7 +121,9 @@ def test_deactivate_stale_db_sessions():
     sid_active = f"active_{uuid.uuid4().hex}"
     sid_stale = f"stale_{uuid.uuid4().hex}"
 
-    StaleAdminSession.create(_trust=True, sid=sid_active, is_active=True, last_seen=1000)
+    StaleAdminSession.create(
+        _trust=True, sid=sid_active, is_active=True, last_seen=1000
+    )
     StaleAdminSession.create(_trust=True, sid=sid_stale, is_active=True, last_seen=1000)
 
     admin = Admin.__new__(Admin)
