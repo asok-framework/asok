@@ -14,11 +14,14 @@
         {{ icon('edit', 14) }} <span style="margin-left:4px">{{ t('Edit') }}</span>
       </a>
     {% endif %}
-    {# SECURITY: History (audit logs) reserved for admins only #}
+    {# SECURITY: History (audit logs) + Trash reserved for admins only #}
     {% if request.user and request.user.is_admin %}
     <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/history"
        class="btn btn-ghost btn-sm" data-spa title="{{ t('History') }}">
       {{ icon('history', 14) }} <span style="margin-left:4px">{{ t('History') }}</span>
+    </a>
+    <a href="{{ admin_prefix }}/trash?model_slug={{ slug }}" class="btn btn-ghost btn-sm" data-spa>
+      {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Trash') }}</span>
     </a>
     {% endif %}
     <a href="{{ admin_prefix }}/{{ slug }}"
@@ -156,6 +159,11 @@
             {{ icon('edit', 14) }} <span style="margin-left:4px">{{ t('Edit') }}</span>
           </a>
         {% endif %}
+        {% if can_add and user_can_add %}
+          <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/clone" class="btn btn-default" data-spa>
+            {{ icon('copy', 14) }} <span style="margin-left:4px">{{ t('Clone') }}</span>
+          </a>
+        {% endif %}
         <a href="{{ admin_prefix }}/{{ slug }}"
            class="btn btn-default" data-spa>
           {{ icon('arrow-left', 14) }} <span style="margin-left:4px">{{ t('Back to list') }}</span>
@@ -168,10 +176,10 @@
                 style="display:inline"
                 data-block="#page-body"
                 data-push-url
-                data-confirm="{{ t('Delete this record?') }}">
+                data-confirm="{{ t('Move this record to trash?') }}">
             {{ request.csrf_input() }}
             <button type="submit" class="btn btn-ghost text-danger">
-              {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Delete') }}</span>
+              {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Move to Trash') }}</span>
             </button>
           </form>
         {% endif %}

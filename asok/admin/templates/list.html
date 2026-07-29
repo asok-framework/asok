@@ -13,9 +13,14 @@
     </p>
   </div>
   <div class="page-actions">
-    {% if has_soft_delete and not trash and user_can_delete %}
-      <a href="{{ admin_prefix }}/{{ slug }}/trash" class="btn btn-ghost btn-sm" data-spa>
+    {# Trash (bin) is an admin-only area #}
+    {% if not trash and request.user and request.user.is_admin %}
+      <a href="{{ admin_prefix }}/trash?model_slug={{ slug }}" class="btn btn-ghost btn-sm" data-spa>
         {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Trash') }}</span>
+      </a>
+    {% elif trash %}
+      <a href="{{ admin_prefix }}/{{ slug }}" class="btn btn-ghost btn-sm" data-spa>
+        {{ icon('arrow-left', 14) }} <span style="margin-left:4px">{{ t('Active Items') }}</span>
       </a>
     {% endif %}
     {# SECURITY: Export requires export permission #}
@@ -25,19 +30,60 @@
     </a>
     {% endif %}
     {# SECURITY: Import requires add permission #}
-    {% if user_can_add and not trash %}
+    {% if can_add and user_can_add and not trash %}
     <a href="{{ admin_prefix }}/{{ slug }}/import" class="btn btn-default btn-sm" title="{{ t('Import CSV') }}" data-spa>
       {{ icon('upload', 14) }}
     </a>
     {% endif %}
     {# SECURITY: New requires add permission #}
-    {% if user_can_add and not trash %}
+    {% if can_add and user_can_add and not trash %}
       <a href="{{ admin_prefix }}/{{ slug }}/new" class="btn btn-primary btn-sm" data-spa>
         {{ icon('plus', 14) }} <span style="margin-left:4px">{{ t('New') }}</span>
       </a>
     {% endif %}
   </div>
 </div>
+
+{% if list_chart %}
+<div class="card" style="padding:16px 20px; margin-bottom:20px; display:flex; flex-direction:column">
+  <div style="font-weight:600; font-size:0.85rem; color:var(--muted); margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px">
+    <span style="display:flex; align-items:center; gap:6px">
+      {{ icon('chart', 14) }} <span>{{ t('Activity Trend') }}</span>
+    </span>
+
+    <div style="display:flex; align-items:center; gap:8px">
+      <div class="chart-period-group" data-chart-target="asok-list-chart-{{ slug }}">
+        <button type="button" class="period-btn active" data-period="daily">{{ t('Day') }}</button>
+        <button type="button" class="period-btn" data-period="weekly">{{ t('Week') }}</button>
+        <button type="button" class="period-btn" data-period="monthly">{{ t('Month') }}</button>
+        <button type="button" class="period-btn" data-period="quarterly">{{ t('Quarter') }}</button>
+        <button type="button" class="period-btn" data-period="yearly">{{ t('Year') }}</button>
+      </div>
+
+      <div class="chart-type-group" data-chart-target="asok-list-chart-{{ slug }}">
+        <button type="button" class="type-btn active" data-type="line" title="{{ t('Line') }}">{{ icon('chart', 12) }}</button>
+        <button type="button" class="type-btn" data-type="bar" title="{{ t('Bar') }}">{{ icon('bar-chart', 12) }}</button>
+      </div>
+
+      <span style="font-size:0.8rem; font-weight:700; color:var(--fg); margin-left:4px">{{ total }} {{ t('records') }}</span>
+    </div>
+  </div>
+  <div style="position:relative; height:100px">
+    <canvas id="asok-list-chart-{{ slug }}"
+            class="asok-list-chart"
+            data-daily-labels='{{ list_chart.daily_labels | tojson }}'
+            data-daily-values='{{ list_chart.daily_data | tojson }}'
+            data-weekly-labels='{{ list_chart.weekly_labels | tojson }}'
+            data-weekly-values='{{ list_chart.weekly_data | tojson }}'
+            data-monthly-labels='{{ list_chart.monthly_labels | tojson }}'
+            data-monthly-values='{{ list_chart.monthly_data | tojson }}'
+            data-quarterly-labels='{{ list_chart.quarterly_labels | tojson }}'
+            data-quarterly-values='{{ list_chart.quarterly_data | tojson }}'
+            data-yearly-labels='{{ list_chart.yearly_labels | tojson }}'
+            data-yearly-values='{{ list_chart.yearly_data | tojson }}'></canvas>
+  </div>
+</div>
+{% endif %}
 
 <div class="table-wrap">
 
@@ -65,9 +111,9 @@
           <button type="button" class="btn btn-default btn-sm" id="filter-btn" data-toggle="filter-menu" aria-expanded="false">
             {{ icon('filter', 14) }}
             <span>{{ t('Filters') }}</span>
-            {% set active_count = 0 %}
-            {% for fi in filters %}{% if not fi.options[0].selected %}{% set active_count = active_count + 1 %}{% endif %}{% endfor %}
-            {% if active_count > 0 %}<span class="badge badge-brand" style="margin-left:4px">{{ active_count }}</span>{% endif %}
+            {% set _af = [] %}
+            {% for fi in filters %}{% if fi.type == 'date_range' %}{% if fi.date_from or fi.date_to %}{% do _af.append(1) %}{% endif %}{% else %}{% if not fi.options[0].selected %}{% do _af.append(1) %}{% endif %}{% endif %}{% endfor %}
+            {% if _af %}<span class="badge badge-brand" style="margin-left:4px">{{ _af|length }}</span>{% endif %}
             {{ icon('chevron', 12, 'dd-chevron muted') }}
           </button>
           
@@ -77,30 +123,48 @@
                 {% for fi in filters %}
                   <div class="filter-item">
                     <label class="filter-label">{{ fi.label }}</label>
-                    {% set active_opt = (fi.options | selectattr('selected', True) | first) or fi.options[0] %}
-                    <input type="hidden" name="filter_{{ fi.name }}" value="{{ active_opt.value }}">
-                    
-                    <div class="custom-select-wrap">
-                      <button type="button" class="btn btn-default btn-sm custom-select-btn" data-toggle="fi-{{ fi.name }}-opts" aria-expanded="false">
-                        <span class="custom-select-label">{{ active_opt.label }}</span>
-                        {{ icon('chevron', 12, 'dd-chevron muted') }}
-                      </button>
-                      <div class="custom-select-options card" id="fi-{{ fi.name }}-opts" data-dropdown hidden style="position:absolute; top:100%; left:0; width:100%; margin-top:4px;">
-                        {% for opt in fi.options %}
-                          <div class="custom-opt {% if opt.selected %}is-active{% endif %}"
-                               data-set-name="filter_{{ fi.name }}"
-                               data-set-value="{{ opt.value }}"
-                               data-trigger="click"
-                               data-block="#model_table"
-                               data-swap="outerHTML"
+                    {% if fi.type == 'date_range' %}
+                      <div style="display:flex; gap:6px; align-items:center">
+                        <input type="text" name="filter_{{ fi.name }}_from" value="{{ fi.date_from }}"
+                               class="asok-datepicker filter-date-input" placeholder="{{ t('From') }}"
+                               data-block="#model_table" data-swap="outerHTML"
                                data-url="{{ admin_prefix }}/{{ slug }}"
+                               data-trigger="change delay:200ms"
                                data-include="#list-search, #list-sort, #list-filters-form">
-                            {{ opt.label }}
-                            {% if opt.selected %}{{ icon('check', 14) }}{% endif %}
-                          </div>
-                        {% endfor %}
+                        <span style="color:var(--fg-3); flex-shrink:0; font-size:0.8rem">–</span>
+                        <input type="text" name="filter_{{ fi.name }}_to" value="{{ fi.date_to }}"
+                               class="asok-datepicker filter-date-input" placeholder="{{ t('To') }}"
+                               data-block="#model_table" data-swap="outerHTML"
+                               data-url="{{ admin_prefix }}/{{ slug }}"
+                               data-trigger="change delay:200ms"
+                               data-include="#list-search, #list-sort, #list-filters-form">
                       </div>
-                    </div>
+                    {% else %}
+                      {% set active_opt = (fi.options | selectattr('selected', True) | first) or fi.options[0] %}
+                      <input type="hidden" name="filter_{{ fi.name }}" value="{{ active_opt.value }}">
+
+                      <div class="custom-select-wrap">
+                        <button type="button" class="btn btn-default btn-sm custom-select-btn" data-toggle="fi-{{ fi.name }}-opts" aria-expanded="false">
+                          <span class="custom-select-label">{{ active_opt.label }}</span>
+                          {{ icon('chevron', 12, 'dd-chevron muted') }}
+                        </button>
+                        <div class="custom-select-options card" id="fi-{{ fi.name }}-opts" data-dropdown hidden style="position:absolute; top:100%; left:0; width:100%; margin-top:4px;">
+                          {% for opt in fi.options %}
+                            <div class="custom-opt {% if opt.selected %}is-active{% endif %}"
+                                 data-set-name="filter_{{ fi.name }}"
+                                 data-set-value="{{ opt.value }}"
+                                 data-trigger="click"
+                                 data-block="#model_table"
+                                 data-swap="outerHTML"
+                                 data-url="{{ admin_prefix }}/{{ slug }}"
+                                 data-include="#list-search, #list-sort, #list-filters-form">
+                              {{ opt.label }}
+                              {% if opt.selected %}{{ icon('check', 14) }}{% endif %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
                   </div>
                 {% endfor %}
                 <div style="height:1px; background:var(--border); margin:4px 0"></div>
@@ -122,12 +186,13 @@
     {% for act in bulk_actions %}
       <form method="post" action="{{ admin_prefix }}/{{ slug }}/bulk"
             data-block="#model_table"
-            {% if act.name == 'delete' or act.name == 'force_delete' %}data-confirm="{{ t('Delete' if not trash else 'Permanently delete') }} {{ t('selected items?') }}"{% endif %}>
+            {% if act.name == 'delete' or act.name == 'force_delete' %}data-confirm="{{ t('Delete' if not trash else 'Delete permanently') }} {{ t('selected items?') }}"{% endif %}>
         {{ request.csrf_input() }}
         <input type="hidden" name="action" value="{{ act.name }}">
         <input type="hidden" name="ids" class="bulk-ids-field">
-        <button type="submit" class="btn btn-sm btn-icon {% if 'delete' in act.name %}btn-danger{% else %}btn-default{% endif %}" title="{{ act.label }}">
+        <button type="submit" class="btn btn-sm {% if 'delete' in act.name %}btn-danger{% else %}btn-default{% endif %}" title="{{ t(act.label) }}" style="display:flex; align-items:center; gap:5px">
           {% if 'delete' in act.name %}{{ icon('trash', 14) }}{% elif act.name == 'restore' %}{{ icon('restore', 14) }}{% endif %}
+          <span>{{ t(act.label) }}</span>
         </button>
       </form>
     {% endfor %}
@@ -143,7 +208,10 @@
         <thead>
           <tr>
             <th class="col-check" style="padding-right:0"><input type="checkbox" id="check-all"></th>
-            {% set has_actions = can_edit or can_delete %}
+            {# Show the actions column whenever there is any per-row action —
+               including "View", so read-only models (can_edit/can_delete false)
+               still expose the detail icon like every other table. #}
+            {% set has_actions = can_edit or can_delete or user_can_view %}
             {% for s in sort_links %}
               <th{% if loop.last and not has_actions %} style="text-align:right; padding-right:24px"{% endif %}>
                 <a href="{{ s.url }}"
@@ -164,12 +232,18 @@
                 <input type="checkbox" class="row-check" value="{{ row.id }}">
               </td>
               {% for col in columns %}
+                {# Epoch-int timestamp columns (last_seen, revoked_at, ...) are formatted
+                   as dates; other columns keep the plain date/passthrough filter. The
+                   filter must stay top-level in {{ }} (it is not supported inside {% set %}). #}
+                {% set is_ts_col = col.endswith('_at') or col.endswith('_seen') %}
                 <td{% if loop.last and not has_actions %} style="text-align:right; padding-right:24px"{% endif %}>
                   {% if loop.first %}
-                    <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}"
-                       class="row-link" data-spa>{{ row[col] | date }}</a>
+                    {# Read-only models (can_edit=False) link to the detail view, not
+                       the edit form — no point routing to a page that 403s on save. #}
+                    <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}{% if not can_edit %}/view{% endif %}"
+                       class="row-link" data-spa>{% if is_ts_col %}{{ row[col] | epoch }}{% else %}{{ row[col] | date }}{% endif %}</a>
                   {% else %}
-                    {{ row[col] | date }}
+                    {% if is_ts_col %}{{ row[col] | epoch }}{% else %}{{ row[col] | date }}{% endif %}
                   {% endif %}
                 </td>
               {% endfor %}
@@ -191,8 +265,8 @@
                     {{ icon('search', 16) }}
                   </a>
                   {% endif %}
-                  {# Edit button - only show if user has edit permission #}
-                  {% if user_can_edit and not trash %}
+                  {# Edit button - only show if model and user allow edit #}
+                  {% if can_edit and user_can_edit and not trash %}
                   <a href="{{ admin_prefix }}/{{ slug }}/{{ row.id }}"
                      class="btn btn-ghost btn-icon" data-spa title="{{ t('Edit') }}">
                     {{ icon('edit', 16) }}
@@ -206,8 +280,18 @@
                         {{ icon('restore', 16) }}
                       </button>
                     </form>
-                  {# Delete button - only show if user has delete permission #}
-                  {% elif user_can_delete %}
+                    {% if user_can_delete %}
+                    <form method="post" action="{{ admin_prefix }}/{{ slug }}/{{ row.id }}/force-delete"
+                          data-block="#row-{{ row.id }}" data-swap="delete"
+                          data-confirm="{{ t('Permanently delete this record?') }}" style="display:inline">
+                      {{ request.csrf_input() }}
+                      <button type="submit" class="btn btn-ghost btn-icon text-danger" title="{{ t('Delete permanently') }}">
+                        {{ icon('trash', 16) }}
+                      </button>
+                    </form>
+                    {% endif %}
+                  {# Delete button - only show if model and user allow delete #}
+                  {% elif can_delete and user_can_delete %}
                     <form method="post" action="{{ admin_prefix }}/{{ slug }}/{{ row.id }}/delete"
                           data-block="#row-{{ row.id }}" data-swap="delete"
                           data-confirm="{{ t('Delete this record?') }}" style="display:inline">
@@ -227,15 +311,35 @@
     </div>
 
     <div class="pagination">
-      <div style="font-weight:500">
-        {{ t('Page') }} <span style="color:var(--fg)">{{ page }}</span> / {{ pages }}
+      <div style="display:flex; align-items:center; gap:16px; font-size:0.8rem; color:var(--fg-3); flex-wrap:wrap">
+        <span>{{ t('Showing') }} <strong>{{ start_count }}–{{ end_count }}</strong> {{ t('of') }} <strong>{{ total }}</strong> {{ t('items') }}</span>
+        <span style="opacity:0.4">|</span>
+        <div style="display:flex; align-items:center; gap:6px">
+          <span>{{ t('Per page') }}:</span>
+          {% for opt in per_page_options %}
+            <a href="{{ opt.url }}"
+               class="btn btn-sm {% if opt.n == per_page %}btn-primary{% else %}btn-ghost{% endif %}"
+               style="min-width:34px; padding:3px 8px; font-size:0.78rem; text-align:center"
+               data-block="#model_table" data-swap="outerHTML" data-push-url>{{ opt.n }}</a>
+          {% endfor %}
+        </div>
       </div>
       <div class="pagination-btns">
         {% if page > 1 %}
-          <a href="{{ prev_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ icon('arrow-left', 14) }} {{ t('Previous') }}</a>
+          <a href="{{ prev_page_url }}" class="btn btn-default btn-sm" style="padding:4px 10px" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ icon('arrow-left', 14) }} {{ t('Previous') }}</a>
         {% endif %}
+        {% for p in page_range %}
+          {% if p.n == 0 %}
+            <span class="btn btn-default btn-sm" style="pointer-events:none; color:var(--fg-3); min-width:36px; text-align:center">…</span>
+          {% else %}
+            <a href="{{ p.url }}"
+               class="btn btn-sm {% if p.n == page %}btn-primary{% else %}btn-default{% endif %}"
+               style="min-width:36px; text-align:center"
+               data-block="#model_table" data-swap="outerHTML" data-push-url>{{ p.n }}</a>
+          {% endif %}
+        {% endfor %}
         {% if page < pages %}
-          <a href="{{ next_url }}" class="btn btn-default btn-sm" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ t('Next') }} {{ icon('arrow-right', 14) }}</a>
+          <a href="{{ next_page_url }}" class="btn btn-default btn-sm" style="padding:4px 10px" data-block="#model_table" data-swap="outerHTML" data-push-url>{{ t('Next') }} {{ icon('arrow-right', 14) }}</a>
         {% endif %}
       </div>
     </div>

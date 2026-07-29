@@ -98,21 +98,17 @@ class CsrfMixin:
         if not token or not hmac.compare_digest(str(token), expected):
             raise SecurityError("CSRF validation failed")
 
-    def verify_csrf(self: Any) -> None:
-        """Verify the CSRF token from headers, form data, or JSON body.
-
-        Raises SecurityError if validation fails.
-
-        NOTE: The token is intentionally NOT rotated after each validation.
-        Per-request rotation desynchronises the cookie (updated) from the
-        rendered HTML form (still holds the old token), causing a 403 on
-        every second submission.  Token rotation is already performed on
-        login and logout (see auth.py) which is the appropriate boundary.
-        """
+    def _is_csrf_bypassed(self: Any) -> bool:
         if self._csrf_verified:
-            return
+            return True
+        app_ref = self.environ.get("asok.app")
+        if app_ref and not app_ref.config.get("CSRF", True):
+            return True
+        return self.method in ("GET", "HEAD", "OPTIONS", "TRACE")
 
-        if self.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
+    def verify_csrf(self: Any) -> None:
+        """Verify the CSRF token from headers, form data, or JSON body."""
+        if self._is_csrf_bypassed():
             self._csrf_verified = True
             return
 

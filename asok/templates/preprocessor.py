@@ -307,9 +307,18 @@ def _handle_components(text: str) -> str:
     return text
 
 
+def _normalize_component_args(args: str) -> str:
+    if not args:
+        return args
+    args = re.sub(r"\bclient:media=([\"'].*?[\"'])", r"client_media=\1", args)
+    args = re.sub(r"\bclient:(\w+)\b", r'client="\1"', args)
+    return args
+
+
 def _replace_component(match: re.Match[str]) -> str:
     name = match.group(1).strip()
-    args = match.group(2).strip().strip(",").strip()
+    raw_args = match.group(2).strip().strip(",").strip()
+    args = _normalize_component_args(raw_args)
     content = match.group(3)
     safe_content = escape_template_literal(content)
     comma = ", " if args else ""

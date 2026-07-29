@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time
 from typing import Any, Optional
 
 from asok.auth import BearerToken, MagicLink, OAuth
@@ -43,8 +44,15 @@ class AuthMixin:
         # SECURITY: Rotate the server-side session ID to prevent session fixation
         self.session_regenerate()
 
-        # Store in the server-side session
+        # Clear any stale logged out/revoked flags from previous session state
+        now = time.time()
+        self.session.pop("_logged_out", None)
+        self.session.pop("_revoked", None)
+        self.session.pop("_logged_out_at", None)
+
         self.session["user_id"] = user.id
+        self.session["_created_at"] = now
+        self.session["_last_seen"] = now
 
         # Bind the session cookie to the sid for server-side revocation
         signed_id = self._sign(f"{user.id}:{self.session.sid}")
@@ -77,14 +85,22 @@ class AuthMixin:
         """
         self.environ["asok.session_cookie"] = self._session_cookie("", 0)
 
-        # SECURITY: Regenerate session ID to prevent session fixation
-        self.session_regenerate()
-
-        # Clear server-side session as well
+        # Preserve metadata for active sessions manager before marking as logged out
         try:
-            self.session.clear()
+            old_sid = getattr(self.session, "sid", None)
+            if "user_id" in self.session:
+                uid = self.session.pop("user_id")
+                self.session["_user_id"] = uid
+            self.session["_logged_out"] = True
+            store = getattr(self.app, "_session_store", None)
+            if store and old_sid:
+                store.save(old_sid, self.session)
         except Exception:
             pass
+
+        # SECURITY: Regenerate session ID to prevent session fixation and clear guest session
+        self.session_regenerate()
+        self.session.clear()
 
         # SECURITY: Rotate CSRF token after logout
         self.csrf_token_value = secrets.token_hex(32)
@@ -109,24 +125,16 @@ class AuthMixin:
             default_cache.forget(key)
             self.login(user)
             return True
+        default_cache.incr(key, amount=1, ttl=900)
         return False
 
     def _are_credentials_missing(self: Any, password: Any, credentials: dict) -> bool:
         return not password or not credentials
 
     def _check_rate_limit_and_incr(self: Any, rate_limit_key: str) -> bool:
-        """Verify the rate limit status and atomically increment attempts count."""
+        """Verify if the rate limit status is blocked."""
         attempts = default_cache.get(rate_limit_key, 0)
-        if self._is_blocked_by_rate_limit(attempts):
-            return True
-
-        # SECURITY: Increment failed attempts counter atomically *before* verifying
-        # to prevent TOCTOU race conditions from bypassing the rate limit.
-        attempts = default_cache.incr(rate_limit_key, amount=1, ttl=900)
-        if attempts > 5:
-            self._is_blocked_by_rate_limit(attempts)
-            return True
-        return False
+        return self._is_blocked_by_rate_limit(attempts)
 
     def authenticate(
         self: Any, password_field: str = "password", **credentials: Any

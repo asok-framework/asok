@@ -597,30 +597,38 @@ def _load_models(root: str) -> None:
     _load_model_dir(root)
 
 
-def _load_wsgi_for_models(root: str) -> None:
-    wsgi_path = os.path.join(root, "wsgi.py")
-    if not os.path.isfile(wsgi_path):
-        wsgi_path = os.path.join(root, "wsgi.pyc")
-    if not os.path.isfile(wsgi_path):
+def _try_load_single_model_file(root: str, filename: str) -> None:
+    filepath = os.path.join(root, filename)
+    if not os.path.isfile(filepath):
         return
     try:
-        spec = _ilu.spec_from_file_location("_wsgi_models", wsgi_path)
-        mod = _ilu.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    except Exception as e:
-        Style.warn(f"Failed to load wsgi.py: {e}")
+        alias = f"_model_load_{filename.replace('/', '_').replace('.', '_')}"
+        spec = _ilu.spec_from_file_location(alias, filepath)
+        if spec and spec.loader:
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+    except Exception:
+        pass
 
 
-def _load_model_dir(root: str) -> None:
-    model_dir = os.path.join(root, "src/models")
+def _load_wsgi_for_models(root: str) -> None:
+    for filename in ("wsgi.py", "app.py", "models.py", "main.py", "app/models.py"):
+        _try_load_single_model_file(root, filename)
+
+
+def _load_one_model_dir(model_dir: str) -> None:
     if not os.path.isdir(model_dir):
         return
     for f in sorted(os.listdir(model_dir)):
-        if not _is_loadable_model_file(f):
-            continue
-        filepath = os.path.join(model_dir, f)
-        if _path_under(filepath, model_dir):
-            _import_model_file(filepath, f)
+        if _is_loadable_model_file(f):
+            filepath = os.path.join(model_dir, f)
+            if _path_under(filepath, model_dir):
+                _import_model_file(filepath, f)
+
+
+def _load_model_dir(root: str) -> None:
+    for sub in ("models", "src/models", "app/models"):
+        _load_one_model_dir(os.path.join(root, sub))
 
 
 def _import_model_file(filepath: str, filename: str) -> None:

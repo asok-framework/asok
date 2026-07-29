@@ -118,20 +118,36 @@ def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
     return buf
 
 
+def _parse_frame_header(sock: socket.socket) -> Optional[tuple[int, int, int]]:
+    header = _recv_exact(sock, 2)
+    if not header:
+        return None
+    opcode = header[0] & 0x0F
+    masked = (header[1] & 0x80) >> 7
+    raw_len = header[1] & 0x7F
+    return opcode, masked, raw_len
+
+
+def _read_valid_payload(
+    sock: socket.socket, masked: int, raw_len: int
+) -> Optional[bytes]:
+    length = _read_frame_length(sock, raw_len)
+    if length is None or length > _MAX_FRAME_SIZE:
+        return None
+    return _read_frame_payload(sock, masked, length)
+
+
 def _recv_frame(sock: socket.socket) -> tuple[Optional[int], Optional[bytes]]:
     """Read one WebSocket frame.
 
-    Returns (opcode, payload) or (None, None) on close.
+    RFC 6455 §5.1: Client frames MUST be masked. Unmasked frames are rejected.
+    Returns (opcode, payload) or (None, None) on close/protocol error.
     """
-    header = _recv_exact(sock, 2)
-    if not header:
+    parsed = _parse_frame_header(sock)
+    if not parsed or not parsed[1]:
         return None, None
-    opcode = header[0] & 0x0F
-    masked = header[1] >> 7
-    length = _read_frame_length(sock, header[1] & 0x7F)
-    if length is None or length > _MAX_FRAME_SIZE:
-        return None, None
-    payload = _read_frame_payload(sock, masked, length)
+    opcode, masked, raw_len = parsed
+    payload = _read_valid_payload(sock, masked, raw_len)
     if payload is None:
         return None, None
     return opcode, payload

@@ -1,6 +1,6 @@
 /* ASOK DEBUG SUITE JS
  * @author: Asok Framework Team
- * @version: 0.5.1 */
+ * @version: 0.5.5 */
 (function () {
     const trigger = document.getElementById('asok-debug-trigger');
     const suite = document.getElementById('asok-debug-suite');

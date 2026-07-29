@@ -197,7 +197,13 @@ class FormField:
 
     def _render_input_fallback(self, val: str, merged: dict[str, Any]) -> str:
         attrs = {"type": self.type, "id": self.name, "name": self.name, **merged}
-        if self.type != "file":
+        if self.type == "password":
+            attrs["value"] = ""
+            attrs["autocomplete"] = attrs.get("autocomplete", "new-password")
+        elif self.type == "email":
+            attrs["value"] = val
+            attrs["autocomplete"] = attrs.get("autocomplete", "username")
+        elif self.type != "file":
             attrs["value"] = val
         return f"<input{_render_attrs(attrs)}>"
 

@@ -192,3 +192,43 @@ class TestDeclarativeMigrations(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type='trigger' AND name='products_ai'"
         )
         self.assertEqual(len(cursor.fetchall()), 1)
+
+    def test_state_forwards_missing_model_does_not_crash(self):
+        state = ProjectState()
+        # AddField on a missing model state should dynamically create the virtual model state without KeyError
+        op = operations.AddField("ContactMessage", "subject", {"type": "StringField", "sql_type": "TEXT"})
+        op.state_forwards(state)
+        self.assertIn("ContactMessage", state.models)
+        self.assertIn("subject", state.models["ContactMessage"].fields)
+
+        # AlterField on an existing model with case mismatch
+        op_alter = operations.AlterField(
+            "contactmessage", "subject",
+            {"type": "StringField", "sql_type": "TEXT"},
+            {"type": "StringField", "sql_type": "VARCHAR(255)"}
+        )
+        op_alter.state_forwards(state)
+        self.assertEqual(state.models["ContactMessage"].fields["subject"]["sql_type"], "VARCHAR(255)")
+
+    def test_infer_model_name_from_table(self):
+        from asok.cli.generators import _infer_model_name_from_table
+
+        self.assertEqual(_infer_model_name_from_table("categories"), "Category")
+        self.assertEqual(_infer_model_name_from_table("addresses"), "Address")
+        self.assertEqual(_infer_model_name_from_table("contact_messages"), "ContactMessage")
+        self.assertEqual(_infer_model_name_from_table("users"), "User")
+
+    def test_quote_identifier_sanitization(self):
+        engine = SQLiteEngine(":memory:")
+        self.assertEqual(engine.quote_identifier('"name"'), '"name"')
+        self.assertEqual(engine.quote_identifier('name'), '"name"')
+        self.assertEqual(engine.quote_identifier('`name`'), '"name"')
+
+    @patch("os.listdir", return_value=["0002_rename.py", "0001_initial.py", "0003_add.py"])
+    def test_existing_migration_files_sorted(self, mock_listdir):
+        from asok.cli.generators import _existing_migration_files
+
+        files = _existing_migration_files("/fake/dir")
+        self.assertEqual(files, ["0001_initial.py", "0002_rename.py", "0003_add.py"])
+
+

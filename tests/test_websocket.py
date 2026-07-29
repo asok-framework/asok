@@ -132,3 +132,23 @@ class TestWebSocketServer:
         assert b"Targeted" in c1.sock.sent_messages[0]
         assert b"Targeted" in c3.sock.sent_messages[0]
         assert len(c2.sock.sent_messages) == 0
+
+
+def test_recv_frame_rejects_unmasked_client_frame():
+    from asok.ws.protocol import _recv_frame
+
+    class DummySocket:
+        def __init__(self, data: bytes):
+            self.data = data
+
+        def recv(self, n: int) -> bytes:
+            chunk = self.data[:n]
+            self.data = self.data[n:]
+            return chunk
+
+    # Create unmasked text frame header (fin=1, opcode=1, masked=0, payload_len=4)
+    raw_frame = bytes([0x81, 0x04]) + b"test"
+    sock = DummySocket(raw_frame)
+    opcode, payload = _recv_frame(sock)
+    assert opcode is None
+    assert payload is None

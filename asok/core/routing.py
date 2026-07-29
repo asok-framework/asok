@@ -10,9 +10,12 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections import OrderedDict
 from typing import Any, Optional
 
 logger = logging.getLogger("asok.core")
+
+_MAX_ROUTE_CACHE = 2048
 
 
 class RoutingMixin:
@@ -45,15 +48,28 @@ class RoutingMixin:
             return new_parts
         return parts
 
+    def _evict_route_cache_if_needed(self, cache: OrderedDict) -> None:
+        while len(cache) > _MAX_ROUTE_CACHE:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+
     def _cache_route(
         self, parts: list[str], result: tuple[Optional[str], dict[str, Any]]
     ) -> None:
-        """Cache the resolved route result."""
+        """Cache the resolved route result using a bounded LRU cache."""
         page_file, route_params = result
+        if page_file is None:
+            return
+
         key = "/".join(parts)
-        if not hasattr(self, "_route_cache"):
-            self._route_cache = {}
-        self._route_cache[key] = (page_file, dict(route_params))
+        if not hasattr(self, "_route_cache") or not isinstance(self._route_cache, OrderedDict):
+            self._route_cache = OrderedDict()
+
+        cache = self._route_cache
+        if key in cache:
+            cache.move_to_end(key)
+        cache[key] = (page_file, dict(route_params))
+        self._evict_route_cache_if_needed(cache)
 
     def _resolve_route(
         self, parts: list[str], request: Optional[Any] = None
@@ -80,9 +96,10 @@ class RoutingMixin:
     ) -> Optional[tuple[Optional[str], dict[str, Any]]]:
         """Return cached route result or None if not cached."""
         if not hasattr(self, "_route_cache"):
-            self._route_cache = {}
+            self._route_cache = OrderedDict()
         key = "/".join(parts)
         if key in self._route_cache:
+            self._route_cache.move_to_end(key)
             page_file, route_params = self._route_cache[key]
             return page_file, dict(route_params)
         return None
@@ -277,22 +294,79 @@ class RoutingMixin:
 
         return None, captured_params
 
+    def _is_dynamic_file_entry(self, entry: str, current_base: str) -> bool:
+        base_name, ext = os.path.splitext(entry)
+        if ext not in (".py", ".pyc", ".html", ".asok"):
+            return False
+        if not (base_name.startswith("[") and base_name.endswith("]")):
+            return False
+        return os.path.isfile(os.path.join(current_base, entry))
+
+
+    def _find_dynamic_file_candidates(
+        self, current_base: str, entries: list[str]
+    ) -> list[tuple[str, str, str]]:
+        candidates = []
+        for entry in entries:
+            if self._is_dynamic_file_entry(entry, current_base):
+                base_name, ext = os.path.splitext(entry)
+                candidates.append((entry, base_name, ext))
+        return candidates
+
+    def _try_dynamic_file_candidate(
+        self, seg: str, base_name: str
+    ) -> tuple[Optional[str], Optional[Any]]:
+        inner = base_name[1:-1]
+        if ":" in inner:
+            param_name, type_name = inner.split(":", 1)
+            converted = self._convert_param(seg, type_name)
+            if converted is None:
+                return None, None
+            return param_name, converted
+        return inner, seg
+
+    def _walk_dynamic_file(
+        self, segments: list[str], current_base: str, captured_params: dict[str, Any]
+    ) -> tuple[Optional[str], dict[str, Any]]:
+        if len(segments) != 1:
+            return None, captured_params
+
+        try:
+            entries = os.listdir(current_base)
+        except OSError:
+            return None, captured_params
+
+        seg = segments[0]
+        candidates = self._find_dynamic_file_candidates(current_base, entries)
+        ordered = sorted(candidates, key=lambda c: (":" not in c[1], c[1]))
+
+        for entry, base_name, _ in ordered:
+            param_name, converted = self._try_dynamic_file_candidate(seg, base_name)
+            if param_name is not None:
+                new_params = captured_params.copy()
+                new_params[param_name] = converted
+                return os.path.join(current_base, entry), new_params
+
+        return None, captured_params
+
     def _walk_route(
         self, segments: list[str], current_base: str, captured_params: dict[str, Any]
     ) -> tuple[Optional[str], dict[str, Any]]:
         """Recursively walk the pages directory to find a matching route file."""
         if not segments:
             return self._walk_route_terminal(current_base, captured_params)
-
         if segments[0] in ("..", "."):
             return None, captured_params
 
-        res, pars = self._walk_literal_file(segments, current_base, captured_params)
-        if res:
-            return res, pars
+        walkers = (
+            self._walk_literal_file,
+            self._walk_literal_dir,
+            self._walk_dynamic_file,
+            self._walk_dynamic_dir,
+        )
+        for walker in walkers:
+            res, pars = walker(segments, current_base, captured_params)
+            if res:
+                return res, pars
 
-        res, pars = self._walk_literal_dir(segments, current_base, captured_params)
-        if res:
-            return res, pars
-
-        return self._walk_dynamic_dir(segments, current_base, captured_params)
+        return None, captured_params

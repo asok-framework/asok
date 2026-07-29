@@ -283,12 +283,19 @@ def _parse_tags_value(field: Any) -> list:
     """Parse current tag values from field.value (JSON array, comma-sep, or empty)."""
     if not field.value:
         return []
+    parsed = _decode_tags_raw_value(field.value)
+    if not isinstance(parsed, list):
+        parsed = _fallback_parse_tags(parsed)
+    return [str(v) for v in parsed]
+
+
+def _decode_tags_raw_value(val: Any) -> Any:
+    if not isinstance(val, str):
+        return val
     try:
-        if isinstance(field.value, str):
-            return json.loads(field.value)
-        return field.value
+        return json.loads(val)
     except (json.JSONDecodeError, TypeError):
-        return _fallback_parse_tags(field.value)
+        return _fallback_parse_tags(val)
 
 
 def _build_tags_options(field: Any, current_values: list) -> tuple[list, dict]:

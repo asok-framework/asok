@@ -30,7 +30,7 @@
         {% if form._fields.email %}
           <div class="form-group">
             <label class="form-label">{{ t(form._fields.email._label) }}</label>
-            {{ form._fields.email.input }}
+            {{ form._fields.email.input(autocomplete='username') }}
             {% if form._fields.email._error %}
               <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
                 {{ icon('x', 14) }} {{ form._fields.email._error }}
@@ -41,7 +41,7 @@
         {% if form._fields.name %}
           <div class="form-group">
             <label class="form-label">{{ t(form._fields.name._label) }}</label>
-            {{ form._fields.name.input }}
+            {{ form._fields.name.input(autocomplete='name') }}
             {% if form._fields.name._error %}
               <div class="form-error" style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">
                 {{ icon('x', 14) }} {{ form._fields.name._error }}
@@ -139,6 +139,73 @@
         <a href="{{ admin_prefix }}/2fa-setup" class="btn btn-primary btn-lg" data-spa>
           {{ icon('shield', 14) }} {{ t('Setup Two-Factor') }}
         </a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Active Sessions Card #}
+  <div class="card" style="overflow:hidden">
+    <div style="padding:14px 20px;background:var(--surface-2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:0.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)">
+      {{ icon('monitor', 12) }} {{ t('Active Sessions') }}
+      <div style="margin-left:auto">
+        {{ badge(active_sessions|length, 'info') }}
+      </div>
+    </div>
+    <div style="padding:24px">
+      {% if active_sessions %}
+        {% set has_other = [] %}
+        <div style="display:flex; flex-direction:column; gap:12px">
+          {% for sess in active_sessions %}
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:var(--surface); border:1px solid {% if sess.sid == current_sid %}var(--success){% else %}var(--border){% endif %}; border-radius:var(--r-lg); box-shadow:var(--shadow-sm); transition:all var(--trans)">
+              <div style="display:flex; align-items:center; gap:16px">
+                <div style="width:42px; height:42px; border-radius:50%; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:{% if sess.sid == current_sid %}var(--success-fg){% else %}var(--fg-2){% endif %}; flex-shrink:0; border:1px solid var(--border)">
+                  {% if sess.is_mobile %}
+                    {{ icon('smartphone', 20) }}
+                  {% else %}
+                    {{ icon('laptop', 20) }}
+                  {% endif %}
+                </div>
+                <div>
+                  <div style="font-weight:600; font-size:0.9rem; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+                    <span title="{{ sess.user_agent }}">{{ sess.browser_name }}{% if sess.os_name %} ({{ sess.os_name }}){% endif %}</span>
+                    {% if sess.sid == current_sid %}
+                      <span class="badge badge-success" style="font-size:0.7rem; padding:2px 8px">{{ t('This device') }}</span>
+                    {% endif %}
+                  </div>
+                  <div style="font-size:0.8rem; color:var(--fg-3); margin-top:4px; display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+                    <span>IP: <strong>{{ sess.ip }}</strong></span>
+                    <span>•</span>
+                    <span>{{ t('Dernière activité:') if locale == 'fr' else t('Last active:') }} <strong>{{ sess.last_seen_str }}</strong> <span style="opacity: 0.75">({{ sess.last_seen_at_str }})</span></span>
+                  </div>
+                </div>
+              </div>
+              <div style="flex-shrink:0; margin-left:12px">
+                {% if sess.sid == current_sid %}
+                  <span style="font-size:0.78rem; color:var(--success); font-weight:600; display:flex; align-items:center; gap:4px">
+                    <span style="width:6px;height:6px;border-radius:50%;background:var(--success);display:inline-block"></span>
+                    {{ t('Active now') }}
+                  </span>
+                {% else %}
+                  {% do has_other.append(1) %}
+                  <form method="post" action="{{ admin_prefix }}/revoke-session"
+                        data-confirm="{{ t('Revoke this session? The device will be logged out immediately.') }}"
+                        data-block="#page-body" style="display:inline">
+                    {{ request.csrf_input() }}
+                    <input type="hidden" name="sid" value="{{ sess.sid }}">
+                    <button type="submit" class="btn btn-danger btn-sm" title="{{ t('Revoke session') }}" style="display:flex;align-items:center;gap:6px">
+                      {{ icon('x', 13) }} {{ t('Revoke') }}
+                    </button>
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+        {% if not has_other %}
+          <p style="margin-top:16px; font-size:0.8rem; color:var(--fg-3)">{{ t('No other active sessions.') }}</p>
+        {% endif %}
+      {% else %}
+        <p style="color:var(--fg-2); font-size:0.875rem">{{ t('No active sessions.') }}</p>
       {% endif %}
     </div>
   </div>

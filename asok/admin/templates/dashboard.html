@@ -10,102 +10,134 @@
   </div>
 </div>
 
-{# Stats Cards (Airy & Clean) #}
-{% if stats %}
-<div class="stats-grid">
-  {% for s in stats %}
-    <div class="card stat-card">
-      <div class="stat-label">{{ s.label }}</div>
-      <div class="stat-value">
-        {{ s.count }}
-        {% if s.trend is not None %}
-          <span class="stat-trend {% if s.trend >= 0 %}up{% else %}down{% endif %}">
-            {{ icon('arrow-up' if s.trend >= 0 else 'arrow-down', 10) }}
-            {{ s.trend | abs }}%
-          </span>
-        {% endif %}
-      </div>
-      <a href="{{ admin_prefix }}/{{ s.slug }}" class="stat-link" data-spa>
-        {{ t('View all') }} {{ icon('arrow-right', 12) }}
-      </a>
-    </div>
-  {% endfor %}
-</div>
-{% endif %}
+<div class="dashboard-layout">
 
+  {# ── Colonne principale : graphiques + activité ── #}
+  <div class="dashboard-main">
 
-<div class="dashboard-grid">
+    {% if chart_info %}
+    <div class="dashboard-charts-grid">
 
-  {# Recent activity (Timeline) #}
-  {% if can_view_logs %}
-  <div class="card" style="display:flex; flex-direction:column">
-    <div style="padding:20px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center">
-      <span style="font-weight:600; font-size:0.95rem; display:flex; align-items:center; gap:8px">
-        {{ icon('history', 16) }} {{ t('Recent Activity') }}
-      </span>
-      <a href="{{ admin_prefix }}/logs" class="btn btn-ghost btn-sm" data-spa>
-        {{ t('See all activity') }}
-      </a>
-    </div>
-    
-    <div class="timeline">
-      {% if recent_logs %}
-        {% for log in recent_logs %}
-          <div class="timeline-item">
-            <div class="timeline-dot"></div>
-            <div class="timeline-content">
-              <div class="timeline-text">
-                <span style="font-weight:600">{{ log.user_label }}</span> 
-                <span class="muted">{{ log.action }}</span> 
-                <span style="font-weight:600">{{ log.entity }}</span>
-                {% if log.entity_id %}<span class="muted">#{{ log.entity_id }}</span>{% endif %}
-              </div>
-              <div class="timeline-date">{{ log.date_label }}</div>
+      <div class="card chart-card">
+        <div class="chart-card-header">
+          <span class="chart-card-title">{{ icon('chart', 15) }} {{ t('Activity Trend') }}</span>
+          <div style="display:flex; align-items:center; gap:8px">
+            <div class="btn-group chart-period-group" data-chart-target="asok-chart-activity">
+              <button type="button" class="period-btn active" data-period="daily">{{ t('Day') }}</button>
+              <button type="button" class="period-btn" data-period="weekly">{{ t('Week') }}</button>
+              <button type="button" class="period-btn" data-period="monthly">{{ t('Month') }}</button>
+              <button type="button" class="period-btn" data-period="quarterly">{{ t('Quarter') }}</button>
+              <button type="button" class="period-btn" data-period="yearly">{{ t('Year') }}</button>
+            </div>
+            <div class="btn-group chart-type-group" data-chart-target="asok-chart-activity">
+              <button type="button" class="type-btn active" data-type="line" title="{{ t('Line') }}">{{ icon('chart', 12) }}</button>
+              <button type="button" class="type-btn" data-type="bar" title="{{ t('Bar') }}">{{ icon('bar-chart', 12) }}</button>
             </div>
           </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="asok-chart-activity"
+                  data-daily-labels='{{ chart_info.timeline_labels | tojson }}'
+                  data-daily-values='{{ chart_info.timeline_data | tojson }}'
+                  data-weekly-labels='{{ chart_info.weekly_labels | tojson }}'
+                  data-weekly-values='{{ chart_info.weekly_data | tojson }}'
+                  data-monthly-labels='{{ chart_info.monthly_labels | tojson }}'
+                  data-monthly-values='{{ chart_info.monthly_data | tojson }}'
+                  data-quarterly-labels='{{ chart_info.quarterly_labels | tojson }}'
+                  data-quarterly-values='{{ chart_info.quarterly_data | tojson }}'
+                  data-yearly-labels='{{ chart_info.yearly_labels | tojson }}'
+                  data-yearly-values='{{ chart_info.yearly_data | tojson }}'></canvas>
+        </div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="chart-card-header">
+          <span class="chart-card-title">{{ icon('table', 15) }} {{ t('Data Distribution') }}</span>
+          <div class="btn-group chart-type-group" data-chart-target="asok-chart-distribution">
+            <button type="button" class="type-btn active" data-type="doughnut" title="{{ t('Doughnut') }}">{{ icon('pie-chart', 12) }}</button>
+            <button type="button" class="type-btn" data-type="pie" title="{{ t('Pie') }}">{{ icon('pie', 12) }}</button>
+            <button type="button" class="type-btn" data-type="polarArea" title="{{ t('Polar Area') }}">{{ icon('compass', 12) }}</button>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap" style="display:flex; justify-content:center; align-items:center">
+          <canvas id="asok-chart-distribution"
+                  data-labels='{{ chart_info.model_labels | tojson }}'
+                  data-values='{{ chart_info.model_data | tojson }}'></canvas>
+        </div>
+      </div>
+
+    </div>
+    {% endif %}
+
+  </div>
+
+  <div class="dashboard-side">
+    <div class="card overview-card">
+      <div class="card-header-row">
+        <span class="card-section-title">{{ icon('table', 15) }} {{ t('Overview') }}</span>
+      </div>
+      {% if stats_groups %}
+        {% for grp in stats_groups %}
+        <div class="overview-group">
+          <div class="overview-group-header">{{ grp.name }}</div>
+          {% for s in grp.stats %}
+          <a href="{{ admin_prefix }}/{{ s.slug }}" class="overview-row" data-spa>
+            <span class="overview-label">{{ s.label }}</span>
+            <span class="overview-count">{{ s.count }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      {% elif stats %}
+        {% for s in stats %}
+        <a href="{{ admin_prefix }}/{{ s.slug }}" class="overview-row" data-spa>
+          <span class="overview-label">{{ s.label }}</span>
+          <span class="overview-count">{{ s.count }}</span>
+        </a>
         {% endfor %}
       {% else %}
-        <div class="empty-state">
-          {{ icon('log', 36, 'empty-icon') }}
-          <p class="empty-title">{{ t('No activity yet') }}</p>
-          <p class="empty-text">{{ t('System logs will appear here.') }}</p>
+        <div style="padding:16px; text-align:center; color:var(--fg-subtle); font-size:13px">
+          {{ t('No models in overview') }}
         </div>
       {% endif %}
+    </div>
+  </div>
+
+  {# ── Activité Récente (après Aperçu dans le HTML → ordre pile : charts, aperçu, activité) ── #}
+  {% if can_view_logs %}
+  <div class="dashboard-activity">
+    <div class="card">
+      <div class="card-header-row">
+        <span class="card-section-title">{{ icon('history', 15) }} {{ t('Recent Activity') }}</span>
+        <a href="{{ admin_prefix }}/{{ log_slug }}" class="btn btn-ghost btn-sm" data-spa>{{ t('See all activity') }}</a>
+      </div>
+      <div class="timeline">
+        {% if recent_logs %}
+          {% for log in recent_logs %}
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <div class="timeline-text">
+                  <span style="font-weight:600">{{ log.user_label }}</span>
+                  <span class="muted">{{ log.action }}</span>
+                  <span style="font-weight:600">{{ log.entity }}</span>
+                  {% if log.entity_id %}<span class="muted">#{{ log.entity_id }}</span>{% endif %}
+                </div>
+                <div class="timeline-date">{{ log.date_label }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-state">
+            {{ icon('log', 36, 'empty-icon') }}
+            <p class="empty-title">{{ t('No activity yet') }}</p>
+            <p class="empty-text">{{ t('System logs will appear here.') }}</p>
+          </div>
+        {% endif %}
+      </div>
     </div>
   </div>
   {% endif %}
-
-  {# Models Quick Access #}
-  <div class="card" style="display:flex; flex-direction:column">
-    <div style="padding:20px 24px; border-bottom:1px solid var(--border)">
-      <span style="font-weight:600; font-size:0.95rem; display:flex; align-items:center; gap:8px">
-        {{ icon('table', 16) }} {{ t('Quick Access') }}
-      </span>
-    </div>
-    
-    <div style="display:flex; flex-direction:column">
-      {% if admin_models %}
-        {% for m in admin_models %}
-          <a href="{{ admin_prefix }}/{{ m.slug }}"
-             data-spa
-             style="display:flex;align-items:center;padding:16px 24px;border-bottom:1px solid var(--border);color:var(--fg);transition:background var(--trans)">
-            <div style="width:36px;height:36px;border-radius:var(--r);background:var(--brand-pale);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-right:16px">
-              {{ icon('table', 16, 'text-brand') }}
-            </div>
-            <div style="flex:1">
-              <div style="font-weight:600;font-size:0.95rem">{{ m.label }}</div>
-              <div class="muted" style="font-size:0.8rem">/{{ m.slug }}</div>
-            </div>
-            <div class="muted">{{ icon('arrow-right', 16) }}</div>
-          </a>
-        {% endfor %}
-      {% else %}
-        <div class="empty-state">
-          <p class="empty-text">{{ t('No models registered') }}</p>
-        </div>
-      {% endif %}
-    </div>
-  </div>
 
 </div>
 

@@ -9,6 +9,7 @@ from asok.utils import humanize
 
 from .safestring import SafeString, html_safe_json
 from .sandbox import _get
+from .undefined import Undefined
 
 _RE_STRIPTAGS = re.compile(r"<[^>]+>")
 
@@ -63,6 +64,39 @@ def _date_filter(v: Any, f: str = "%d/%m/%Y") -> Any:
             return datetime.datetime.fromisoformat(v).strftime(f)
         except (ValueError, TypeError):
             return v
+    return v
+
+
+def _as_epoch_seconds(v: Any) -> Optional[float]:
+    """Return v as epoch seconds if it is a plausible timestamp (~2001-2286)."""
+    try:
+        ts = float(v)
+    except (ValueError, TypeError):
+        return None
+    return ts if 1_000_000_000 <= ts <= 9_999_999_999 else None
+
+
+def _format_epoch(ts: float, f: str, fallback: Any) -> Any:
+    try:
+        return datetime.datetime.fromtimestamp(ts).strftime(f)
+    except (ValueError, OSError, OverflowError):
+        return fallback
+
+
+def _epoch_filter(v: Any, f: str = "%d/%m/%Y %H:%M") -> Any:
+    """Format a value that may be a Unix epoch (int/float/numeric str) as a date.
+
+    Datetime objects and ISO strings are formatted too. Anything that is not a
+    plausible epoch (roughly 2001-2286) is returned unchanged, so small integers
+    like ids are never mistaken for timestamps.
+    """
+    if hasattr(v, "strftime"):
+        return v.strftime(f)
+    ts = _as_epoch_seconds(v)
+    if ts is not None:
+        return _format_epoch(ts, f, v)
+    if isinstance(v, str):
+        return _date_filter(v, f)
     return v
 
 
@@ -134,6 +168,40 @@ def _display_filter(value: Any) -> str:
     return _fallback_display(value)
 
 
+def _pluralize_filter(
+    v: Any, singular_or_plural: str = "s", plural: Optional[str] = None
+) -> str:
+    """Format pluralization based on value or collection length.
+
+    Supports:
+        - {{ 1 | pluralize("s") }} -> ""
+        - {{ 2 | pluralize("s") }} -> "s"
+        - {{ 1 | pluralize("y", "ies") }} -> "y"
+        - {{ 2 | pluralize("y", "ies") }} -> "ies"
+        - {{ 1 | pluralize("item", "items") }} -> "item"
+        - {{ 2 | pluralize("item", "items") }} -> "items"
+        - Works with collections e.g. {{ items | pluralize("item", "items") }}
+    """
+    if plural is None:
+        singular = ""
+        plural_str = singular_or_plural
+    else:
+        singular = singular_or_plural
+        plural_str = plural
+
+    try:
+        if isinstance(v, (list, tuple, dict, set)):
+            count = len(v)
+        else:
+            count = float(v)
+    except (ValueError, TypeError):
+        count = 1
+
+    if count == 1:
+        return singular
+    return plural_str
+
+
 TEMPLATE_FILTERS = {
     "string": lambda v: str(v) if v is not None else "",
     "upper": lambda v: str(v).upper(),
@@ -143,11 +211,12 @@ TEMPLATE_FILTERS = {
     "truncate": _truncate_filter,
     "replace": _replace_filter,
     "join": lambda v, sep=", ": sep.join(str(i) for i in v),
-    "default": lambda v, d="": d if v is None or v == "" else v,
+    "default": lambda v, d="": d if isinstance(v, Undefined) or v is None or v == "" else v,
     "striptags": lambda v: _RE_STRIPTAGS.sub("", str(v)),
     "length": lambda v: len(v),
     "date": lambda v, f="%d/%m/%Y": _date_filter(v, f),
-    "pluralize": lambda v, s, p: s if int(v) <= 1 else p,
+    "epoch": lambda v, f="%d/%m/%Y %H:%M": _epoch_filter(v, f),
+    "pluralize": _pluralize_filter,
     "safe": lambda v: SafeString(str(v)) if v is not None else SafeString(""),
     "escape": lambda v: _html.escape(str(v)) if v is not None else "",
     "e": lambda v: _html.escape(str(v)) if v is not None else "",

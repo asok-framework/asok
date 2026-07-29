@@ -4,7 +4,7 @@ SECURITY: Prevents Stored XSS attacks by sanitizing user-generated HTML.
 """
 
 import re
-from html import escape
+from html import escape, unescape
 
 # Whitelist of safe HTML tags and attributes
 ALLOWED_TAGS = {
@@ -41,14 +41,34 @@ ALLOWED_TAGS = {
 }
 
 ALLOWED_ATTRIBUTES = {
-    "a": {"href", "title", "target"},
+    "a": {"href", "title", "target", "rel"},
     "img": {"src", "alt", "title", "width", "height"},
-    "p": {"style"},
-    "span": {"style"},
-    "div": {"style"},
+    "p": {"style", "class"},
+    "span": {"style", "class"},
+    "div": {"style", "class"},
+    "li": {"class"},
+    "ol": {"class"},
+    "ul": {"class"},
+    "pre": {"class"},
     "td": {"colspan", "rowspan"},
     "th": {"colspan", "rowspan"},
 }
+
+# Whitelisted WYSIWYG (Quill) formatting classes preserved so the read-only view
+# renders like the editor — code blocks, text alignment and indentation. A class
+# token cannot execute script; anything not in this set is dropped.
+_ALLOWED_CLASS_TOKENS = frozenset(
+    {
+        "ql-code-block-container",
+        "ql-code-block",
+        "ql-syntax",
+        "ql-align-left",
+        "ql-align-center",
+        "ql-align-right",
+        "ql-align-justify",
+    }
+    | {f"ql-indent-{i}" for i in range(1, 9)}
+)
 
 # Safe CSS properties for style attribute
 ALLOWED_STYLES = {
@@ -113,19 +133,41 @@ def _process_tag_match(match: re.Match, result: list[str]) -> None:
                 result.append(f"<{tag}>")
 
 
+def _emit_text(text: str) -> str:
+    """Escape a text node exactly once.
+
+    Decode existing entities first, then re-escape — so content that already
+    carries entities (e.g. `Future&lt;String&gt;` inside a Quill code block) is
+    NOT double-escaped into a visible ``&lt;``. This also makes sanitization
+    idempotent (safe to run again, e.g. admin-write + ORM-write). Because we
+    re-escape immediately, decoded ``<``/``>``/``&`` can never form a live tag in
+    the output — a text ``<script>`` stays inert, escaped text.
+    """
+    return escape(unescape(text))
+
+
 def _add_text_before_tag(
     html: str, pos: int, match_start: int, result: list[str]
 ) -> None:
     text_before = html[pos:match_start]
     if text_before:
-        result.append(escape(text_before))
+        result.append(_emit_text(text_before))
 
 
 def sanitize_html(html: str) -> str:
     """Sanitize HTML content to prevent XSS attacks.
 
-    This is a lightweight sanitizer for WYSIWYG editor content.
-    For production use with untrusted content, consider using bleach library.
+    This is a lightweight, regex-based sanitizer for trusted-ish WYSIWYG editor
+    content. It relies on re-serialization (unknown tags dropped, allowed tags
+    re-emitted with only allow-listed, escaped attributes) rather than the
+    pre-cleaning regexes, which makes the common XSS vectors hard to slip past.
+
+    SECURITY — best-effort, NOT a hardened boundary. Regex-based sanitizers
+    cannot fully model browser HTML parsing and carry an inherent residual risk
+    of mutation-XSS (mXSS). For untrusted, high-assurance input (public
+    user-generated content), prefer a DOM-based sanitizer such as ``nh3`` (Rust
+    ammonia bindings) or ``bleach`` and treat this function as a convenience
+    fallback only.
 
     Args:
         html: Raw HTML string from WYSIWYG editor
@@ -140,6 +182,7 @@ def sanitize_html(html: str) -> str:
         - Removes data: protocol in images (except data:image/*)
         - Validates style attributes against whitelist
         - Escapes unknown tags
+        - Adds rel="noopener noreferrer" to links that keep a target
         - Size limits prevent DoS via extremely large HTML
     """
     limit_result = _check_html_limits(html)
@@ -169,7 +212,7 @@ def sanitize_html(html: str) -> str:
 
     # Add remaining text
     if pos < len(html):
-        result.append(escape(html[pos:]))
+        result.append(_emit_text(html[pos:]))
 
     return "".join(result)
 
@@ -187,6 +230,12 @@ def _sanitize_src_value(attr_value: str) -> str | None:
     return attr_value if _is_safe_url(attr_value, allow_data_images=True) else None
 
 
+def _sanitize_class_value(attr_value: str) -> str | None:
+    """Keep only whitelisted WYSIWYG formatting class tokens; drop the rest."""
+    tokens = [t for t in attr_value.split() if t in _ALLOWED_CLASS_TOKENS]
+    return " ".join(tokens) if tokens else None
+
+
 def _sanitize_attr_value(attr_name: str, attr_value: str) -> str | None:
     """Validate and sanitize a single attribute value. Returns sanitized value or None to skip."""
     if attr_name == "style":
@@ -195,6 +244,8 @@ def _sanitize_attr_value(attr_name: str, attr_value: str) -> str | None:
         return _sanitize_href_value(attr_value)
     if attr_name == "src":
         return _sanitize_src_value(attr_value)
+    if attr_name == "class":
+        return _sanitize_class_value(attr_value)
     return attr_value
 
 
@@ -238,7 +289,24 @@ def _sanitize_attributes(tag: str, attrs: str) -> str:
     for match in attr_pattern.finditer(attrs):
         _process_attr_match(match, allowed, sanitized)
 
+    if tag == "a":
+        _enforce_link_rel(sanitized)
+
     return " ".join(sanitized)
+
+
+def _enforce_link_rel(sanitized: list[str]) -> None:
+    """Force a safe rel on links that open a new browsing context.
+
+    SECURITY: target=_blank/_new/... gives the opened page access to
+    window.opener (reverse tabnabbing) unless rel="noopener" is set. We drop any
+    user-supplied rel and set our own — a duplicate rel would be malformed and
+    the browser would honor the unsafe first occurrence.
+    """
+    if not any(s.startswith("target=") for s in sanitized):
+        return
+    sanitized[:] = [s for s in sanitized if not s.startswith("rel=")]
+    sanitized.append('rel="noopener noreferrer"')
 
 
 def _process_style_rule(rule: str) -> str | None:

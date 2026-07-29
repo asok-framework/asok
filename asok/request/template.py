@@ -73,6 +73,36 @@ class TemplateMixin:
         "asok-cloak",
         "asok-fetch",
         "asok-fetch-async",
+        "asok-theme-toggle",
+        "data-asok-theme-toggle",
+        "data-theme-toggle",
+        "asok-cookie-banner",
+        "data-cookie-banner",
+        "asok-cookie-accept",
+        "asok-cookie-reject",
+        "asok-cookie-reset",
+        "asok-cookie-script",
+        "asok-dismiss",
+        "data-asok-dismiss",
+        "data-dismiss",
+        "asok-dismiss-trigger",
+        "data-asok-dismiss-trigger",
+        "data-dismiss-trigger",
+        "asok-copy",
+        "data-asok-copy",
+        "data-copy",
+        "asok-modal",
+        "asok-modal-open",
+        "asok-modal-close",
+        "asok-scroll-top",
+        "asok-scroll-to",
+        "asok-char-count",
+        "asok-tabs",
+        "asok-tab",
+        "asok-tab-panel",
+        "asok-progress",
+        "data-asok-progress",
+        "data-progress",
     ]
 
     def _initial_template_path(self: Any, filepath: str, root: str) -> str:
@@ -305,7 +335,9 @@ class TemplateMixin:
             sess = self.session
             saved_signed = sess.get(f"_comp_{cid}")
 
-            client = kwargs.pop("client", None)
+            from asok.component import _extract_client_directive
+
+            client = _extract_client_directive(kwargs)
             slot = kwargs.pop("slot", None)
             if slot is not None:
                 slot = SafeString(slot)

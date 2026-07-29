@@ -64,7 +64,7 @@ class Asok(
         self.root_dir: str = os.path.abspath(root_dir or os.getcwd())
         import asok
 
-        self.version = getattr(asok, "__version__", "0.5.4")
+        self.version = getattr(asok, "__version__", "0.5.5")
         self.dirs: dict[str, str] = {
             "LOCALES": "src/locales",
             "PAGES": "src/pages",
@@ -83,6 +83,7 @@ class Asok(
             "CSRF": True,
             "DEBUG": False,
             "AUTH_MODEL": "User",
+            "LOGIN_MESSAGE": "Please log in to access this page.",
             "SESSION_MAX_AGE": 86400 * 30,
             "CORS_ORIGINS": None,
             "GZIP": False,
@@ -97,6 +98,7 @@ class Asok(
             "BG_WORKERS": 10,  # Max background threads
             "GRAPHQL_DISABLE_INTROSPECTION": None,
             "STRICT_STATIC_TEMPLATES": False,
+            "STRICT_VARIABLES": True,
         }
 
         # Lifecycle hooks
@@ -139,8 +141,40 @@ class Asok(
         "asok-ref",
         "asok-teleport",
         "asok-cloak",
+        "data-asok-cloak",
+        "data-cloak",
         "asok-fetch",
         "asok-fetch-async",
+        "asok-theme-toggle",
+        "data-asok-theme-toggle",
+        "data-theme-toggle",
+        "asok-cookie-banner",
+        "data-cookie-banner",
+        "asok-cookie-accept",
+        "asok-cookie-reject",
+        "asok-cookie-reset",
+        "asok-cookie-script",
+        "asok-dismiss",
+        "data-asok-dismiss",
+        "data-dismiss",
+        "asok-dismiss-trigger",
+        "data-asok-dismiss-trigger",
+        "data-dismiss-trigger",
+        "asok-copy",
+        "data-asok-copy",
+        "data-copy",
+        "asok-modal",
+        "asok-modal-open",
+        "asok-modal-close",
+        "asok-scroll-top",
+        "asok-scroll-to",
+        "asok-char-count",
+        "asok-tabs",
+        "asok-tab",
+        "asok-tab-panel",
+        "asok-progress",
+        "data-asok-progress",
+        "data-progress",
     )
 
     def setup(self) -> None:
@@ -563,8 +597,17 @@ class Asok(
         for extension in extensions:
             self.register_extension(extension)
 
+    def _ensure_started(self) -> None:
+        if not getattr(self, "_started", False):
+            self._started = True
+            try:
+                self.startup()
+            except Exception:
+                pass
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Main entry point supporting both WSGI and ASGI servers."""
+        self._ensure_started()
         if len(args) == 1:
             scope = args[0]
 

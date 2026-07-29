@@ -212,5 +212,52 @@ class TestDataURIImages:
         assert "data:text/html" not in result or "<img" not in result
 
 
+class TestQuillFormattingClasses:
+    """Whitelisted WYSIWYG (Quill) classes survive so the read-only view renders
+    like the editor; everything else — including script vectors — is dropped."""
+
+    def test_code_block_classes_preserved(self):
+        html = '<div class="ql-code-block-container"><div class="ql-code-block">print(1)</div></div>'
+        out = sanitize_html(html)
+        assert "ql-code-block-container" in out
+        assert "ql-code-block" in out
+
+    def test_alignment_and_indent_classes_preserved(self):
+        assert 'class="ql-align-center"' in sanitize_html('<p class="ql-align-center">x</p>')
+        assert 'class="ql-indent-2"' in sanitize_html('<p class="ql-indent-2">x</p>')
+
+    def test_unlisted_class_tokens_dropped(self):
+        out = sanitize_html('<div class="evil ql-code-block">x</div>')
+        assert "evil" not in out
+        assert "ql-code-block" in out
+
+    def test_class_does_not_smuggle_handlers(self):
+        out = sanitize_html('<p class="ql-align-right" onclick="steal()"><script>alert(1)</script>ok</p>')
+        assert "onclick" not in out
+        assert "<script" not in out
+        assert "ql-align-right" in out
+
+
+class TestNoDoubleEscaping:
+    """Content that already carries entities (e.g. a code block) must not be
+    double-escaped into a visible ``&lt;``."""
+
+    def test_code_block_entities_not_double_escaped(self):
+        src = '<pre class="ql-syntax">Future&lt;String&gt; f() =&gt; 1;</pre>'
+        out = sanitize_html(src)
+        assert "&amp;lt;" not in out and "&amp;gt;" not in out
+        assert "Future&lt;String&gt;" in out
+
+    def test_sanitize_is_idempotent(self):
+        src = '<p>a &amp; b</p><pre>x &lt; y</pre>'
+        once = sanitize_html(src)
+        assert sanitize_html(once) == once
+
+    def test_escaped_script_text_stays_inert(self):
+        out = sanitize_html("intro &lt;script&gt;alert(1)&lt;/script&gt; end")
+        assert "<script" not in out
+        assert "&lt;script&gt;" in out
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -71,10 +71,34 @@ class SecurityMixin:
         )
         return None
 
+    @staticmethod
+    def _session_has_user(sess: Any) -> bool:
+        return bool(sess.get("user_id") or sess.get("_user_id"))
+
+    @staticmethod
+    def _client_ip_from_request(request: Any) -> str:
+        return getattr(request, "client_ip", None) or request.environ.get(
+            "REMOTE_ADDR", "Unknown"
+        )
+
+    def _update_session_metadata(self, request: Any) -> None:
+        import time
+
+        sess = request._session
+        if not self._session_has_user(sess):
+            return
+        now = time.time()
+        if "_created_at" not in sess:
+            sess["_created_at"] = now
+        sess["_ip"] = self._client_ip_from_request(request)
+        sess["_user_agent"] = request.environ.get("HTTP_USER_AGENT", "Unknown")
+        sess["_last_seen"] = now
+
     def _session_sid_cookie(self, request: Any) -> str | None:
         """Build the session SID Set-Cookie value, or None if no active session."""
         if request._session is None:
             return None
+        self._update_session_metadata(request)
         sid = request._session.sid
         if request._session.modified:
             self._session_store.save(sid, request._session)

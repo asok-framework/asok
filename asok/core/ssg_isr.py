@@ -43,17 +43,41 @@ class SSGISRMixin:
         """Returns the directory where SSG/ISR cached files are stored."""
         return os.path.join(self.root_dir, ".asok", "ssg_cache")
 
-    def _get_ssg_cache_file(self, path: str) -> str:
-        """Returns the file path for a cached request path."""
+    def _get_ssg_cache_file(self, path: str, lang: Optional[str] = None) -> str:
+        """Returns the locale-aware file path for a cached request path.
+
+        When ``lang`` is provided (e.g. ``"fr"``), the cache file is namespaced
+        per locale so that ``/about`` generates ``about.fr.html`` and
+        ``about.en.html`` independently.  When ``lang`` is ``None`` (single-
+        language apps), the classic ``about.html`` name is used for backward
+        compatibility.
+        """
         clean_path = path.strip("/")
         if not clean_path:
             clean_path = "index"
+        suffix = f".{lang}.html" if lang else ".html"
         cache_dir = self._get_ssg_cache_dir()
-        candidate = os.path.realpath(os.path.join(cache_dir, f"{clean_path}.html"))
+        candidate = os.path.realpath(os.path.join(cache_dir, f"{clean_path}{suffix}"))
         real_cache_dir = os.path.realpath(cache_dir)
         if not candidate.startswith(real_cache_dir + os.sep):
             raise ValueError(f"Path traversal bloqué : {path!r}")
         return candidate
+
+    def _get_active_locales(self) -> list[str]:
+        """Return the list of configured locales, or an empty list for single-lang apps."""
+        locales = getattr(self, "locales", {})
+        return list(locales.keys()) if len(locales) > 1 else []
+
+    def _lang_for_request(self, request: Request) -> Optional[str]:
+        """Return the locale key to use for SSG caching for a given request.
+
+        Returns ``None`` for single-language apps so the cache file stays
+        backward-compatible (no locale suffix).
+        """
+        active_locales = self._get_active_locales()
+        if not active_locales:
+            return None
+        return request.lang or self.config.get("LOCALE", "en")
 
     def _check_py_module_static(self, page_file: str) -> tuple[bool, Optional[int]]:
         try:
@@ -108,11 +132,13 @@ class SSGISRMixin:
     def _is_cache_stale(self, age: float, revalidate: Optional[int]) -> bool:
         return revalidate is not None and age >= revalidate
 
-    def _trigger_background_revalidation(self, path: str, cache_file: str) -> None:
+    def _trigger_background_revalidation(
+        self, path: str, cache_file: str, lang: Optional[str] = None
+    ) -> None:
         parts = [p for p in path.split("/") if p]
         page_file, _ = self._resolve_route(parts)
         if page_file:
-            background(self._regenerate_ssg_page, path, page_file, cache_file)
+            background(self._regenerate_ssg_page, path, page_file, cache_file, lang)
 
     def _send_cached_file(
         self,
@@ -157,6 +183,7 @@ class SSGISRMixin:
         cache_file: str,
         revalidate: Optional[int],
         start_response: Callable,
+        lang: Optional[str] = None,
     ) -> Optional[list[bytes]]:
         if not os.path.exists(cache_file):
             return None
@@ -171,7 +198,7 @@ class SSGISRMixin:
             logger.info(
                 f"SSG/ISR Cache stale for path {request.path} (age: {int(age)}s). Regenerating..."
             )
-            self._trigger_background_revalidation(request.path, cache_file)
+            self._trigger_background_revalidation(request.path, cache_file, lang)
 
         return self._send_cached_file(request, cache_file, revalidate, start_response)
 
@@ -210,12 +237,13 @@ class SSGISRMixin:
         revalidate: Optional[int],
         route_params: dict[str, Any],
         start_response: Callable,
+        lang: Optional[str] = None,
     ) -> Optional[list[bytes]]:
         if revalidate is None and len(route_params) > 0:
             return None
 
         try:
-            raw_html = self._generate_ssg_page_sync(request.path, page_file, cache_file)
+            raw_html = self._generate_ssg_page_sync(request.path, page_file, cache_file, lang=lang)
             if raw_html:
                 return self._build_and_send_generated_response(
                     request, raw_html, revalidate, start_response
@@ -225,6 +253,7 @@ class SSGISRMixin:
                 f"Failed to generate SSG page on-demand for {request.path}: {e}"
             )
         return None
+
 
     def _handle_ssg_isr_request(
         self, request: Request, environ: dict[str, Any], start_response: Callable
@@ -242,13 +271,15 @@ class SSGISRMixin:
         request._current_page_file = page_file
         self._assign_page_metadata(request, page_file)
 
-        cache_file = self._get_ssg_cache_file(request.path)
-        res = self._serve_ssg_cache(request, cache_file, revalidate, start_response)
+        # Use a locale-aware cache key so each language has its own cached file.
+        lang = self._lang_for_request(request)
+        cache_file = self._get_ssg_cache_file(request.path, lang)
+        res = self._serve_ssg_cache(request, cache_file, revalidate, start_response, lang)
         if res is not None:
             return res
 
         return self._generate_ssg_on_demand(
-            request, page_file, cache_file, revalidate, route_params, start_response
+            request, page_file, cache_file, revalidate, route_params, start_response, lang
         )
 
     def _is_custom_error_page(self, page_file: str) -> bool:
@@ -292,9 +323,16 @@ class SSGISRMixin:
         return None
 
     def _generate_ssg_page_sync(
-        self, path: str, page_file: str, cache_file: str
+        self, path: str, page_file: str, cache_file: str, lang: Optional[str] = None
     ) -> Optional[str]:
-        """Generate and save the page synchronously (used on demand)."""
+        """Generate and save the page synchronously (used on demand).
+
+        When ``lang`` is provided the synthetic request is built with an
+        ``HTTP_COOKIE`` header containing ``asok_lang=<lang>`` so that the
+        template rendering picks the correct locale — exactly as a real browser
+        request would.
+        """
+        cookie_header = f"asok_lang={lang}" if lang else ""
         environ = {
             "REQUEST_METHOD": "GET",
             "SCRIPT_NAME": "",
@@ -312,6 +350,7 @@ class SSGISRMixin:
             "wsgi.run_once": False,
             "asok.root": self.root_dir,
             "asok.app": self,
+            "HTTP_COOKIE": cookie_header,
         }
         request = Request(environ)
         from ..context import request_context
@@ -324,10 +363,12 @@ class SSGISRMixin:
 
             return self._render_and_cache_html(request, environ, cache_file)
 
-    def _regenerate_ssg_page(self, path: str, page_file: str, cache_file: str) -> None:
+    def _regenerate_ssg_page(
+        self, path: str, page_file: str, cache_file: str, lang: Optional[str] = None
+    ) -> None:
         """Simulate a request and regenerate the static HTML page in the background."""
         try:
-            self._generate_ssg_page_sync(path, page_file, cache_file)
+            self._generate_ssg_page_sync(path, page_file, cache_file, lang=lang)
         except Exception as e:
             logger.error(
                 f"Failed to regenerate SSG/ISR cache for path {path}: {e}",
@@ -389,13 +430,39 @@ class SSGISRMixin:
         if target_py:
             should_render = self._should_render_static_route(target_py)
 
-        if should_render:
-            cache_file = self._get_ssg_cache_file(route_path)
-            logger.info(f"  Pre-rendering static route {route_path}...")
-            try:
-                self._generate_ssg_page_sync(route_path, full_path, cache_file)
-            except Exception as e:
-                logger.error(f"  Failed to pre-render static page {route_path}: {e}")
+        if not should_render:
+            return
+
+        self._render_route_for_locales(route_path, full_path, kind="static")
+
+    def _render_route_for_locales(
+        self, route_path: str, full_path: str, kind: str = "static"
+    ) -> None:
+        """Generate SSG cache files for every configured locale (or once for single-lang apps)."""
+        active_locales = self._get_active_locales()
+        langs: list[Optional[str]] = active_locales if active_locales else [None]  # type: ignore[list-item]
+        for lang in langs:
+            cache_file = self._get_ssg_cache_file(route_path, lang)
+            label = f"{route_path} [{lang}]" if lang else route_path
+            logger.info(f"  Pre-rendering {kind} route {label}...")
+            self._render_single_locale(route_path, full_path, cache_file, label, lang, kind)
+
+    def _render_single_locale(
+        self,
+        route_path: str,
+        full_path: str,
+        cache_file: str,
+        label: str,
+        lang: Optional[str],
+        kind: str,
+    ) -> None:
+        """Generate one locale's SSG cache file, logging any error."""
+        try:
+            self._generate_ssg_page_sync(route_path, full_path, cache_file, lang=lang)
+        except Exception as e:
+            logger.error(f"  Failed to pre-render {kind} page {label}: {e}")
+
+
 
     def _get_dynamic_static_paths(self, module: Any) -> Optional[list[dict]]:
         from ..core.asgi import async_to_sync
@@ -415,12 +482,8 @@ class SSGISRMixin:
         for k, v in p.items():
             rendered_route = re.sub(rf"\[{k}(:\w+)?\]", str(v), rendered_route)
 
-        cache_file = self._get_ssg_cache_file(rendered_route)
-        logger.info(f"  Pre-rendering dynamic route {rendered_route}...")
-        try:
-            self._generate_ssg_page_sync(rendered_route, full_path, cache_file)
-        except Exception as e:
-            logger.error(f"  Failed to pre-render dynamic page {rendered_route}: {e}")
+        self._render_route_for_locales(rendered_route, full_path, kind="dynamic")
+
 
     def _pre_render_dynamic_route(self, route_path: str, full_path: str) -> None:
         if not full_path.endswith((".py", ".pyc")):

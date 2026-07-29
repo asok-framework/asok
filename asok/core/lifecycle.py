@@ -37,13 +37,43 @@ class LifecycleMixin:
         self._on_shutdown.append(fn)
         return fn
 
+    def _run_async_hook_safe(self, fn: Callable) -> None:
+        try:
+            res = fn()
+            if inspect.iscoroutine(res):
+                self._handle_coroutine_res(res)
+        except Exception as e:
+            logger.warning("Could not execute async startup hook: %s", e)
+
+    def _handle_coroutine_res(self, coro: Any) -> None:
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                asyncio.run(coro)
+        except Exception:
+            coro.close()
+
     def startup(self) -> None:
         """Run all registered startup hooks."""
+        from ..backup import BackupManager
         from .signals import app_startup
 
         app_startup.send(self)
         for fn in self._on_startup:
-            fn()
+            if inspect.iscoroutinefunction(fn):
+                self._run_async_hook_safe(fn)
+            else:
+                res = fn()
+                if inspect.iscoroutine(res):
+                    self._handle_coroutine_res(res)
+
+        try:
+            BackupManager.start_scheduled_backups(self)
+        except Exception as e:
+            logger.warning("Could not start background backup scheduler: %s", e)
 
     def shutdown(self) -> None:
         """Run all registered shutdown hooks and stop background tasks."""

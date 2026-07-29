@@ -10,12 +10,12 @@ from asok.orm import MODELS_REGISTRY, Model
 from asok.request import Request
 
 
-def test_ip_resolution_rightmost():
-    """Verify that request.ip returns the rightmost element of X-Forwarded-For when proxy is trusted."""
+def test_ip_resolution_leftmost_client():
+    """Verify that request.ip returns the leftmost client IP element of X-Forwarded-For when proxy is trusted."""
     app = Asok()
     app.config["TRUSTED_PROXIES"] = "*"
 
-    # Case 1: multiple IPs in X-Forwarded-For
+    # Case 1: multiple IPs in X-Forwarded-For (client IP is first)
     environ = {
         "REQUEST_METHOD": "GET",
         "PATH_INFO": "/",
@@ -24,7 +24,7 @@ def test_ip_resolution_rightmost():
         "asok.app": app,
     }
     request = Request(environ)
-    assert request.ip == "5.6.7.8"
+    assert request.ip == "1.2.3.4"
 
     # Case 2: single IP in X-Forwarded-For
     environ2 = {

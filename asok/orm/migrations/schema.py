@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .operations import CreateModel
 
@@ -53,7 +53,10 @@ class BaseSchemaEditor:
     def execute(self, sql: str, params: Any = None) -> None:
         self.connection.execute(sql, params or ())
 
-    def _get_table_name(self, model_name: str) -> str:
+    def _get_table_name(self, model_name: str, table: Optional[str] = None) -> str:
+        if table:
+            return table
+
         from .. import MODELS_REGISTRY
 
         if model_name in MODELS_REGISTRY:
@@ -92,7 +95,19 @@ class BaseSchemaEditor:
             return str(default).lower()
         if isinstance(default, (int, float)):
             return str(default)
-        return "'" + str(default).replace("'", "''") + "'"
+        str_val = str(default)
+        upper_val = str_val.strip().upper()
+        if upper_val in (
+            "CURRENT_TIMESTAMP",
+            "CURRENT_DATE",
+            "CURRENT_TIME",
+            "NOW()",
+            "NULL",
+            "TRUE",
+            "FALSE",
+        ):
+            return upper_val
+        return "'" + str_val.replace("'", "''") + "'"
 
     def create_table(self, operation: CreateModel) -> None:
         q_table = self.engine.quote_identifier(operation.table)
@@ -119,22 +134,60 @@ class BaseSchemaEditor:
         self.execute(f"DROP TABLE IF EXISTS {q_table}")
 
     def add_column(
-        self, model_name: str, col_name: str, field_data: Dict[str, Any]
+        self,
+        model_name: str,
+        col_name: str,
+        field_data: Dict[str, Any],
+        table: Optional[str] = None,
     ) -> None:
-        table = self._get_table_name(model_name)
-        q_table = self.engine.quote_identifier(table)
+        tbl = self._get_table_name(model_name, table)
+        q_table = self.engine.quote_identifier(tbl)
+        field_data = self._backfill_add_column_default(col_name, field_data)
         col_sql = self._build_column_sql(col_name, field_data)
         self.execute(f"ALTER TABLE {q_table} ADD COLUMN {col_sql}")
 
-    def remove_column(self, model_name: str, col_name: str) -> None:
-        table = self._get_table_name(model_name)
-        q_table = self.engine.quote_identifier(table)
+    def _backfill_add_column_default(
+        self, col_name: str, field_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Give a NOT NULL column a safe DEFAULT when added to a populated table.
+
+        SQLite/Postgres reject `ALTER TABLE ADD COLUMN ... NOT NULL` without a
+        default (existing rows would be NULL). Backfill 0 for numeric/boolean
+        columns, '' otherwise, so the migration applies. Review the backfilled
+        rows afterwards — e.g. a foreign key gets 0 and may need fixing.
+        """
+        if field_data.get("nullable") or field_data.get("default") is not None:
+            return field_data
+        col_type = self.engine.get_column_type(DummyField(field_data)).upper()
+        numeric = ("INT", "REAL", "NUMERIC", "DECIMAL", "DOUBLE", "FLOAT", "BOOL")
+        fallback: Any = 0 if any(t in col_type for t in numeric) else ""
+        import logging
+
+        logging.getLogger("asok.migrations").warning(
+            "Column '%s' is NOT NULL without a default; backfilling existing rows "
+            "with %r so the migration can apply. Review this data.",
+            col_name,
+            fallback,
+        )
+        return {**field_data, "default": fallback}
+
+    def remove_column(
+        self, model_name: str, col_name: str, table: Optional[str] = None
+    ) -> None:
+        tbl = self._get_table_name(model_name, table)
+        q_table = self.engine.quote_identifier(tbl)
         q_col = self.engine.quote_identifier(col_name)
         self.execute(f"ALTER TABLE {q_table} DROP COLUMN {q_col}")
 
-    def rename_column(self, model_name: str, old_name: str, new_name: str) -> None:
-        table = self._get_table_name(model_name)
-        q_table = self.engine.quote_identifier(table)
+    def rename_column(
+        self,
+        model_name: str,
+        old_name: str,
+        new_name: str,
+        table: Optional[str] = None,
+    ) -> None:
+        tbl = self._get_table_name(model_name, table)
+        q_table = self.engine.quote_identifier(tbl)
         q_old = self.engine.quote_identifier(old_name)
         q_new = self.engine.quote_identifier(new_name)
         self.execute(f"ALTER TABLE {q_table} RENAME COLUMN {q_old} TO {q_new}")
@@ -145,6 +198,7 @@ class BaseSchemaEditor:
         col_name: str,
         old_field: Dict[str, Any],
         new_field: Dict[str, Any],
+        table: Optional[str] = None,
     ) -> None:
         raise NotImplementedError()
 
@@ -158,9 +212,10 @@ class PostgresSchemaEditor(BaseSchemaEditor):
         col_name: str,
         old_field: Dict[str, Any],
         new_field: Dict[str, Any],
+        table: Optional[str] = None,
     ) -> None:
-        table = self._get_table_name(model_name)
-        q_table = self.engine.quote_identifier(table)
+        tbl = self._get_table_name(model_name, table)
+        q_table = self.engine.quote_identifier(tbl)
         q_col = self.engine.quote_identifier(col_name)
 
         clauses: list[str] = []
@@ -226,9 +281,10 @@ class MySQLSchemaEditor(BaseSchemaEditor):
         col_name: str,
         old_field: Dict[str, Any],
         new_field: Dict[str, Any],
+        table: Optional[str] = None,
     ) -> None:
-        table = self._get_table_name(model_name)
-        q_table = self.engine.quote_identifier(table)
+        tbl = self._get_table_name(model_name, table)
+        q_table = self.engine.quote_identifier(tbl)
         col_sql = self._build_column_sql(col_name, new_field)
         self.execute(f"ALTER TABLE {q_table} MODIFY COLUMN {col_sql}")
 
@@ -237,12 +293,71 @@ class SQLiteSchemaEditor(BaseSchemaEditor):
     """SQLite SQL Schema Compiler."""
 
     def delete_table_by_name(self, table: str) -> None:
-        fts_table = f"{table}_fts"
-        self.execute(f'DROP TRIGGER IF EXISTS "{table}_ai"')
-        self.execute(f'DROP TRIGGER IF EXISTS "{table}_ad"')
-        self.execute(f'DROP TRIGGER IF EXISTS "{table}_au"')
-        self.execute(f'DROP TABLE IF EXISTS "{fts_table}"')
+        q_ai = self.engine.quote_identifier(f"{table}_ai")
+        q_ad = self.engine.quote_identifier(f"{table}_ad")
+        q_au = self.engine.quote_identifier(f"{table}_au")
+        q_fts = self.engine.quote_identifier(f"{table}_fts")
+        self.execute(f"DROP TRIGGER IF EXISTS {q_ai}")
+        self.execute(f"DROP TRIGGER IF EXISTS {q_ad}")
+        self.execute(f"DROP TRIGGER IF EXISTS {q_au}")
+        self.execute(f"DROP TABLE IF EXISTS {q_fts}")
         super().delete_table_by_name(table)
+
+    def _get_sqlite_table_columns(self, q_table: str) -> Optional[list]:
+        try:
+            return self.connection.execute(f"PRAGMA table_info({q_table})")
+        except Exception:
+            return None
+
+    def _extract_column_info(self, c: Any) -> tuple[str, str, bool, Any]:
+        if isinstance(c, dict):
+            return c["name"], c["type"], c["notnull"] == 1, c["dflt_value"]
+        return c[1], c[2], c[3] == 1, c[4]
+
+    def _build_existing_sqlite_col_sql(self, c_name: str, c_type: str, c_notnull: bool, c_dflt: Any) -> str:
+        col_def = f"{self.engine.quote_identifier(c_name)} {c_type}"
+        if c_notnull:
+            col_def += " NOT NULL"
+        if c_dflt is not None:
+            col_def += f" DEFAULT {c_dflt}"
+        return col_def
+
+    def _build_sqlite_col_sql(
+        self, c: Any, col_name: str, new_field: Dict[str, Any], pk_def: str
+    ) -> str:
+        c_name, c_type, c_notnull, c_dflt = self._extract_column_info(c)
+        if c_name == "id":
+            return pk_def
+        if c_name == col_name:
+            return self._build_column_sql(c_name, new_field)
+        return self._build_existing_sqlite_col_sql(c_name, c_type, c_notnull, c_dflt)
+
+    def _rebuild_sqlite_table(
+        self,
+        q_table: str,
+        table_name: str,
+        columns: list,
+        col_names: list,
+        col_name: str,
+        new_field: Dict[str, Any],
+    ) -> None:
+        temp_table = f"__temp_{table_name}"
+        q_temp = self.engine.quote_identifier(temp_table)
+        pk_def = getattr(
+            self.engine, "primary_key_def", "id INTEGER PRIMARY KEY AUTOINCREMENT"
+        )
+        column_sqls = [
+            self._build_sqlite_col_sql(c, col_name, new_field, pk_def) for c in columns
+        ]
+        create_temp_sql = f"CREATE TABLE {q_temp} ({', '.join(column_sqls)})"
+        cols_joined = ", ".join(self.engine.quote_identifier(c) for c in col_names)
+        insert_sql = (
+            f"INSERT INTO {q_temp} ({cols_joined}) SELECT {cols_joined} FROM {q_table}"
+        )
+        self.execute(create_temp_sql)
+        self.execute(insert_sql)
+        self.execute(f"DROP TABLE {q_table}")
+        self.execute(f"ALTER TABLE {q_temp} RENAME TO {q_table}")
 
     def alter_column(
         self,
@@ -250,12 +365,18 @@ class SQLiteSchemaEditor(BaseSchemaEditor):
         col_name: str,
         old_field: Dict[str, Any],
         new_field: Dict[str, Any],
+        table: Optional[str] = None,
     ) -> None:
-        # SQLite doesn't support easy ALTER COLUMN. We output warning and proceed.
-        import logging
-
-        logger = logging.getLogger("asok.orm")
-        logger.warning(
-            "SQLite does not support altering columns directly. "
-            "Please recreate table manually if DB-level constraint update is required."
+        table_name = self._get_table_name(model_name, table)
+        q_table = self.engine.quote_identifier(table_name)
+        columns = self._get_sqlite_table_columns(q_table)
+        if not columns:
+            return
+        col_names = [
+            col["name"] if isinstance(col, dict) else col[1] for col in columns
+        ]
+        if col_name not in col_names:
+            return
+        self._rebuild_sqlite_table(
+            q_table, table_name, columns, col_names, col_name, new_field
         )

@@ -598,6 +598,67 @@ def test_error_template_shared_variables(tmp_path):
     assert "Hello page 404: 2 names" in html
 
 
+def test_admin_register_method(tmp_path):
+    from asok.admin import Admin
+    from asok.core import Asok
+    from asok.orm import Model
+    from asok.orm.field import Field
+
+    app = Asok(root_dir=str(tmp_path))
+
+    class DemoMessage(Model):
+        title = Field("TEXT")
+
+    app.models = [DemoMessage]
+    admin = Admin(app)
+
+    # Test registering by string name with show_in_overview=False
+    admin.register("DemoMessage", show_in_overview=False, icon="mail")
+    slug = list(admin._registered.keys())[0]
+    assert admin._registered[slug]["show_in_overview"] is False
+    assert admin._registered[slug]["icon"] == "mail"
+
+    # Test registering by model class with show_in_dashboard=False (hides model)
+    admin.register(DemoMessage, show_in_dashboard=False)
+    assert slug not in admin._registered
+
+
+def test_show_in_overview_and_sidebar(tmp_path):
+    from asok.admin import Admin
+    from asok.core import Asok
+    from asok.orm import Model
+    from asok.orm.field import Field
+
+    app = Asok(root_dir=str(tmp_path))
+
+    class SecretModel(Model):
+        _table = "secret_model"
+        title = Field("TEXT")
+
+        class Admin:
+            show_in_dashboard = False  # Completely hidden from admin
+
+    class QuietModel(Model):
+        _table = "quiet_model"
+        title = Field("TEXT")
+
+        class Admin:
+            show_in_overview = False  # In admin sidebar, but hidden from Overview cards
+
+    app.models = [SecretModel, QuietModel]
+    admin = Admin(app)
+
+    # SecretModel is completely hidden from admin (not registered)
+    assert "secret_model" not in admin._registered
+
+    # QuietModel IS registered in admin sidebar, but show_in_overview is False
+    q_slug = "quiet_model" if "quiet_model" in admin._registered else "quiet_models"
+    assert q_slug in admin._registered
+    assert admin._registered[q_slug]["show_in_overview"] is False
+
+
+
+
 def test_query_string_hpp():
     from asok.request import Request
 

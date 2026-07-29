@@ -143,7 +143,8 @@ class MySQLEngine(BaseEngine):
 
     def quote_identifier(self, name: str) -> str:
         # MySQL uses backticks
-        return f"`{name}`"
+        clean = name.strip('"\'`').replace("`", "``")
+        return f"`{clean}`"
 
     def translate_query(
         self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None

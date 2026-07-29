@@ -178,7 +178,7 @@ def _safe_migration_slug(name: str):
 
 
 def _existing_migration_files(mig_dir: str) -> list[str]:
-    return [f for f in os.listdir(mig_dir) if _is_versioned_migration_file(f)]
+    return sorted(f for f in os.listdir(mig_dir) if _is_versioned_migration_file(f))
 
 
 def _is_versioned_migration_file(f: str) -> bool:
@@ -240,6 +240,17 @@ def _run_legacy_in_memory(legacy_files: list) -> Any:
     return conn
 
 
+def _build_table_to_model_map() -> dict:
+    from asok.orm import MODELS_REGISTRY
+
+    table_map = {}
+    for name, model_cls in MODELS_REGISTRY.items():
+        tbl = getattr(model_cls, "_table", None)
+        if tbl:
+            table_map[tbl] = name
+    return table_map
+
+
 def _inspect_legacy_sqlite_tables(conn: Any) -> dict:
     from asok.orm.migrations.state import VirtualModelState
 
@@ -248,11 +259,12 @@ def _inspect_legacy_sqlite_tables(conn: Any) -> dict:
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_asok_%'"
     )
     tables = [row[0] for row in cursor.fetchall()]
+    table_to_model = _build_table_to_model_map()
 
     models = {}
     for table in tables:
         fields = _inspect_legacy_sqlite_fields(cursor, table)
-        model_name = _infer_model_name_from_table(table)
+        model_name = table_to_model.get(table) or _infer_model_name_from_table(table)
         models[model_name] = VirtualModelState(
             name=model_name, table=table, fields=fields
         )
@@ -264,7 +276,7 @@ def _inspect_legacy_sqlite_fields(cursor: Any, table: str) -> dict:
     cols = cursor.fetchall()
     fields = {}
     for col in cols:
-        col_name = col[1]
+        col_name = str(col[1]).strip('"\'`')
         col_type = col[2]
         nullable = col[3] == 0
         default = col[4]
@@ -277,14 +289,24 @@ def _inspect_legacy_sqlite_fields(cursor: Any, table: str) -> dict:
     return fields
 
 
+_SPECIAL_PLURAL_ENDINGS = ("sses", "shes", "ches", "xes", "zes")
+_IGNORED_PLURAL_ENDINGS = ("ss", "us", "is")
+
+
+def _strip_plural_suffix(model_name: str) -> str:
+    if model_name.endswith("ies"):
+        return model_name[:-3] + "y"
+    if model_name.endswith(_SPECIAL_PLURAL_ENDINGS):
+        return model_name[:-2]
+    if model_name.endswith("s") and not model_name.endswith(_IGNORED_PLURAL_ENDINGS):
+        return model_name[:-1]
+    return model_name
+
+
 def _infer_model_name_from_table(table: str) -> str:
     parts = table.split("_")
     model_name = "".join(p.capitalize() for p in parts)
-    if model_name.endswith("s"):
-        model_name = model_name[:-1]
-    if model_name.endswith("ie"):
-        model_name = model_name[:-2] + "y"
-    return model_name
+    return _strip_plural_suffix(model_name)
 
 
 def _reconstruct_historical_state(mig_dir: str, mig_files: list[str]) -> Any:

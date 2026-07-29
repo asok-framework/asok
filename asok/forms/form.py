@@ -12,6 +12,27 @@ from asok.validation import Validator
 from .field import FormField
 from .mixins import SchemaMixin
 
+# HTTP methods that carry a form submission. Kept in one place so value
+# population (__init__/bind), validation and fill() all agree on what counts as
+# a submit — otherwise fill() on a PUT/PATCH would clobber user input with the
+# model's DB values.
+_SUBMIT_METHODS = ("POST", "PUT", "PATCH")
+
+
+def _current_request() -> Optional[Request]:
+    """Return the active request from the context, if any.
+
+    Lets a Form created inside a view without an explicit request (e.g.
+    ``Form.from_model(User)``) still bind to the ongoing request — so it renders
+    the CSRF token and validates on submit instead of silently failing CSRF.
+    """
+    try:
+        from asok.context import request_var
+
+        return request_var.get()
+    except Exception:
+        return None
+
 
 class Form(SchemaMixin):
     """A powerful, schema-based form handling system.
@@ -76,10 +97,15 @@ class Form(SchemaMixin):
         if not fields_dict:
             raise ValueError("Form fields_dict cannot be empty.")
 
+        # Fall back to the ongoing request so forms built without an explicit
+        # request still carry a CSRF token and validate on submit.
+        if request is None:
+            request = _current_request()
+
         self._request: Optional[Request] = request
         self._schema: dict[str, tuple] = fields_dict
         self._is_template: bool = request is None
-        is_post = bool(request) and request.method == "POST"
+        is_post = bool(request) and request.method in _SUBMIT_METHODS
         self._fields: dict[str, FormField] = self._build_fields(
             fields_dict, is_post, request
         )
@@ -92,7 +118,7 @@ class Form(SchemaMixin):
         """Attach a request to this form instance."""
         self._request = request
         self._is_template = False
-        if request.method != "POST":
+        if request.method not in _SUBMIT_METHODS:
             return self
         for name, field in self._fields.items():
             if not field.readonly:
@@ -143,7 +169,7 @@ class Form(SchemaMixin):
         """
         self._ensure_bound_request(request)
 
-        if self._request.method != "POST":
+        if self._request.method not in _SUBMIT_METHODS:
             return False
 
         if csrf:
@@ -188,7 +214,7 @@ class Form(SchemaMixin):
 
     def fill(self, source: Any) -> Form:
         """Pre-fill field values from a model instance or a dictionary."""
-        is_post = bool(self._request) and self._request.method == "POST"
+        is_post = bool(self._request) and self._request.method in _SUBMIT_METHODS
         is_dict = isinstance(source, dict)
         for name, field in self._fields.items():
             if is_post and not field.readonly:
@@ -225,8 +251,17 @@ class Form(SchemaMixin):
                 html.append(str(field))
         return SafeString("\n".join(html))
 
+    # Instance API that must win over a model field sharing the same name — so
+    # `form.data` / `form.validate` keep working even if the model has a `data`
+    # field (its value is still reachable via `form.data["data"]`). Schema
+    # helpers (Form.email, Form.text, ...) are intentionally NOT reserved: those
+    # are common field names and should resolve to the field on an instance.
+    _RESERVED_ATTRS = frozenset(
+        {"data", "errors", "csrf", "hidden_fields", "validate", "bind", "fill", "reset"}
+    )
+
     def __getattribute__(self, name):
-        if not name.startswith("_"):
+        if not name.startswith("_") and name not in Form._RESERVED_ATTRS:
             fields = super().__getattribute__("_fields")
             if name in fields:
                 return fields[name]

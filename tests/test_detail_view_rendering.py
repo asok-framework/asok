@@ -310,9 +310,10 @@ def test_detail_template_rendering(tmp_path):
     # 6. Verify datetime string/object rendering
     assert "2026-06-12 20:52:14" in html_content
 
-    # 7. Verify Boolean field renders as checkbox
-    assert 'type="checkbox"' in html_content
-    assert "checked" in html_content
+    # 7. Verify Boolean field renders as a readable Yes/No value
+    #    (not a blank-looking disabled checkbox) in the detail view.
+    assert 'id="fg-is_published"' in html_content
+    assert 'value="Yes"' in html_content
 
     # 8. Verify Image field renders with a thumbnail image preview and link
     assert 'class="detail-image-thumb"' in html_content

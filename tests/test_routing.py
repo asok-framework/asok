@@ -209,3 +209,26 @@ class TestErrorPageRendering:
         # Verify request status_code is updated
         assert req.status_code() == 404
         assert req.status == "404 Not Found"
+
+
+class TestBoundedRouteCache:
+    def test_404_misses_are_not_cached(self):
+        app = Asok()
+        app.config["DEBUG"] = False
+        app._resolve_route(["nonexistent_route_1"])
+        app._resolve_route(["nonexistent_route_2"])
+
+        cache = getattr(app, "_route_cache", {})
+        assert "nonexistent_route_1" not in cache
+        assert "nonexistent_route_2" not in cache
+
+    def test_route_cache_cap_and_lru_eviction(self):
+        app = Asok()
+        app.config["DEBUG"] = False
+        for i in range(2100):
+            app._cache_route([f"route_{i}"], ("dummy_page.py", {}))
+
+        cache = getattr(app, "_route_cache", {})
+        assert len(cache) <= 2048
+        assert "route_0" not in cache
+        assert "route_2099" in cache

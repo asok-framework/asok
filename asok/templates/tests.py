@@ -1,8 +1,8 @@
-from __future__ import annotations
+from .undefined import Undefined
 
 TEMPLATE_TESTS = {
-    "defined": lambda v: v is not None and v != "",
-    "undefined": lambda v: v is None or v == "",
+    "defined": lambda v: not isinstance(v, Undefined) and v is not None and v != "",
+    "undefined": lambda v: isinstance(v, Undefined) or v is None or v == "",
     "none": lambda v: v is None,
     "true": lambda v: v is True,
     "false": lambda v: v is False,

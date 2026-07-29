@@ -25,9 +25,24 @@ class TestVariableRendering:
     def test_integer_variable(self):
         assert render("Count: {{ n }}", n=42) == "Count: 42"
 
-    def test_missing_variable_renders_empty(self):
-        result = render("Hello {{ name }}!")
-        assert result == "Hello !" or "Hello" in result  # graceful degradation
+    def test_missing_variable_default_returns_empty(self):
+        assert render("Hello {{ name }}!") == "Hello !"
+
+    def test_missing_variable_strict_mode_raises_error(self):
+        import pytest
+
+        from asok.exceptions import TemplateError
+
+        with pytest.raises(TemplateError, match="Undefined variable 'name'"):
+            render("Hello {{ name }}!", STRICT_VARIABLES=True)
+
+    def test_missing_variable_with_default_filter_works(self):
+        assert render("Hello {{ name | default('Guest') }}!") == "Hello Guest!"
+
+    def test_missing_variable_with_defined_test_works(self):
+        tpl = "{% if name is defined %}Yes{% else %}No{% endif %}"
+        assert render(tpl) == "No"
+        assert render(tpl, name="Alice") == "Yes"
 
     def test_dict_access(self):
         result = render("{{ data.key }}", data={"key": "value"})
@@ -532,3 +547,27 @@ def test_dynamic_shared_callables():
     req2 = Request(environ)
     assert req2.shared("names_zero") == ["Alice", "Bob", "Charlie"]
     assert req2.shared("names_req") == ["Alice", "Bob", "Charlie"]
+
+
+def test_nested_for_loops_inside_if_block():
+    tpl = """{% for outer in outer_list %}
+{% if show_inner %}
+{% for inner in inner_list %}
+[inner:{{ inner }}]
+{% endfor %}
+{% endif %}
+outer_index:{{ loop.index }}
+{% endfor %}"""
+
+    res = render_template_string(
+        tpl,
+        {
+            "outer_list": ["a", "b"],
+            "show_inner": True,
+            "inner_list": [1, 2],
+        },
+    ).strip()
+
+    assert "outer_index:1" in res
+    assert "outer_index:2" in res
+

@@ -103,7 +103,11 @@ class DeleteModel(BaseOperation):
         self.search_fields = search_fields or []
 
     def state_forwards(self, state: Any) -> None:
-        state.models.pop(self.name, None)
+        model = state.get_model(self.name) if hasattr(state, "get_model") else None
+        if model is not None:
+            state.models.pop(model.name, None)
+        else:
+            state.models.pop(self.name, None)
 
     def database_forwards(self, schema_editor: Any) -> None:
         schema_editor.delete_table_by_name(self.table)
@@ -134,27 +138,45 @@ class DeleteModel(BaseOperation):
 class AddField(BaseOperation):
     """Operation to add a new column to a table."""
 
-    def __init__(self, model_name: str, name: str, field: Dict[str, Any]):
+    def __init__(
+        self,
+        model_name: str,
+        name: str,
+        field: Dict[str, Any],
+        table: Optional[str] = None,
+    ):
         self.model_name = model_name
         self.name = name
         self.field = field
+        self.table = table
 
     def state_forwards(self, state: Any) -> None:
-        model = state.models[self.model_name]
-        model.fields[self.name] = self.field
+        from .state import VirtualModelState
+
+        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        if model is not None:
+            model.fields[self.name] = self.field
+        else:
+            tbl = self.table or self.model_name.lower()
+            state.models[self.model_name] = VirtualModelState(
+                name=self.model_name,
+                table=tbl,
+                fields={self.name: self.field},
+            )
 
     def database_forwards(self, schema_editor: Any) -> None:
-        schema_editor.add_column(self.model_name, self.name, self.field)
+        schema_editor.add_column(self.model_name, self.name, self.field, table=self.table)
 
     def database_backwards(self, schema_editor: Any) -> None:
-        schema_editor.remove_column(self.model_name, self.name)
+        schema_editor.remove_column(self.model_name, self.name, table=self.table)
 
     def deconstruct(self) -> str:
+        tbl_repr = f", table={repr(self.table)}" if self.table else ""
         return (
             f"operations.AddField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        field={_safe_repr(self.field)},\n"
+            f"        field={_safe_repr(self.field)}{tbl_repr},\n"
             f"    )"
         )
 
@@ -163,28 +185,35 @@ class RemoveField(BaseOperation):
     """Operation to drop a column from a table."""
 
     def __init__(
-        self, model_name: str, name: str, field: Optional[Dict[str, Any]] = None
+        self,
+        model_name: str,
+        name: str,
+        field: Optional[Dict[str, Any]] = None,
+        table: Optional[str] = None,
     ):
         self.model_name = model_name
         self.name = name
         self.field = field or {}
+        self.table = table
 
     def state_forwards(self, state: Any) -> None:
-        model = state.models[self.model_name]
-        model.fields.pop(self.name, None)
+        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        if model is not None:
+            model.fields.pop(self.name, None)
 
     def database_forwards(self, schema_editor: Any) -> None:
-        schema_editor.remove_column(self.model_name, self.name)
+        schema_editor.remove_column(self.model_name, self.name, table=self.table)
 
     def database_backwards(self, schema_editor: Any) -> None:
-        schema_editor.add_column(self.model_name, self.name, self.field)
+        schema_editor.add_column(self.model_name, self.name, self.field, table=self.table)
 
     def deconstruct(self) -> str:
+        tbl_repr = f", table={repr(self.table)}" if self.table else ""
         return (
             f"operations.RemoveField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        field={_safe_repr(self.field)},\n"
+            f"        field={_safe_repr(self.field)}{tbl_repr},\n"
             f"    )"
         )
 
@@ -198,33 +227,46 @@ class AlterField(BaseOperation):
         name: str,
         old_field: Dict[str, Any],
         new_field: Dict[str, Any],
+        table: Optional[str] = None,
     ):
         self.model_name = model_name
         self.name = name
         self.old_field = old_field
         self.new_field = new_field
+        self.table = table
 
     def state_forwards(self, state: Any) -> None:
-        model = state.models[self.model_name]
-        model.fields[self.name] = self.new_field
+        from .state import VirtualModelState
+
+        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        if model is not None:
+            model.fields[self.name] = self.new_field
+        else:
+            tbl = self.table or self.model_name.lower()
+            state.models[self.model_name] = VirtualModelState(
+                name=self.model_name,
+                table=tbl,
+                fields={self.name: self.new_field},
+            )
 
     def database_forwards(self, schema_editor: Any) -> None:
         schema_editor.alter_column(
-            self.model_name, self.name, self.old_field, self.new_field
+            self.model_name, self.name, self.old_field, self.new_field, table=self.table
         )
 
     def database_backwards(self, schema_editor: Any) -> None:
         schema_editor.alter_column(
-            self.model_name, self.name, self.new_field, self.old_field
+            self.model_name, self.name, self.new_field, self.old_field, table=self.table
         )
 
     def deconstruct(self) -> str:
+        tbl_repr = f", table={repr(self.table)}" if self.table else ""
         return (
             f"operations.AlterField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
             f"        old_field={_safe_repr(self.old_field)},\n"
-            f"        new_field={_safe_repr(self.new_field)},\n"
+            f"        new_field={_safe_repr(self.new_field)}{tbl_repr},\n"
             f"    )"
         )
 
@@ -232,28 +274,41 @@ class AlterField(BaseOperation):
 class RenameField(BaseOperation):
     """Operation to rename an existing column in a table."""
 
-    def __init__(self, model_name: str, old_name: str, new_name: str):
+    def __init__(
+        self,
+        model_name: str,
+        old_name: str,
+        new_name: str,
+        table: Optional[str] = None,
+    ):
         self.model_name = model_name
         self.old_name = old_name
         self.new_name = new_name
+        self.table = table
 
     def state_forwards(self, state: Any) -> None:
-        model = state.models[self.model_name]
-        if self.old_name in model.fields:
-            field_data = model.fields.pop(self.old_name)
-            model.fields[self.new_name] = field_data
+        model = state.get_model(self.model_name) if hasattr(state, "get_model") else state.models.get(self.model_name)
+        if model is not None:
+            if self.old_name in model.fields:
+                field_data = model.fields.pop(self.old_name)
+                model.fields[self.new_name] = field_data
 
     def database_forwards(self, schema_editor: Any) -> None:
-        schema_editor.rename_column(self.model_name, self.old_name, self.new_name)
+        schema_editor.rename_column(
+            self.model_name, self.old_name, self.new_name, table=self.table
+        )
 
     def database_backwards(self, schema_editor: Any) -> None:
-        schema_editor.rename_column(self.model_name, self.new_name, self.old_name)
+        schema_editor.rename_column(
+            self.model_name, self.new_name, self.old_name, table=self.table
+        )
 
     def deconstruct(self) -> str:
+        tbl_repr = f", table={repr(self.table)}" if self.table else ""
         return (
             f"operations.RenameField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        old_name={repr(self.old_name)},\n"
-            f"        new_name={repr(self.new_name)},\n"
+            f"        new_name={repr(self.new_name)}{tbl_repr},\n"
             f"    )"
         )

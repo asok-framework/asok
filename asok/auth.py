@@ -43,7 +43,7 @@ def _magic_link_app_url(app: Any) -> Optional[str]:
 def _magic_link_is_debug(app: Any) -> bool:
     if not app:
         return True
-    return app.config.get("DEBUG", True)
+    return app.config.get("DEBUG", False)
 
 
 def _resolve_magic_link_base(request: Request) -> str:
@@ -144,6 +144,22 @@ class MagicLink:
             return "", 0, False
 
     @staticmethod
+    def _check_production_cache_warning(default_cache: Any) -> None:
+        app = getattr(default_cache, "_app", None)
+        if default_cache.backend != "memory":
+            return
+        import os
+
+        if os.environ.get("ASOK_ENV") == "production" or (
+            app and not app.config.get("DEBUG", False)
+        ):
+            logger.warning(
+                "SECURITY WARNING: MagicLink is using in-memory cache in production. "
+                "In multi-worker deployments, token single-use enforcement requires Redis "
+                "or a shared cache backend to prevent cross-worker replay attacks."
+            )
+
+    @staticmethod
     def _mark_token_used(token: str, exp: int) -> bool:
         """Mark a token as consumed. Returns False if it was already used.
 
@@ -155,6 +171,8 @@ class MagicLink:
         import hashlib
 
         from .cache import default_cache
+
+        MagicLink._check_production_cache_warning(default_cache)
 
         used_key = f"magic_used:{hashlib.sha256(token.encode()).hexdigest()}"
         if default_cache.has(used_key):

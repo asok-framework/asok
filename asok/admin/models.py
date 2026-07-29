@@ -12,7 +12,7 @@ class ModelAdmin:
 
     label: str = None
     slug: str = None
-    group: str = "General"
+    group: str = None
     hidden: bool = False
     list_display: list[str] = None
     search_fields: list[str] = None
@@ -22,15 +22,20 @@ class ModelAdmin:
     fieldsets: list[tuple[str, list[str]]] = None
     per_page: int = 20
     inlines: list[str] = None
-    can_add: bool = True
-    can_edit: bool = True
-    can_delete: bool = True
+    can_add: bool = None
+    can_edit: bool = None
+    can_delete: bool = None
     actions: list[str] = None
     vector_search_field: str = None
+    ordering: list[str] | str = None
+    icon: str = None
+    export_formats: list[str] = None
+    show_in_dashboard: bool = None
+    show_in_overview: bool = None
 
 
 _DEFAULT_USER_MODEL_SRC = """\
-from asok import Field, Model
+from asok import Field, Model, ModelAdmin
 
 
 class User(Model):
@@ -45,10 +50,13 @@ class User(Model):
     totp_enabled = Field.Boolean(default=False)
     backup_codes = Field.String(nullable=True, hidden=True)  # JSON array of hashed codes
     created_at = Field.CreatedAt()
+
+    class Admin(ModelAdmin):
+        show_in_overview = False
 """
 
 _DEFAULT_ROLE_MODEL_SRC = """\
-from asok import Field, Model
+from asok import Field, Model, ModelAdmin
 
 
 class Role(Model):
@@ -57,15 +65,19 @@ class Role(Model):
     permissions = Field.String(default="")
     created_at = Field.CreatedAt()
 
+    class Admin(ModelAdmin):
+        show_in_overview = False
+
     def __str__(self):
         return self.label or self.name
 """
 
 _DEFAULT_LOG_MODEL_SRC = """\
-from asok import Field, Model
+from asok import Field, Model, ModelAdmin
 
 
 class AdminLog(Model):
+    __tablename__ = "admin_logs"
     user_id = Field.Integer(nullable=True)
     action = Field.String(nullable=False)
     entity = Field.String(nullable=False)
@@ -73,12 +85,67 @@ class AdminLog(Model):
     changes = Field.String()
     created_at = Field.CreatedAt()
 
-    class Admin:
-        label = "Audit logs"
+    class Admin(ModelAdmin):
+        label = "Logs"
         slug = "logs"
+        group = "System & Audit"
         list_display = ["id", "created_at", "user_id", "action", "entity", "entity_id"]
         list_filter = ["action", "entity"]
         search_fields = ["action", "entity", "changes"]
+        show_in_overview = False
+        per_page = 50
+        can_add = False
+        can_edit = False
+        can_delete = False
+"""
+
+_DEFAULT_TRASH_MODEL_SRC = """\
+from asok import Field, Model, ModelAdmin
+
+
+class AdminTrash(Model):
+    __tablename__ = "asok_trash"
+    model_name = Field.String(nullable=False)
+    model_slug = Field.String(nullable=False)
+    object_id = Field.Integer(nullable=True)
+    object_repr = Field.String()
+    data = Field.Text()
+    deleted_by_id = Field.Integer(nullable=True)
+    deleted_at = Field.CreatedAt()
+
+    class Admin(ModelAdmin):
+        hidden = True
+        show_in_overview = False
+"""
+
+
+_DEFAULT_SESSION_MODEL_SRC = """\
+from asok import Field, Model, ModelAdmin
+
+
+class AdminSession(Model):
+    __tablename__ = "asok_sessions"
+    sid = Field.String(unique=True, nullable=False)
+    user_id = Field.Integer(nullable=True)
+    ip = Field.String()
+    user_agent = Field.String()
+    device_type = Field.String()
+    browser = Field.String()
+    os_name = Field.String()
+    location = Field.String()
+    is_active = Field.Boolean(default=True)
+    last_seen = Field.Integer()
+    created_at = Field.CreatedAt()
+    revoked_at = Field.Integer(nullable=True)
+
+    class Admin(ModelAdmin):
+        label = "Sessions"
+        slug = "sessions"
+        group = "System & Audit"
+        list_display = ["id", "created_at", "user_id", "ip", "device_type", "browser", "is_active", "last_seen"]
+        list_filter = ["is_active", "device_type", "browser"]
+        search_fields = ["sid", "ip", "user_agent", "browser", "os_name"]
+        show_in_overview = False
         per_page = 50
         can_add = False
         can_edit = False

@@ -3,6 +3,8 @@ from __future__ import annotations
 import builtins
 from typing import Any, Union
 
+from .undefined import Undefined
+
 # Whitelist of single-underscore attributes that templates may legitimately access.
 # Everything else starting with "_" is blocked to prevent sandbox escape
 # (e.g. _get_conn, _table, _db_path on ORM models).
@@ -48,19 +50,39 @@ _BLOCKED_TEMPLATE_KEYS = frozenset({"eval", "exec", "compile", "open", "__import
 _DANGEROUS_CALL_KEYS = frozenset({"eval", "exec", "compile", "execfile"})
 
 
-def _get(obj: Any, key: Union[str, int]) -> Any:
-    """Access an attribute or dictionary/list key, favoring attributes for strings.
+def _is_strict_variables(context: dict[str, Any]) -> bool:
+    if context.get("STRICT_VARIABLES") or context.get("__strict_variables__"):
+        return True
+    return _is_app_strict_variables(context.get("request"))
 
-    Returns an empty string if the key/attribute is not found or the object is
-    not subscriptable.
-    """
+
+def _is_app_strict_variables(req: Any) -> bool:
+    if not req or not hasattr(req, "environ"):
+        return False
+    app = req.environ.get("asok.app")
+    return bool(app and getattr(app, "config", {}).get("STRICT_VARIABLES"))
+
+
+def _get(obj: Any, key: Union[str, int]) -> Any:
+    """Access an attribute or dictionary/list key, favoring attributes for strings."""
+    if isinstance(obj, Undefined):
+        return _get_undefined_key(obj, key)
     if isinstance(key, str):
-        if _is_blocked_string_key(key):
-            return ""
-        result = _safe_getattr(obj, key)
-        if result is not _ATTR_MISS:
-            return result
+        return _get_str_key(obj, key)
     return _safe_subscript(obj, key)
+
+
+def _get_undefined_key(obj: Undefined, key: Union[str, int]) -> Any:
+    return getattr(obj, str(key)) if isinstance(key, str) else obj[key]
+
+
+def _get_str_key(obj: Any, key: str) -> Any:
+    if _is_blocked_string_key(key):
+        return ""
+    if isinstance(obj, dict) and key in obj:
+        return obj[key]
+    result = _safe_getattr(obj, key)
+    return result if result is not _ATTR_MISS else _safe_subscript(obj, key)
 
 
 _ATTR_MISS = object()
@@ -88,7 +110,6 @@ def _safe_getattr(obj: Any, key: str) -> Any:
         result = getattr(obj, key)
     except (AttributeError, TypeError):
         return _ATTR_MISS
-    # SECURITY: never expose callables matching well-known code-exec helpers.
     if callable(result) and key in _DANGEROUS_CALL_KEYS:
         return ""
     return result
@@ -98,7 +119,7 @@ def _safe_subscript(obj: Any, key: Union[str, int]) -> Any:
     try:
         return obj[key]
     except (KeyError, TypeError, IndexError):
-        return ""
+        return Undefined(str(key))
 
 
 _BLOCKED_BUILTINS = frozenset(
@@ -157,12 +178,8 @@ def _resolve_name(context: dict[str, Any], name: str, is_debug: bool = False) ->
     builtin_val = _resolve_builtin(name, is_debug)
     if builtin_val is not _NAME_MISS:
         return builtin_val
-    # Match the production behaviour in dev too: an unknown name renders as
-    # an empty string instead of raising. Without this, helpers like
-    # ``providers|default([...])`` and ``providers is defined`` can't run
-    # because the strict NameError fires before the filter/test executes —
-    # making optional template parameters impossible in DEBUG=True.
-    return ""
+    strict = _is_strict_variables(context)
+    return Undefined(name, strict=strict)
 
 
 _NAME_MISS = object()

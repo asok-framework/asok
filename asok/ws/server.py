@@ -61,6 +61,16 @@ def _matches_wildcard_origin(origin: str, pattern: str) -> bool:
         return False
 
 
+def _resolve_ws_server_port(port: int, app: Optional[Asok]) -> int:
+    if port != 8001:
+        return port
+    if app and app.config.get("WS_PORT"):
+        return int(app.config["WS_PORT"])
+    if os.environ.get("ASOK_WS_PORT"):
+        return int(os.environ["ASOK_WS_PORT"])
+    return port
+
+
 class WebSocketServer:
     """Asynchronous WebSocket server implementing RFC 6455.
 
@@ -94,7 +104,7 @@ class WebSocketServer:
             app: Optional Asok application instance for shared state/session.
         """
         self.host = host
-        self.port = port
+        self.port = _resolve_ws_server_port(port, app)
         self.secret_key = secret_key
         self.auth_model = auth_model
         self.max_connections = max_connections

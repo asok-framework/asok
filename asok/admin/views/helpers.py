@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 from ...orm import MODELS_REGISTRY
 from ...templates import SafeString
+from ..translations import translate
 from ..utils import _display
 
 _PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,11 +52,15 @@ class HelperViewsMixin:
     def _is_boolean_column_name(self, col: str) -> bool:
         return col.startswith("is_") or col.startswith("has_")
 
+    def _tr(self, key: str, **kwargs: Any) -> str:
+        """Translate using the request locale resolved once in dispatch()."""
+        return translate(getattr(self, "locale", "en"), key, **kwargs)
+
     def _col_value_boolean(self, field: Any, col: str, v: Any) -> SafeString | None:
         if field and field.sql_type == "INTEGER" and self._is_boolean_column_name(col):
             if v:
-                return SafeString('<span class="badge badge-yes">Yes</span>')
-            return SafeString('<span class="badge badge-no">No</span>')
+                return SafeString(f'<span class="badge badge-yes">{self._tr("Yes")}</span>')
+            return SafeString(f'<span class="badge badge-no">{self._tr("No")}</span>')
         return None
 
     def _format_col_string(self, field: Any, v: Any) -> str:
@@ -80,6 +85,32 @@ class HelperViewsMixin:
             return self._col_value_fk(item, col, field)
         return None
 
+    def _format_timestamp_col(self, col: str, v: Any) -> SafeString | None:
+        if not isinstance(v, (int, float)) or v <= 1000000000:
+            return None
+        if col in ("last_seen", "revoked_at", "last_active") or col.endswith("_seen"):
+            import datetime
+            import time
+
+            from ..core import Admin
+
+            now = time.time()
+            diff = max(0, int(now - v))
+            dt_str = datetime.datetime.fromtimestamp(v).strftime("%d/%m/%Y %H:%M")
+            locale = getattr(self, "locale", "en")
+            rel_str = Admin._format_last_seen(diff, locale)
+            return SafeString(f'<span title="{dt_str}">{rel_str}</span>')
+        return None
+
+    def _col_value_fallback(self, field: Any, col: str, v: Any) -> Any:
+        if v in (None, ""):
+            return SafeString('<span class="muted">—</span>')
+        return (
+            self._col_value_boolean(field, col, v)
+            or self._format_timestamp_col(col, v)
+            or self._format_col_string(field, v)
+        )
+
     def _col_value(self, item: Any, col: str, model: Any) -> Any:
         field = model._fields.get(col)
         if self._is_sensitive_field(col, field):
@@ -90,14 +121,7 @@ class HelperViewsMixin:
             return res
 
         v = self._get_raw_col_value(item, col, model)
-        if v in (None, ""):
-            return SafeString('<span class="muted">—</span>')
-
-        bool_badge = self._col_value_boolean(field, col, v)
-        if bool_badge is not None:
-            return bool_badge
-
-        return self._format_col_string(field, v)
+        return self._col_value_fallback(field, col, v)
 
     # ── Query string preservation ────────────────────────────
 
@@ -152,13 +176,69 @@ class HelperViewsMixin:
                 return query.nearest(v_field, vector)
         return self._apply_text_search(query, model, entry["searchable"], q)
 
+    @staticmethod
+    def _is_date_or_datetime_field(field: Any, name: str) -> bool:
+        if field:
+            for attr in ("is_date", "is_datetime", "is_timestamp"):
+                if getattr(field, attr, False):
+                    return True
+        return name.endswith(("_at", "_date", "_time"))
+
+    def _build_date_range_filter(self, request: Any, f: str) -> dict[str, Any]:
+        return {
+            "type": "date_range",
+            "name": f,
+            "label": f.replace("_", " ").title(),
+            "date_from": request.args.get(f"filter_{f}_from", ""),
+            "date_to": request.args.get(f"filter_{f}_to", ""),
+        }
+
+    def _apply_date_range_filter(
+        self, query: Any, request: Any, f: str, field: Any
+    ) -> Any:
+        val_from = request.args.get(f"filter_{f}_from")
+        val_to = request.args.get(f"filter_{f}_to")
+        if val_from:
+            query = query.where(f, ">=", val_from)
+        if val_to:
+            query = self._apply_date_upper_bound(query, f, field, val_to)
+        return query
+
+    def _apply_date_upper_bound(self, query: Any, f: str, field: Any, val_to: str) -> Any:
+        # For datetime/timestamp columns use an EXCLUSIVE next-day bound instead of
+        # "<= '<date> 23:59:59'": created_at is stored ISO with a 'T' separator, and
+        # 'T' sorts after a space, so the old bound dropped same-day rows.
+        is_dt = getattr(field, "is_datetime", False) or getattr(
+            field, "is_timestamp", False
+        )
+        if is_dt:
+            nxt = self._next_day_str(val_to)
+            if nxt:
+                return query.where(f, "<", nxt)
+        return query.where(f, "<=", val_to)
+
+    @staticmethod
+    def _next_day_str(date_str: str) -> "str | None":
+        import datetime
+
+        try:
+            d = datetime.date.fromisoformat(str(date_str)[:10])
+            return (d + datetime.timedelta(days=1)).isoformat()
+        except (ValueError, TypeError):
+            return None
+
     def _apply_list_filters(
         self, query: Any, request: Any, entry: dict[str, Any]
     ) -> Any:
+        model = entry["model"]
         for f in entry["list_filter"]:
-            val = request.args.get(f"filter_{f}")
-            if val not in (None, "", "__all__"):
-                query = query.where(f, val)
+            field = model._fields.get(f)
+            if self._is_date_or_datetime_field(field, f):
+                query = self._apply_date_range_filter(query, request, f, field)
+            else:
+                val = request.args.get(f"filter_{f}")
+                if val not in (None, "", "__all__"):
+                    query = query.where(f, val)
         return query
 
     def _build_query(
@@ -169,6 +249,7 @@ class HelperViewsMixin:
         if not q:
             q = ""
         query = self._init_query_base(model, with_trashed)
+        query = self._apply_admin_scope(request, query, entry)
 
         has_searchable = bool(entry.get("searchable"))
         if q and has_searchable:
@@ -199,12 +280,12 @@ class HelperViewsMixin:
         self, field: Any, f: str, values: list[Any], current: str
     ) -> list[dict[str, Any]]:
         is_all_selected = bool(current == "")
-        options = [{"value": "", "label": "All", "selected": is_all_selected}]
+        options = [{"value": "", "label": self._tr("All"), "selected": is_all_selected}]
         is_bool = self._is_boolean_like(field, f)
         for v in values:
             label = str(v)
             if is_bool:
-                label = "Yes" if v else "No"
+                label = self._tr("Yes") if v else self._tr("No")
             options.append(
                 {
                     "value": str(v),
@@ -223,12 +304,20 @@ class HelperViewsMixin:
             field = model._fields.get(f)
             if not field:
                 continue
-            values = self._query_distinct_values(model, f)
-            current = request.args.get(f"filter_{f}", "")
-            options = self._build_filter_options(field, f, values, current)
-            out.append(
-                {"name": f, "label": f.replace("_", " ").title(), "options": options}
-            )
+            if self._is_date_or_datetime_field(field, f):
+                out.append(self._build_date_range_filter(request, f))
+            else:
+                values = self._query_distinct_values(model, f)
+                current = request.args.get(f"filter_{f}", "")
+                options = self._build_filter_options(field, f, values, current)
+                out.append(
+                    {
+                        "type": "select",
+                        "name": f,
+                        "label": f.replace("_", " ").title(),
+                        "options": options,
+                    }
+                )
         return out
 
     def _sort_links(

@@ -236,7 +236,8 @@ def _ensure_user_model(root: str) -> None:
         return
     os.makedirs(os.path.dirname(user_model), exist_ok=True)
     with open(user_model, "w", encoding="utf-8") as f:
-        f.write("""from asok import Field, Model
+        f.write("""from asok import Field, Model, ModelAdmin
+
 
 class User(Model):
     email = Field.String(unique=True, nullable=False)
@@ -247,6 +248,9 @@ class User(Model):
     totp_enabled = Field.Boolean(default=False)
     backup_codes = Field.String(nullable=True, hidden=True)
     created_at = Field.CreatedAt()
+
+    class Admin(ModelAdmin):
+        show_in_overview = False
 """)
     Style.success("Created default User model in src/models/user.py")
 
@@ -257,7 +261,7 @@ def _ensure_role_model(root: str) -> None:
         return
     os.makedirs(os.path.dirname(role_model), exist_ok=True)
     with open(role_model, "w", encoding="utf-8") as f:
-        f.write("""from asok import Field, Model
+        f.write("""from asok import Field, Model, ModelAdmin
 
 
 class Role(Model):
@@ -265,6 +269,9 @@ class Role(Model):
     label = Field.String()
     permissions = Field.String(default="")
     created_at = Field.CreatedAt()
+
+    class Admin(ModelAdmin):
+        show_in_overview = False
 
     def __str__(self):
         return self.label or self.name
@@ -278,7 +285,7 @@ def _ensure_log_model(root: str) -> None:
         return
     os.makedirs(os.path.dirname(log_model), exist_ok=True)
     with open(log_model, "w", encoding="utf-8") as f:
-        f.write("""from asok import Field, Model
+        f.write("""from asok import Field, Model, ModelAdmin
 
 
 class AdminLog(Model):
@@ -289,17 +296,86 @@ class AdminLog(Model):
     changes = Field.String()
     created_at = Field.CreatedAt()
 
-    class Admin:
-        label = "Audit logs"
+    class Admin(ModelAdmin):
+        label = "Logs"
         slug = "logs"
+        group = "System & Audit"
         list_display = ["id", "created_at", "user_id", "action", "entity", "entity_id"]
         search_fields = ["action", "entity", "changes"]
         list_filter = ["action", "entity"]
+        show_in_overview = False
+        per_page = 50
         can_add = False
         can_edit = False
         can_delete = False
 """)
     Style.success("Created default AdminLog model in src/models/admin_log.py")
+
+
+def _ensure_trash_model(root: str) -> None:
+    trash_model = os.path.join(root, "src/models/admin_trash.py")
+    if os.path.isfile(trash_model):
+        return
+    os.makedirs(os.path.dirname(trash_model), exist_ok=True)
+    with open(trash_model, "w", encoding="utf-8") as f:
+        f.write("""from asok import Field, Model, ModelAdmin
+
+
+class AdminTrash(Model):
+    __tablename__ = "asok_trash"
+    model_name = Field.String(nullable=False)
+    model_slug = Field.String(nullable=False)
+    object_id = Field.Integer(nullable=True)
+    object_repr = Field.String()
+    data = Field.Text()
+    deleted_by_id = Field.Integer(nullable=True)
+    deleted_at = Field.CreatedAt()
+
+    class Admin(ModelAdmin):
+        hidden = True
+        show_in_overview = False
+""")
+    Style.success("Created default AdminTrash model in src/models/admin_trash.py")
+
+
+def _ensure_session_model(root: str) -> None:
+    session_model = os.path.join(root, "src/models/admin_session.py")
+    if os.path.isfile(session_model):
+        return
+    os.makedirs(os.path.dirname(session_model), exist_ok=True)
+    with open(session_model, "w", encoding="utf-8") as f:
+        f.write("""from asok import Field, Model, ModelAdmin
+
+
+class AdminSession(Model):
+    __tablename__ = "asok_sessions"
+    sid = Field.String(unique=True, nullable=False)
+    user_id = Field.Integer(nullable=True)
+    ip = Field.String()
+    user_agent = Field.String()
+    device_type = Field.String()
+    browser = Field.String()
+    os_name = Field.String()
+    location = Field.String()
+    is_active = Field.Boolean(default=True)
+    last_seen = Field.Integer()
+    created_at = Field.CreatedAt()
+    revoked_at = Field.Integer(nullable=True)
+
+    class Admin(ModelAdmin):
+        label = "Sessions"
+        slug = "sessions"
+        group = "System & Audit"
+        list_display = ["id", "created_at", "user_id", "ip", "device_type", "browser", "is_active", "last_seen"]
+        list_filter = ["is_active", "device_type", "browser"]
+        search_fields = ["sid", "ip", "user_agent", "browser", "os_name"]
+        show_in_overview = False
+        per_page = 50
+        can_add = False
+        can_edit = False
+        can_delete = False
+""")
+    Style.success("Created default AdminSession model in src/models/admin_session.py")
 
 
 def admin_enable(root: str) -> None:
@@ -309,6 +385,8 @@ def admin_enable(root: str) -> None:
     _ensure_user_model(root)
     _ensure_role_model(root)
     _ensure_log_model(root)
+    _ensure_trash_model(root)
+    _ensure_session_model(root)
 
     Style.info("Next steps:")
     print("  1. Run 'asok make migration add_admin' to detect new tables")

@@ -34,10 +34,10 @@
       </div>
 
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        <button type="button" onclick="copyBackupCodes()" class="btn btn-default btn-sm">
+        <button type="button" id="copy-backup-codes" class="btn btn-default btn-sm">
           {{ icon('copy', 14) }} {{ t('Copy All') }}
         </button>
-        <button type="button" onclick="downloadBackupCodes()" class="btn btn-default btn-sm">
+        <button type="button" id="download-backup-codes" class="btn btn-default btn-sm">
           {{ icon('download', 14) }} {{ t('Download as Text') }}
         </button>
       </div>
@@ -87,5 +87,9 @@ function downloadBackupCodes() {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// CSP-safe: bind via listeners instead of inline onclick (blocked by script-src).
+document.getElementById('copy-backup-codes')?.addEventListener('click', copyBackupCodes);
+document.getElementById('download-backup-codes')?.addEventListener('click', downloadBackupCodes);
 </script>
 {% endblock %}

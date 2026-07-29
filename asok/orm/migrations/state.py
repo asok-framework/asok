@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class VirtualModelState:
@@ -82,6 +82,15 @@ class ProjectState:
     def __init__(self, models: Dict[str, VirtualModelState] = None):
         self.models = models or {}
 
+    def get_model(self, name: str) -> Optional[VirtualModelState]:
+        if name in self.models:
+            return self.models[name]
+        name_lower = name.lower()
+        for k, v in self.models.items():
+            if k.lower() == name_lower:
+                return v
+        return None
+
     @classmethod
     def from_codebase(cls, registry: Dict[str, Any]) -> ProjectState:
         """Create a ProjectState from the live models registered in the codebase."""
@@ -93,3 +102,4 @@ class ProjectState:
     def clone(self) -> ProjectState:
         models = {name: model.clone() for name, model in self.models.items()}
         return ProjectState(models)
+

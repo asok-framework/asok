@@ -9,6 +9,9 @@
     <p class="page-subtitle">{{ t('Bulk create records by uploading a CSV file') }}</p>
   </div>
   <div class="page-actions">
+    <a href="{{ admin_prefix }}/{{ slug }}/import-template" class="btn btn-ghost btn-sm" title="{{ t('Download template') }}">
+      {{ icon('download', 14) }} {{ t('Download template') }}
+    </a>
     <a href="{{ admin_prefix }}/{{ slug }}" class="btn btn-default btn-sm" data-spa>
       {{ icon('arrow-left', 14) }} {{ t('Back to list') }}
     </a>
@@ -25,7 +28,7 @@
         {{ icon('upload', 12) }} {{ t('CSV Upload') }}
       </div>
       <div style="padding:32px">
-        <div id="drop-zone" class="import-zone" onclick="document.getElementById('csv-file').click()" 
+        <div id="drop-zone" class="import-zone"
              style="padding:48px; border: 2px dashed var(--border); border-radius: 16px; display:flex; flex-direction:column; align-items:center; gap:16px; cursor:pointer; transition:all var(--trans-spring); background: var(--bg-1);">
           <div id="drop-icon-box" style="width:56px; height:56px; border-radius:12px; background:var(--bg-2); display:flex; align-items:center; justify-content:center; transition: all var(--trans-spring);">
             {{ icon('upload', 24, 'empty-icon') }}
@@ -83,7 +86,7 @@
       <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:16px; margin-bottom:24px">
         <div class="stat-card card" style="padding:20px; text-align:center">
           <div class="stat-label">{{ t('Successfully Created') }}</div>
-          <div class="stat-value" style="color:var(--green)">{{ report.created }}</div>
+          <div class="stat-value" style="color:var(--success)">{{ report.created }}</div>
         </div>
         <div class="stat-card card" style="padding:20px; text-align:center">
           <div class="stat-label">{{ t('Records Updated') }}</div>
@@ -91,12 +94,12 @@
         </div>
         <div class="stat-card card" style="padding:20px; text-align:center">
           <div class="stat-label">{{ t('Failed Records') }}</div>
-          <div class="stat-value" style="color:{% if report.failed %}var(--red){% else %}var(--fg-3){% endif %}">{{ report.failed }}</div>
+          <div class="stat-value" style="color:{% if report.failed %}var(--danger){% else %}var(--fg-3){% endif %}">{{ report.failed }}</div>
         </div>
       </div>
       {% if report.errors %}
         <div style="display:flex; flex-direction:column; gap:8px">
-          <h4 style="font-size:0.8125rem; font-weight:700; text-transform:uppercase; color:var(--red); margin-bottom:4px">{{ t('Detailed Errors') }}</h4>
+          <h4 style="font-size:0.8125rem; font-weight:700; text-transform:uppercase; color:var(--danger); margin-bottom:4px">{{ t('Detailed Errors') }}</h4>
           {% for err in report.errors %}
             <div class="flash-msg error" style="margin:0">{{ icon('x', 14) }} {{ err }}</div>
           {% endfor %}

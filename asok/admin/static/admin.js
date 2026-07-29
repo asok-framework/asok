@@ -64,6 +64,28 @@
         }, delay);
     }
 
+    window.copyToClipboard = function (text) {
+        const fullUrl = text.startsWith('http') ? text : window.location.origin + text;
+        const i18n = window.ASOK_I18N || {};
+        const msgOk  = i18n.url_copied      || 'URL copied to clipboard!';
+        const msgErr = i18n.url_copy_failed || 'Failed to copy URL';
+        const handleSuccess = () => { if (window.flash) window.flash('success', msgOk); };
+        const handleError   = () => {
+            const ta = document.createElement('textarea');
+            ta.value = fullUrl;
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); handleSuccess(); }
+            catch (e) { if (window.flash) window.flash('error', msgErr); }
+            document.body.removeChild(ta);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(fullUrl).then(handleSuccess).catch(handleError);
+        } else {
+            handleError();
+        }
+    };
+
     window.flash = function (type, message, ttl = 6000) {
         const zone = document.getElementById('flash-zone');
         if (!zone) return;
@@ -554,6 +576,16 @@
 
             if (!trigger || !menu || !input) return;
 
+            // The menu markup carries asok-cloak (built for the reactive runtime),
+            // which the anti-FOUC critical CSS hides with `display:none!important`.
+            // The admin drives dropdowns manually and has no runtime to strip the
+            // attribute, so `menu.style.display='block'` would lose to !important
+            // and the dropdown could never open. Remove the cloak attrs here and
+            // manage visibility purely via inline style.
+            menu.removeAttribute('asok-cloak');
+            menu.removeAttribute('data-asok-cloak');
+            menu.removeAttribute('data-cloak');
+
             // Initially hide the menu
             menu.style.display = 'none';
 
@@ -643,6 +675,345 @@
                     }
                 });
             }
+        });
+    }
+
+    const _loadedAssets = new Set();
+    function loadAsset(path, type) {
+        if (_loadedAssets.has(path)) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            let el;
+            if (type === 'js') {
+                el = document.createElement('script');
+                el.src = path;
+                el.async = true;
+            } else {
+                el = document.createElement('link');
+                el.rel = 'stylesheet';
+                el.href = path;
+            }
+            el.onload = () => { _loadedAssets.add(path); resolve(); };
+            el.onerror = reject;
+            document.head.appendChild(el);
+        });
+    }
+
+    async function ensureFlatpickr(root) {
+        const hasTargets = root.querySelector('input[type="date"], input[type="datetime-local"], .asok-datepicker');
+        if (!hasTargets) return false;
+        if (typeof flatpickr !== 'undefined') return true;
+        const prefix = (window.adminPrefix || '/admin') + '/static/';
+        try {
+            await Promise.all([
+                loadAsset(prefix + 'flatpickr.min.css', 'css'),
+                loadAsset(prefix + 'flatpickr.min.js', 'js')
+            ]);
+            return typeof flatpickr !== 'undefined';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async function ensureChartJs(root) {
+        const hasTargets = root.querySelector('canvas.asok-chart, canvas.asok-list-chart, canvas#asok-chart-activity, canvas#asok-chart-distribution');
+        if (!hasTargets) return false;
+        if (typeof Chart !== 'undefined') return true;
+        const prefix = (window.adminPrefix || '/admin') + '/static/';
+        try {
+            await loadAsset(prefix + 'chart.min.js', 'js');
+            return typeof Chart !== 'undefined';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async function ensureQuill(root) {
+        const hasTargets = root.querySelector('.wysiwyg-container');
+        if (!hasTargets) return false;
+        if (typeof Quill !== 'undefined') return true;
+        const prefix = (window.adminPrefix || '/admin') + '/static/';
+        try {
+            await Promise.all([
+                loadAsset(prefix + 'quill.snow.min.css', 'css'),
+                loadAsset(prefix + 'quill.min.js', 'js')
+            ]);
+            return typeof Quill !== 'undefined';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function initWysiwyg(root) {
+        root.querySelectorAll('.wysiwyg-container').forEach(container => {
+            if (container.dataset.asokInit) return;
+            container.dataset.asokInit = 'true';
+
+            const editorEl = container.querySelector('.wysiwyg-editor');
+            const textarea = container.querySelector('textarea');
+            if (!editorEl || !textarea) return;
+            if (typeof Quill === 'undefined') return;
+
+            const quill = new Quill(editorEl, {
+                theme: 'snow',
+                modules: {
+                    toolbar: [
+                        [{ 'header': [1, 2, 3, false] }],
+                        ['bold', 'italic', 'underline', 'strike'],
+                        ['link', 'blockquote'],
+                        [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                        ['clean']
+                    ]
+                }
+            });
+
+            quill.on('text-change', () => {
+                const html = quill.root.innerHTML;
+                textarea.value = html === '<p><br></p>' ? '' : html;
+            });
+        });
+    }
+
+    function initFlatpickr(root) {
+        if (typeof flatpickr === 'undefined') return;
+        const activeLocale = (window.ASOK_I18N && window.ASOK_I18N.locale) || document.documentElement.lang || 'en';
+
+        const flatpickrLocales = {
+            fr: {
+                firstDayOfWeek: 1,
+                weekdays: { shorthand: ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"], longhand: ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"] },
+                months: { shorthand: ["Janv", "Févr", "Mars", "Avr", "Mai", "Juin", "Juil", "Août", "Sept", "Oct", "Nov", "Déc"], longhand: ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"] }
+            },
+            es: {
+                firstDayOfWeek: 1,
+                weekdays: { shorthand: ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"], longhand: ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"] },
+                months: { shorthand: ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"], longhand: ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octobre", "Noviembre", "Diciembre"] }
+            }
+        };
+
+        const l10n = flatpickrLocales[activeLocale] || {};
+        const isEuroLocale = activeLocale === 'fr' || activeLocale === 'es';
+
+        root.querySelectorAll('input[type="date"], input[type="datetime-local"], .asok-datepicker').forEach(input => {
+            if (input.dataset.flatpickrInit) return;
+            input.dataset.flatpickrInit = 'true';
+            const isDateTime = input.type === 'datetime-local' || input.classList.contains('asok-datetime');
+
+            const altFmt = isEuroLocale
+                ? (isDateTime ? "d/m/Y H:i" : "d/m/Y")
+                : (isDateTime ? "Y-m-d H:i" : "Y-m-d");
+
+            const defaultPlaceholder = isEuroLocale
+                ? (isDateTime ? "JJ/MM/AAAA HH:MM" : "JJ/MM/AAAA")
+                : (isDateTime ? "YYYY-MM-DD HH:MM" : "YYYY-MM-DD");
+
+            if (!input.getAttribute('placeholder')) {
+                input.setAttribute('placeholder', defaultPlaceholder);
+            }
+
+            const fp = flatpickr(input, {
+                locale: l10n,
+                enableTime: isDateTime,
+                dateFormat: isDateTime ? "Y-m-d H:i" : "Y-m-d",
+                altInput: true,
+                altFormat: altFmt,
+                time_24hr: true,
+                allowInput: true
+            });
+
+            if (fp.altInput && !fp.altInput.getAttribute('placeholder')) {
+                fp.altInput.setAttribute('placeholder', defaultPlaceholder);
+            }
+        });
+    }
+
+    function formatChartLabel(label, period, locale) {
+        if (!label) return '';
+        try {
+            if (period === 'daily') {
+                const d = new Date(label + 'T00:00:00');
+                if (!isNaN(d.getTime())) {
+                    return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(d);
+                }
+            } else if (period === 'weekly') {
+                const d = new Date(label + 'T00:00:00');
+                if (!isNaN(d.getTime())) {
+                    const formattedDate = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(d);
+                    if (locale === 'fr') return 'Sem. du ' + formattedDate;
+                    if (locale === 'es') return 'Sem. del ' + formattedDate;
+                    return 'W/C ' + formattedDate;
+                }
+            } else if (period === 'monthly') {
+                const d = new Date(label + 'T00:00:00');
+                if (!isNaN(d.getTime())) {
+                    return new Intl.DateTimeFormat(locale, { month: 'short', year: 'numeric' }).format(d);
+                }
+            } else if (period === 'quarterly' && label.includes('-Q')) {
+                const parts = label.split('-Q');
+                const isFrenchOrSpanish = locale === 'fr' || locale === 'es';
+                const prefix = isFrenchOrSpanish ? 'T' : 'Q';
+                return prefix + parts[1] + ' ' + parts[0];
+            }
+        } catch (e) {}
+        return label;
+    }
+
+    function createOrUpdateChart(canvas, chartType, period) {
+        if (!canvas || typeof Chart === 'undefined') return;
+        const chartId = canvas.id || ('chart-' + Math.random().toString(36).substr(2, 9));
+        canvas.id = chartId;
+
+        window._asokCharts = window._asokCharts || {};
+        if (window._asokCharts[chartId]) {
+            window._asokCharts[chartId].destroy();
+        }
+
+        const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+        const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+        const textColor = isDark ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)';
+        const palette = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f43f5e'];
+
+        period = period || canvas.dataset.activePeriod || 'daily';
+        chartType = chartType || canvas.dataset.activeType || (canvas.id === 'asok-chart-distribution' ? 'doughnut' : 'line');
+        canvas.dataset.activePeriod = period;
+        canvas.dataset.activeType = chartType;
+
+        const labelsKey = period + 'Labels';
+        const valuesKey = period + 'Values';
+
+        const rawLabels = JSON.parse(canvas.dataset[labelsKey] || canvas.dataset.labels || '[]');
+        const values = JSON.parse(canvas.dataset[valuesKey] || canvas.dataset.values || '[]');
+        const activeLocale = (window.ASOK_I18N && window.ASOK_I18N.locale) || document.documentElement.lang || 'en';
+
+        const labels = rawLabels.map(lbl => formatChartLabel(lbl, period, activeLocale));
+        const ctx = canvas.getContext('2d');
+
+        let config = {};
+
+        if (chartType === 'doughnut' || chartType === 'pie' || chartType === 'polarArea') {
+            config = {
+                type: chartType,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: palette.slice(0, labels.length),
+                        borderWidth: 0,
+                        hoverOffset: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { color: textColor, font: { family: 'Inter', size: 11 }, usePointStyle: true, boxWidth: 8 }
+                        }
+                    },
+                    cutout: chartType === 'doughnut' ? '70%' : undefined,
+                    // Polar area uses a radial scale. Style it for the theme and
+                    // kill Chart.js's default grey tick backdrops, which look
+                    // broken on the dark dashboard.
+                    scales: chartType === 'polarArea' ? {
+                        r: {
+                            grid: { color: gridColor },
+                            angleLines: { color: gridColor },
+                            ticks: {
+                                color: textColor,
+                                showLabelBackdrop: false,
+                                backdropColor: 'transparent',
+                                font: { family: 'Inter', size: 10 }
+                            }
+                        }
+                    } : undefined
+                }
+            };
+        } else {
+            const gradient = ctx.createLinearGradient(0, 0, 0, 180);
+            gradient.addColorStop(0, 'rgba(99, 102, 241, 0.35)');
+            gradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
+
+            const labelTranslations = {
+                fr: { volume: 'Volume' },
+                es: { volume: 'Volumen' },
+                en: { volume: 'Volume' }
+            };
+            const activeL10n = labelTranslations[activeLocale] || labelTranslations['en'];
+
+            config = {
+                type: chartType,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: activeL10n.volume,
+                        data: values,
+                        borderColor: '#6366f1',
+                        borderWidth: 2,
+                        backgroundColor: chartType === 'line' ? gradient : 'rgba(99, 102, 241, 0.75)',
+                        borderRadius: chartType === 'bar' ? 4 : 0,
+                        fill: chartType === 'line',
+                        tension: 0.35,
+                        pointBackgroundColor: '#6366f1',
+                        pointRadius: 3,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { family: 'Inter', size: 10 } } },
+                        y: { grid: { color: gridColor }, ticks: { color: textColor, font: { family: 'Inter', size: 10 }, precision: 0 }, beginAtZero: true }
+                    }
+                }
+            };
+        }
+
+        window._asokCharts[chartId] = new Chart(ctx, config);
+    }
+
+    function initListCharts(root) {
+        if (typeof Chart === 'undefined') return;
+        root.querySelectorAll('.asok-list-chart').forEach(canvas => {
+            createOrUpdateChart(canvas);
+        });
+    }
+
+    function initDashboardCharts(root) {
+        if (typeof Chart === 'undefined') return;
+        const actCanvas = root.querySelector('#asok-chart-activity');
+        if (actCanvas) createOrUpdateChart(actCanvas, 'line', 'daily');
+
+        const distCanvas = root.querySelector('#asok-chart-distribution');
+        if (distCanvas) createOrUpdateChart(distCanvas, 'doughnut');
+    }
+
+    function initChartControls(root) {
+        root.querySelectorAll('.chart-period-group .period-btn').forEach(btn => {
+            if (btn.dataset.ctrlInit) return;
+            btn.dataset.ctrlInit = 'true';
+            btn.addEventListener('click', function () {
+                const group = this.closest('.chart-period-group');
+                group.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                const targetId = group.dataset.chartTarget;
+                const canvas = document.getElementById(targetId);
+                if (canvas) createOrUpdateChart(canvas, null, this.dataset.period);
+            });
+        });
+
+        root.querySelectorAll('.chart-type-group .type-btn').forEach(btn => {
+            if (btn.dataset.ctrlInit) return;
+            btn.dataset.ctrlInit = 'true';
+            btn.addEventListener('click', function () {
+                const group = this.closest('.chart-type-group');
+                group.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                const targetId = group.dataset.chartTarget;
+                const canvas = document.getElementById(targetId);
+                if (canvas) createOrUpdateChart(canvas, this.dataset.type, null);
+            });
         });
     }
 
@@ -762,40 +1133,6 @@
             }
         });
 
-        // 4. WYSIWYG Editors (Quill)
-        root.querySelectorAll('.wysiwyg-container').forEach(container => {
-            if (container.dataset.asokInit) return;
-            container.dataset.asokInit = 'true';
-
-            const editorEl = container.querySelector('.wysiwyg-editor');
-            const textarea = container.querySelector('textarea');
-            if (!editorEl || !textarea) return;
-
-            if (typeof Quill === 'undefined') {
-                console.error('[Asok] Quill library not found. Rich text editor disabled.');
-                return;
-            }
-
-            const quill = new Quill(editorEl, {
-                theme: 'snow',
-                modules: {
-                    toolbar: [
-                        [{ 'header': [1, 2, 3, false] }],
-                        ['bold', 'italic', 'underline', 'strike'],
-                        ['link', 'blockquote'],
-                        [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-                        ['clean']
-                    ]
-                }
-            });
-
-            // Sync HTML to hidden textarea
-            quill.on('text-change', () => {
-                const html = quill.root.innerHTML;
-                textarea.value = html === '<p><br></p>' ? '' : html;
-            });
-        });
-
         // 4. M2M Checkbox Selection
         root.querySelectorAll('[data-m2m]').forEach(container => {
             const name = container.dataset.m2m;
@@ -829,14 +1166,16 @@
                         cb.disabled = true;
                         cb.checked = true;
                     });
+                    // Refinements (own / field locks) are meaningless for a superuser
+                    document.querySelectorAll('.perm-extra').forEach(cb => { cb.disabled = true; });
                 } else {
                     // Re-enable checkboxes
-                    document.querySelectorAll('.perm-cb, .perm-row-all').forEach(cb => {
+                    document.querySelectorAll('.perm-cb, .perm-row-all, .perm-extra').forEach(cb => {
                         cb.disabled = false;
                     });
 
-                    // Collect individual permissions
-                    const perms = Array.from(document.querySelectorAll('.perm-cb:checked'))
+                    // Collect individual permissions + refinements (own / lock:field)
+                    const perms = Array.from(document.querySelectorAll('.perm-cb:checked, .perm-extra:checked'))
                         .map(cb => cb.dataset.perm)
                         .filter(p => p);
                     permInput.value = perms.join(',');
@@ -893,6 +1232,30 @@
                 });
             });
 
+            // Refinement checkboxes (Only-own / locked fields)
+            document.querySelectorAll('.perm-extra').forEach(cb => {
+                cb.addEventListener('change', updatePermissions);
+            });
+
+            // Expand / collapse a model's refinement row (CSP-safe delegated click)
+            document.querySelectorAll('[data-toggle-detail]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const slug = btn.dataset.toggleDetail;
+                    const row = document.querySelector(`.perm-detail-row[data-detail-for="${slug}"]`);
+                    if (row) row.hidden = !row.hidden;
+                    btn.classList.toggle('active');
+                });
+            });
+
+            // Auto-expand rows that already carry an active refinement
+            document.querySelectorAll('.perm-detail-row').forEach(row => {
+                if (row.querySelector('.perm-extra:checked')) {
+                    row.hidden = false;
+                    const btn = document.querySelector(`[data-toggle-detail="${row.dataset.detailFor}"]`);
+                    if (btn) btn.classList.add('active');
+                }
+            });
+
             // Initial sync
             updatePermissions();
         }
@@ -915,6 +1278,20 @@
                 });
             });
         }
+
+        // Copy URL buttons (CSP-safe: no inline onclick)
+        root.querySelectorAll('[data-copy-url]').forEach(el => {
+            if (el.dataset.copyInit) return;
+            el.dataset.copyInit = 'true';
+            el.addEventListener('click', () => window.copyToClipboard(el.dataset.copyUrl));
+        });
+
+        // File input auto-submit (CSP-safe: no inline onchange)
+        root.querySelectorAll('[data-auto-submit]').forEach(el => {
+            if (el.dataset.autoSubmitInit) return;
+            el.dataset.autoSubmitInit = 'true';
+            el.addEventListener('change', () => document.getElementById(el.dataset.autoSubmit)?.submit());
+        });
 
         // Flash dismiss
         root.querySelectorAll('.flash-msg[data-ttl]').forEach(msg => {
@@ -946,6 +1323,25 @@
 
         // 8. Asok Dropdowns
         initAsokDropdowns(root);
+
+        // 9. Flatpickr Datepicker
+        ensureFlatpickr(root).then(ready => {
+            if (ready) initFlatpickr(root);
+        });
+
+        // 10-12. Charts
+        ensureChartJs(root).then(ready => {
+            if (ready) {
+                initDashboardCharts(root);
+                initListCharts(root);
+                initChartControls(root);
+            }
+        });
+
+        // 13. WYSIWYG
+        ensureQuill(root).then(ready => {
+            if (ready) initWysiwyg(root);
+        });
     }
 
     /**
@@ -985,6 +1381,42 @@
      * INTERACTION HANDLER
      */
     document.addEventListener('click', function (e) {
+        // 0a. Copy-to-clipboard buttons (CSP-safe replacement for inline onclick).
+        const copyBtn = e.target.closest('[data-copy-url]');
+        if (copyBtn) {
+            e.preventDefault();
+            window.copyToClipboard(copyBtn.getAttribute('data-copy-url'));
+            return;
+        }
+
+        // 0b. "Go Back" buttons (error pages) — history.back() with a safe fallback.
+        const backBtn = e.target.closest('.btn-back');
+        if (backBtn) {
+            e.preventDefault();
+            if (window.history.length > 1) {
+                window.history.back();
+            } else {
+                window.location.href = backBtn.getAttribute('data-prefix') || '/';
+            }
+            return;
+        }
+
+        // 0c. "Retry" buttons (error pages) — CSP-safe replacement for href="javascript:".
+        const reloadBtn = e.target.closest('.btn-reload');
+        if (reloadBtn) {
+            e.preventDefault();
+            window.location.reload();
+            return;
+        }
+
+        // 0d. Import drop-zones: clicking opens the hidden file input (CSP-safe).
+        const dropZone = e.target.closest('.import-zone');
+        if (dropZone) {
+            const fileInput = dropZone.querySelector('input[type="file"]');
+            if (fileInput && e.target !== fileInput) fileInput.click();
+            return;
+        }
+
         // 1. Dropdown Toggles
         const toggleBtn = e.target.closest('[data-toggle]');
         if (toggleBtn) {

@@ -48,7 +48,7 @@
 
           <div class="form-group">
             <label class="form-label" for="email">{{ t('Email Address') }}</label>
-            {{ form.email.input(placeholder='you@example.com', autocomplete='email', autofocus=True) }}
+            {{ form.email.input(placeholder='you@example.com', autocomplete='username', autofocus=True) }}
             {% if form.email._error %}
             <div class="form-error"
               style="margin-top:8px; color:var(--danger); font-size:0.85rem; display:flex; align-items:center; gap:6px; font-weight:500;">

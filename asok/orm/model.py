@@ -69,6 +69,18 @@ def _format_column_default(default: Any) -> str:
     return "'" + str(default).replace("'", "''") + "'"
 
 
+def _pivot_target_table(rel: Any) -> str:
+    """Actual table of the pivot's other side.
+
+    Prefer the target model's real `_table` (which honours a custom
+    __tablename__) and only fall back to pluralising the name when the model
+    isn't registered — guessing `_pluralize(name)` breaks for multi-word models.
+    """
+    target = MODELS_REGISTRY.get(rel.target_model_name)
+    table = getattr(target, "_table", None)
+    return table or _pluralize(rel.target_model_name.lower())
+
+
 def _create_pivot_table(cls, engine: Any, rel: Any) -> None:
     a = cls.__name__.lower()
     b = rel.target_model_name.lower()
@@ -83,7 +95,7 @@ def _create_pivot_table(cls, engine: Any, rel: Any) -> None:
     q_pfk = engine.quote_identifier(pivot_fk)
     q_pofk = engine.quote_identifier(pivot_other_fk)
     q_table = engine.quote_identifier(cls._table)
-    q_other_table = engine.quote_identifier(_pluralize(b))
+    q_other_table = engine.quote_identifier(_pivot_target_table(rel))
     engine.execute(
         f"CREATE TABLE IF NOT EXISTS {q_pivot} ("
         f"{q_pfk} INTEGER NOT NULL, {q_pofk} INTEGER NOT NULL, "
@@ -914,11 +926,27 @@ class Model(metaclass=ModelMeta):
             return None
         if isinstance(val, FileRef):
             return val.name
+        val = self._sanitize_wysiwyg_value(field, val)
         label = self._field_type_map.get(f)
         serializer = _SERIALIZERS_BY_LABEL.get(label) if label else None
         if serializer is not None:
             return serializer(self, engine, field, val, f)
         return engine.prepare_value(field, val)
+
+    @staticmethod
+    def _sanitize_wysiwyg_value(field: Any, val: Any) -> Any:
+        """Sanitize wysiwyg HTML at the single write choke point.
+
+        SECURITY: wysiwyg values are rendered unescaped (wrapped as SafeString on
+        read — see _maybe_wrap_safestring). Sanitizing here guarantees the safety
+        for EVERY write path — public form, API, CSV import, direct .save() — not
+        just the admin form. Mirrors the admin's sanitize-on-write, ORM-wide.
+        """
+        if not getattr(field, "wysiwyg", False) or not isinstance(val, str):
+            return val
+        from ..utils.html_sanitizer import sanitize_html
+
+        return sanitize_html(val)
 
     def _build_persist_sql(
         self, engine: Any, values: list[Any]
@@ -983,6 +1011,13 @@ class Model(metaclass=ModelMeta):
         from .query import Query
 
         return Query(cls).where_in(column, values)
+
+    @classmethod
+    def where_not_in(cls: type[T], column: str, values: Any) -> Query[T]:
+        """Start a new query with an initial where_not_in clause."""
+        from .query import Query
+
+        return Query(cls).where_not_in(column, values)
 
     @classmethod
     def filter_by(cls: type[T], **kwargs: Any) -> Query[T]:
@@ -1333,6 +1368,18 @@ class Model(metaclass=ModelMeta):
 
         return pivot, pfk, pofk
 
+    def _ensure_pivot_table(self, engine: Any, relation_name: str) -> None:
+        """Create the pivot table on demand if it is missing.
+
+        Pivot tables are provisioned by `create_table()`, but a schema built
+        purely through migrations may not have them. attach/detach/sync therefore
+        ensure the table exists (CREATE TABLE IF NOT EXISTS — idempotent) before
+        touching it, so a missing pivot raises no `no such table` error.
+        """
+        rel = self._relations.get(relation_name)
+        if rel and rel.type == "BelongsToMany":
+            _create_pivot_table(self.__class__, engine, rel)
+
     def attach(self, relation_name, ids):
         """Insert pivot rows linking self to target ids (idempotent — skips existing)."""
         ids = self._normalize_attach_ids(ids)
@@ -1340,6 +1387,7 @@ class Model(metaclass=ModelMeta):
             return
         pivot, pfk, pofk = self._resolve_belongs_to_many(relation_name)
         engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
+        self._ensure_pivot_table(engine, relation_name)
         q_pivot, q_pfk, q_pofk = self._quote_pivot_idents(engine, pivot, pfk, pofk)
         existing_ids = self._fetch_existing_pivot_ids(
             engine, q_pivot, q_pfk, q_pofk, pofk, ids
@@ -1396,6 +1444,7 @@ class Model(metaclass=ModelMeta):
             raise ValueError(f"No BelongsToMany relation: {relation_name}")
         pivot, pfk, pofk = self._pivot_info(rel)
         engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
+        self._ensure_pivot_table(engine, relation_name)
         q_pivot = engine.quote_identifier(pivot)
         q_pfk = engine.quote_identifier(pfk)
         q_pofk = engine.quote_identifier(pofk)
@@ -1415,9 +1464,12 @@ class Model(metaclass=ModelMeta):
         """Replace all pivot rows for this relation with the given ids."""
         pivot, pfk, pofk = self._resolve_belongs_to_many(relation_name)
         engine = self.get_engine(op="write", shard=getattr(self, "_shard", None))
+        self._ensure_pivot_table(engine, relation_name)
         q_pivot, q_pfk, q_pofk = self._quote_pivot_idents(engine, pivot, pfk, pofk)
         engine.execute(f"DELETE FROM {q_pivot} WHERE {q_pfk} = ?", (self.id,))
         self._insert_synced_pivot_rows(engine, q_pivot, q_pfk, q_pofk, ids)
+        self.__dict__.pop("_eager_roles", None)
+        self.__dict__.pop(f"_eager_{relation_name}", None)
 
     def _insert_synced_pivot_rows(self, engine, q_pivot, q_pfk, q_pofk, ids) -> None:
         if not ids:

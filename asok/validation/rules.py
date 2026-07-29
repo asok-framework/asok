@@ -160,10 +160,13 @@ def _parse_size_limit(limit_arg: str) -> float:
 
 
 def check_confirmed(val: Any, confirm_val: Any) -> bool:
-    """Check if value matches confirmation value.
+    """Check if value matches its confirmation value (e.g. password vs
+    password_confirmation).
 
-    Note: For sensitive comparisons (passwords), use constant-time comparison.
-    Python's == operator is generally constant-time for strings of equal length.
+    Plain ``==`` is intentional here: both operands are values the *same* user
+    just submitted, so there is no secret to leak via timing. Constant-time
+    comparison (``hmac.compare_digest``) is only needed when checking user input
+    against a stored secret — that path lives in ``Model.check_password``.
     """
     return val == confirm_val
 
@@ -524,10 +527,12 @@ def check_base64(val: Any) -> bool:
 
 
 def check_same(val: Any, other_val: Any) -> bool:
-    """Check if two values are identical.
+    """Check if two submitted values are identical (e.g. `same:password`).
 
-    Note: For sensitive comparisons, use constant-time comparison.
-    Python's == operator is generally constant-time for strings of equal length.
+    Plain ``==`` is intentional: both operands come from the same request's
+    input, so there is no secret to leak via timing. Use
+    ``hmac.compare_digest`` only when comparing input against a stored secret
+    (see ``Model.check_password``).
     """
     return val == other_val
 

@@ -175,6 +175,20 @@ def compile_end(state: CompilerState, stmt: str) -> None:
     handler = _END_HANDLERS.get((block_type, stmt))
     if handler:
         handler(state, block_data)
+    _restore_enclosing_loop(state, block_type)
+
+
+def _restore_enclosing_loop(state: CompilerState, block_type: str) -> None:
+    """After a nested for-loop closes, rebind `loop` to the enclosing loop."""
+    if block_type == "for" and state.block_stack:
+        _emit_parent_loop_restore(state)
+
+
+def _emit_parent_loop_restore(state: CompilerState) -> None:
+    for parent_type, parent_data in reversed(state.block_stack):
+        if parent_type == "for" and parent_data:
+            state.emit(f"loop = __loop_{parent_data}")
+            break
 
 
 def _close_cache(state: CompilerState, block_data) -> None:

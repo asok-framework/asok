@@ -14,6 +14,7 @@ import secrets
 import threading
 import time
 from collections import OrderedDict
+from operator import itemgetter
 from typing import Any, Optional
 
 
@@ -152,13 +153,229 @@ class SessionStore:
             return self._save_redis(sid, data)
         return self._save_memory(sid, data)
 
-    def delete(self, sid: str) -> None:
-        """Remove a session from storage."""
+    def delete(self, sid: str) -> bool:
+        """Remove a session from storage. Returns True if deleted, False otherwise."""
         if self.backend == "file":
             return self._delete_file(sid)
         elif self.backend == "redis":
             return self._delete_redis(sid)
         return self._delete_memory(sid)
+
+    def get_user_sessions(self, user_id: Any) -> list[dict[str, Any]]:
+        """Return all active, non-expired sessions for a specific user ID."""
+        if not user_id:
+            return []
+        user_id_str = str(user_id)
+
+        if self.backend == "file":
+            return self._get_user_sessions_file(user_id_str)
+        elif self.backend == "redis":
+            return self._get_user_sessions_redis(user_id_str)
+        return self._get_user_sessions_memory(user_id_str)
+
+    @staticmethod
+    def _matches_user_id(data: dict, user_id_str: str) -> bool:
+        uid = data.get("user_id") or data.get("_user_id")
+        return str(uid) == user_id_str if uid is not None else False
+
+    @staticmethod
+    def _session_entry_if_match(
+        sid: str, data: dict, ts: float, user_id_str: str
+    ) -> "dict[str, Any] | None":
+        if not SessionStore._matches_user_id(data, user_id_str):
+            return None
+        if data.get("_revoked") or data.get("_logged_out"):
+            return None
+        return {
+            "sid": sid,
+            "ip": data.get("_ip", "Unknown"),
+            "user_agent": data.get("_user_agent", "Unknown"),
+            "last_seen": data.get("_last_seen", ts),
+            "created_at": data.get("_created_at", ts),
+        }
+
+    def _try_load_file_session(self, fname: str, user_id_str: str) -> "dict[str, Any] | None":
+        sid = fname[:-5]
+        fpath = os.path.join(self.path, fname)
+        try:
+            with open(fpath, "r") as f:
+                entry = json.load(f)
+            ts = entry.get("ts", 0)
+            if time.time() - ts > self.ttl:
+                return None
+            return self._session_entry_if_match(sid, entry.get("data", {}), ts, user_id_str)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _decode_redis_sid(key: Any) -> str:
+        raw = key.decode("utf-8") if isinstance(key, bytes) else key
+        return raw.split(":", 1)[1]
+
+    def _try_load_redis_session(self, key: Any, user_id_str: str) -> "dict[str, Any] | None":
+        val = self._redis.get(key)
+        if not val:
+            return None
+        raw = val.decode("utf-8") if isinstance(val, bytes) else val
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return None
+        return self._session_entry_if_match(self._decode_redis_sid(key), data, time.time(), user_id_str)
+
+    def _get_user_sessions_memory(self, user_id_str: str) -> list[dict[str, Any]]:
+        now = time.time()
+        sessions = []
+        with self._lock:
+            for sid, entry in list(self._memory.items()):
+                if now - entry["ts"] > self.ttl:
+                    continue
+                hit = self._session_entry_if_match(sid, entry.get("data", {}), entry["ts"], user_id_str)
+                if hit:
+                    sessions.append(hit)
+        sessions.sort(key=itemgetter("last_seen"), reverse=True)
+        return sessions
+
+    def _get_user_sessions_file(self, user_id_str: str) -> list[dict[str, Any]]:
+        if not os.path.isdir(self.path):
+            return []
+        sessions = []
+        for fname in os.listdir(self.path):
+            if not fname.endswith(".json"):
+                continue
+            hit = self._try_load_file_session(fname, user_id_str)
+            if hit:
+                sessions.append(hit)
+        sessions.sort(key=itemgetter("last_seen"), reverse=True)
+        return sessions
+
+    def _get_user_sessions_redis(self, user_id_str: str) -> list[dict[str, Any]]:
+        sessions = []
+        try:
+            for key in self._redis.scan_iter("session:*"):
+                hit = self._try_load_redis_session(key, user_id_str)
+                if hit:
+                    sessions.append(hit)
+        except Exception:
+            pass
+        sessions.sort(key=itemgetter("last_seen"), reverse=True)
+        return sessions
+
+    def revoke_user_session(self, user_id: Any, sid: str) -> bool:
+        """Revoke a session if it belongs to user_id."""
+        data = self.load(sid)
+        if not data:
+            return False
+        uid = data.get("user_id") or data.get("_user_id")
+        if uid is not None and str(uid) == str(user_id):
+            self.delete(sid)
+            return True
+        return False
+
+    def revoke_all_user_sessions(self, user_id: Any) -> int:
+        """Revoke all active sessions for a given user_id."""
+        sessions = self.get_user_sessions(user_id)
+        count = 0
+        for s in sessions:
+            if self.delete(s["sid"]):
+                count += 1
+        return count
+
+    @staticmethod
+    def _session_entry_any(sid: str, data: dict, ts: float) -> "dict[str, Any] | None":
+        uid = data.get("user_id") or data.get("_user_id")
+        if uid is None:
+            return None
+        is_revoked = bool(data.get("_revoked") or data.get("_logged_out"))
+        return {
+            "sid": sid,
+            "user_id": uid,
+            "ip": data.get("_ip", "Unknown"),
+            "user_agent": data.get("_user_agent", "Unknown"),
+            "last_seen": data.get("_last_seen", ts),
+            "created_at": data.get("_created_at", ts),
+            "is_active": not is_revoked,
+        }
+
+    def get_all_active_sessions(self, max_age: Optional[float] = None) -> list[dict[str, Any]]:
+        """Return sessions for any authenticated user within max_age seconds.
+
+        max_age defaults to self.ttl. Pass a larger value (e.g. 86400 * 30) to
+        include recently-expired sessions in admin listing views.
+        """
+        window = max_age if max_age is not None else self.ttl
+        if self.backend == "file":
+            return self._get_all_sessions_file(window)
+        elif self.backend == "redis":
+            return self._get_all_sessions_redis()
+        return self._get_all_sessions_memory(window)
+
+    def _get_all_sessions_memory(self, max_age: float) -> list[dict[str, Any]]:
+        now = time.time()
+        sessions = []
+        with self._lock:
+            for sid, entry in list(self._memory.items()):
+                if now - entry["ts"] > max_age:
+                    continue
+                hit = self._session_entry_any(sid, entry.get("data", {}), entry["ts"])
+                if hit:
+                    sessions.append(hit)
+        sessions.sort(key=itemgetter("last_seen"), reverse=True)
+        return sessions
+
+    def _get_all_sessions_file(self, max_age: float) -> list[dict[str, Any]]:
+        if not os.path.isdir(self.path):
+            return []
+        sessions = []
+        now = time.time()
+        for fname in os.listdir(self.path):
+            if not fname.endswith(".json"):
+                continue
+            hit = self._load_file_session_any(fname, now, max_age)
+            if hit:
+                sessions.append(hit)
+        sessions.sort(key=itemgetter("last_seen"), reverse=True)
+        return sessions
+
+    def _load_file_session_any(
+        self, fname: str, now: float, max_age: float
+    ) -> "dict[str, Any] | None":
+        sid = fname[:-5]
+        fpath = os.path.join(self.path, fname)
+        try:
+            with open(fpath, "r") as f:
+                entry = json.load(f)
+            ts = entry.get("ts", 0)
+            if now - ts > max_age:
+                return None
+            return self._session_entry_any(sid, entry.get("data", {}), ts)
+        except Exception:
+            return None
+
+    def _get_all_sessions_redis(self) -> list[dict[str, Any]]:
+        sessions = []
+        now = time.time()
+        try:
+            for key in self._redis.scan_iter("session:*"):
+                hit = self._load_redis_session_any(key, now)
+                if hit:
+                    sessions.append(hit)
+        except Exception:
+            pass
+        sessions.sort(key=itemgetter("last_seen"), reverse=True)
+        return sessions
+
+    def _load_redis_session_any(self, key: Any, now: float) -> "dict[str, Any] | None":
+        val = self._redis.get(key)
+        if not val:
+            return None
+        raw = val.decode("utf-8") if isinstance(val, bytes) else val
+        try:
+            data = json.loads(raw)
+            sid = self._decode_redis_sid(key)
+            return self._session_entry_any(sid, data, now)
+        except Exception:
+            return None
 
     def generate_sid(self) -> str:
         """Generate a new unique session identifier using a secure cryptographically strong RNG."""
@@ -344,9 +561,9 @@ class SessionStore:
             # Evict oldest sessions if over capacity
             self._evict_excess_memory_sessions()
 
-    def _delete_memory(self, sid):
+    def _delete_memory(self, sid: str) -> bool:
         with self._lock:
-            self._memory.pop(sid, None)
+            return self._memory.pop(sid, None) is not None
 
     # ── File backend ──────────────────────────────────────────
 
@@ -416,12 +633,15 @@ class SessionStore:
         fpath = self._session_file(sid)
         self._write_session_file(fpath, {"data": dict(data), "ts": time.time()})
 
-    def _delete_file(self, sid):
+    def _delete_file(self, sid: str) -> bool:
         fpath = self._session_file(sid)
         try:
-            os.remove(fpath)
+            if os.path.isfile(fpath):
+                os.remove(fpath)
+                return True
         except OSError:
             pass
+        return False
 
     # ── Redis backend ──────────────────────────────────────────
 
@@ -453,9 +673,9 @@ class SessionStore:
         except Exception:
             pass
 
-    def _delete_redis(self, sid: str) -> None:
+    def _delete_redis(self, sid: str) -> bool:
         rkey = self._redis_key(sid)
         try:
-            self._redis.delete(rkey)
+            return bool(self._redis.delete(rkey))
         except Exception:
-            pass
+            return False

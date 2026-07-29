@@ -115,6 +115,14 @@
         cleanUrl = url.replace(/[\x00-\x1F\x7F]/g, '').trim();
       }
 
+      // Reject protocol-relative URLs ("//host/…"): they inherit the page scheme
+      // but point at an arbitrary (possibly external) origin — an open-redirect
+      // vector when bound to href/src.
+      if (cleanUrl.startsWith('//')) {
+        console.warn('[Asok Security] Blocked protocol-relative URL:', url);
+        return false;
+      }
+
       // Parse an explicit scheme per RFC 3986:
       //   scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
       const schemeMatch = cleanUrl.toLowerCase().match(/^([a-z][a-z0-9+.-]*):/);
@@ -289,8 +297,8 @@
         return false;
       }
 
-      // Port must be in valid range (avoid privileged ports in production)
-      if (parsed < 1024 || parsed > 65535) {
+      // Port must be in valid port range (1 - 65535)
+      if (parsed < 1 || parsed > 65535) {
         console.warn('[Asok Security] Invalid port range:', port);
         return false;
       }

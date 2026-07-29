@@ -19,7 +19,7 @@
   --border-alpha: rgba(0, 0, 0, 0.08);
   --border-alpha-hover: rgba(0, 0, 0, 0.15);
 
-  --sidebar-w: 280px;
+  --sidebar-w: 300px;
   --topbar-h: 72px;
 }
 
@@ -40,8 +40,8 @@
 
   --fg: #111827;
   /* Very dark gray, not pure black */
-  --fg-2: #4B5563;
-  --fg-3: #9CA3AF;
+  --fg-2: #374151;
+  --fg-3: #4B5563;
 
   /* Accent: Deep Graphite / Indigo */
   --brand: #111827;
@@ -82,8 +82,8 @@
   --border-focus: var(--border-alpha-hover);
 
   --fg: #F9FAFB;
-  --fg-2: #9CA3AF;
-  --fg-3: #6B7280;
+  --fg-2: #D1D5DB;
+  --fg-3: #9CA3AF;
 
   --brand: #F9FAFB;
   --brand-hover: #E5E7EB;
@@ -183,6 +183,7 @@ h6 {
   flex-shrink: 0;
   z-index: 100;
   position: relative;
+  overflow-x: hidden;
 }
 
 .admin-sidebar.glass {
@@ -216,6 +217,7 @@ h6 {
 .admin-nav {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .nav-group {
@@ -240,6 +242,7 @@ h6 {
   font-size: 0.92rem;
   position: relative;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .nav-item.is-active::before {
@@ -257,7 +260,7 @@ h6 {
 .nav-item:hover {
   background: var(--surface-2);
   color: var(--fg);
-  transform: translateX(6px);
+  padding-left: 16px;
 }
 
 .nav-item.is-active {
@@ -596,14 +599,16 @@ h4 {
   transform: translateY(-1px);
 }
 
-.btn-default {
+.btn-default,
+.btn-secondary {
   background: var(--surface);
   color: var(--fg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
 }
 
-.btn-default:hover {
+.btn-default:hover,
+.btn-secondary:hover {
   background: var(--surface-hover);
   border-color: var(--border-focus);
   color: var(--fg);
@@ -767,10 +772,9 @@ tbody tr:hover td {
   color: var(--fg);
 }
 
-tbody tr:hover {
-  transform: scale(1.002);
-  z-index: 10;
-}
+/* NOTE: no transform on row hover — scaling a full-width (width:100%) row makes
+   it wider than .table-container and triggers a spurious horizontal scrollbar.
+   The background change above is the hover feedback. */
 
 .table-container {
   width: 100%;
@@ -958,6 +962,69 @@ textarea::placeholder {
   color: var(--fg-3);
 }
 
+/* ── Date & Datetime Input Calendar Icon Indicator ── */
+input[type="date"],
+input[type="datetime-local"],
+.asok-datepicker,
+.asok-datetime,
+.flatpickr-input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 14px center !important;
+  background-size: 18px 18px !important;
+  padding-right: 44px !important;
+  cursor: pointer;
+}
+
+.filter-date-input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 32px 0 10px !important;
+  background-position: right 8px center !important;
+  background-size: 14px 14px !important;
+  font-size: 0.825rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background-color: var(--surface);
+  color: var(--fg);
+  outline: none;
+}
+
+:root[data-theme="dark"] input[type="date"],
+:root[data-theme="dark"] input[type="datetime-local"],
+:root[data-theme="dark"] .asok-datepicker,
+:root[data-theme="dark"] .asok-datetime,
+:root[data-theme="dark"] .flatpickr-input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E") !important;
+}
+
+input[type="date"]:hover,
+input[type="date"]:focus,
+input[type="datetime-local"]:hover,
+input[type="datetime-local"]:focus,
+.asok-datepicker:hover,
+.asok-datepicker:focus,
+.asok-datetime:hover,
+.asok-datetime:focus,
+.flatpickr-input:hover,
+.flatpickr-input:focus {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23111827' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E") !important;
+}
+
+:root[data-theme="dark"] input[type="date"]:hover,
+:root[data-theme="dark"] input[type="date"]:focus,
+:root[data-theme="dark"] input[type="datetime-local"]:hover,
+:root[data-theme="dark"] input[type="datetime-local"]:focus,
+:root[data-theme="dark"] .asok-datepicker:hover,
+:root[data-theme="dark"] .asok-datepicker:focus,
+:root[data-theme="dark"] .asok-datetime:hover,
+:root[data-theme="dark"] .asok-datetime:focus,
+:root[data-theme="dark"] .flatpickr-input:hover,
+:root[data-theme="dark"] .flatpickr-input:focus {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23F9FAFB' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E") !important;
+}
+
 input:disabled,
 select:disabled,
 textarea:disabled {
@@ -1044,22 +1111,232 @@ input[type="radio"] {
   margin-bottom: 32px;
 }
 
-/* ── Dashboard Grid ──────────────────────── */
+/* ── Dashboard Layout ────────────────────── */
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  /* 3rd row is a flexible filler: the tall "Aperçu" column spans all rows,
+     and its extra height is absorbed here (at the bottom) instead of
+     stretching row 1 and leaving a gap between the charts and the activity. */
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    "main     side"
+    "activity side"
+    "filler   side";
+  gap: 24px;
+  align-items: start;
+}
+
+.dashboard-main {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+.dashboard-side {
+  grid-area: side;
+  position: sticky;
+  top: 24px;
+}
+
+.dashboard-activity {
+  grid-area: activity;
+  min-width: 0;
+}
+
+.dashboard-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.chart-card {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  /* Grid/flex items default to min-width:auto (= content width). Without this,
+     the responsive Chart.js canvas refuses to shrink and overflows into the
+     Overview column. min-width:0 lets the cell (and canvas) follow the track. */
+  min-width: 0;
+}
+
+.chart-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.chart-card-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chart-canvas-wrap {
+  position: relative;
+  height: 200px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-period-group,
+.chart-type-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+/* Segmented control (chart period/type toggles + generic .seg-group filters).
+   A padded track with rounded "pill" buttons; the active one is fully rounded
+   on all 4 corners and highlighted in brand. */
+.chart-period-group,
+.chart-type-group,
+.seg-group {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+
+.chart-period-group .period-btn,
+.chart-type-group .type-btn,
+.seg-group .seg-btn {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  border: none;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--fg-2);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chart-period-group .period-btn:hover,
+.chart-type-group .type-btn:hover,
+.seg-group .seg-btn:hover {
+  color: var(--fg);
+}
+
+/* Active button — highlight driven by `.active` so the template default
+   (Day / Line, or the current filter) is visible on first load. */
+.chart-period-group .period-btn.active,
+.chart-type-group .type-btn.active,
+.seg-group .seg-btn.active {
+  background: var(--brand);
+  color: var(--brand-fg);
+}
+
+.card-header-row {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-section-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* ── Overview sidebar panel ───────────────── */
+.overview-card {
+  overflow: hidden;
+}
+
+.overview-group {
+  border-bottom: 1px solid var(--border);
+}
+
+.overview-group:last-child {
+  border-bottom: none;
+}
+
+.overview-group-header {
+  padding: 8px 20px 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-3);
+  background: var(--bg-subtle, rgba(0, 0, 0, .02));
+}
+
+.overview-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 20px;
+  text-decoration: none;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  transition: background var(--trans);
+  gap: 8px;
+}
+
+.overview-row:last-child {
+  border-bottom: none;
+}
+
+.overview-row:hover {
+  background: var(--surface-2);
+}
+
+.overview-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.overview-count {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--fg-3);
+  background: var(--surface-2);
+  border-radius: 20px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Keep old .stats-grid for fallback flat grid */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 24px;
-  margin-bottom: 48px;
+  grid-template-columns: repeat(var(--col-count, 4), minmax(0, 1fr));
+  gap: 16px;
 }
 
 .stat-card {
-  padding: 28px 32px;
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
+  transition: box-shadow var(--trans), transform var(--trans);
+}
+
+.stat-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, .12));
 }
 
 .stat-label {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--fg-3);
   font-weight: 600;
   text-transform: uppercase;
@@ -1067,22 +1344,26 @@ input[type="radio"] {
 }
 
 .stat-value {
-  font-size: 2.75rem;
+  font-size: 2.25rem;
   font-weight: 700;
   color: var(--fg);
-  margin: 12px 0;
+  margin: 10px 0;
   line-height: 1;
   letter-spacing: -0.04em;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .stat-link {
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   color: var(--info);
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-top: auto;
+  padding-top: 8px;
 }
 
 .dashboard-grid {
@@ -1477,7 +1758,45 @@ input[type="radio"] {
   }
 }
 
-@media (max-width: 768px) {
+/* From 1278px down, the two dashboard charts stack in a single column. */
+@media (max-width: 1278px) {
+  .dashboard-charts-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1100px) {
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-template-areas: none;
+  }
+
+  /* Clear the named-area placement so the blocks auto-flow into one column
+     (charts -> overview -> activity). Without this the children still point at
+     the now-undefined `main`/`side`/`activity` areas and land in broken
+     implicit cells (overview shoved right, chart overlapping activity). */
+  .dashboard-main,
+  .dashboard-side,
+  .dashboard-activity {
+    grid-area: auto;
+  }
+
+  .dashboard-side {
+    position: static;
+  }
+}
+
+@media (max-width: 900px) {
+  .stats-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+}
+
+/* From 1648px down, the sidebar folds into an off-canvas drawer (opened via
+   #sidebar-toggle) so the content area gets the full viewport width. */
+@media (max-width: 1648px) {
   :root {
     --sidebar-w: 0px;
   }
@@ -1486,25 +1805,15 @@ input[type="radio"] {
     display: flex !important;
   }
 
-  .admin-topbar,
-  .admin-content {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
-
-  .page-title {
-    font-size: 1.65rem;
-  }
-
   .admin-sidebar {
     position: fixed;
-    left: -280px;
+    left: -300px;
     top: 0;
     bottom: 0;
     z-index: 1100;
     transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 20px 0 40px rgba(0, 0, 0, 0.1);
-    width: 280px !important;
+    width: 300px !important;
   }
 
   .admin-sidebar.is-open {
@@ -1528,6 +1837,18 @@ input[type="radio"] {
   .sidebar-overlay.is-visible {
     opacity: 1;
     pointer-events: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-topbar,
+  .admin-content {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .page-title {
+    font-size: 1.65rem;
   }
 }
 
@@ -1598,6 +1919,9 @@ input[type="radio"] {
 
 .ql-editor {
   min-height: 250px;
+  /* Bound the editor so long content scrolls instead of growing forever. */
+  max-height: 480px;
+  overflow-y: auto;
   color: var(--fg);
   line-height: 1.6;
 }
@@ -1740,14 +2064,14 @@ input[type="radio"] {
 }
 
 .stat-trend {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
-  margin-left: 8px;
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  vertical-align: baseline;
 }
 
 .stat-trend.up {
@@ -1857,19 +2181,6 @@ input[type="radio"] {
   border-color: var(--danger-pale);
   color: var(--danger-fg);
   background: var(--danger-pale);
-}
-
-.dashboard-charts {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-  margin-top: 32px;
-}
-
-@media (min-width: 1024px) {
-  .dashboard-charts {
-    grid-template-columns: 2fr 1fr;
-  }
 }
 
 .chart-card {
@@ -1982,6 +2293,28 @@ input[type="radio"] {
 .detail-wysiwyg-content {
   line-height: 1.6;
   color: var(--fg) !important;
+  /* Preserve newlines for plain-text values stored in a wysiwyg field (e.g. a
+     public <textarea> form) — this only affects bare text nodes. Structured
+     HTML block elements are reset to `normal` just below so newlines the editor
+     may have left between tags do NOT show as spurious blank lines in lists,
+     paragraphs, etc. Code blocks keep their own `pre`. */
+  white-space: pre-line;
+}
+
+.detail-wysiwyg-content p,
+.detail-wysiwyg-content ul,
+.detail-wysiwyg-content ol,
+.detail-wysiwyg-content li,
+.detail-wysiwyg-content div,
+.detail-wysiwyg-content table,
+.detail-wysiwyg-content blockquote,
+.detail-wysiwyg-content h1,
+.detail-wysiwyg-content h2,
+.detail-wysiwyg-content h3,
+.detail-wysiwyg-content h4,
+.detail-wysiwyg-content h5,
+.detail-wysiwyg-content h6 {
+  white-space: normal;
 }
 
 .detail-wysiwyg-content p {
@@ -2043,16 +2376,56 @@ input[type="radio"] {
   font-style: italic;
 }
 
-.detail-wysiwyg-content pre {
+/* Code blocks — read-only view (<pre>, incl. Quill 1.x <pre class="ql-syntax">)
+   and the Quill editor (.ql-editor .ql-syntax). Same code-box treatment in both
+   so the edit and view look consistent on the dark theme. */
+.detail-wysiwyg-content pre,
+.ql-editor .ql-syntax {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--border);
+  color: var(--fg) !important;
+  padding: 14px 16px !important;
+  border-radius: var(--r);
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 16px 0;
+  /* Keep all whitespace (overrides the container's pre-line). */
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* WYSIWYG (Quill) code blocks in the read-only view: the editor emits
+   <div class="ql-code-block-container"> with one <div class="ql-code-block">
+   per line — style it as a code box (classes are preserved by the sanitizer). */
+.detail-wysiwyg-content .ql-code-block-container {
   background: var(--surface-2);
   border: 1px solid var(--border);
-  padding: 12px;
   border-radius: var(--r);
+  padding: 14px 16px;
+  margin: 16px 0;
   overflow-x: auto;
   font-family: monospace;
   font-size: 0.9rem;
-  margin: 0 0 12px 0;
 }
+.detail-wysiwyg-content .ql-code-block {
+  white-space: pre;
+  color: var(--fg);
+}
+
+/* WYSIWYG text alignment + indentation (preserved Quill classes). */
+.detail-wysiwyg-content .ql-align-center { text-align: center; }
+.detail-wysiwyg-content .ql-align-right { text-align: right; }
+.detail-wysiwyg-content .ql-align-justify { text-align: justify; }
+.detail-wysiwyg-content .ql-indent-1 { padding-left: 3em; }
+.detail-wysiwyg-content .ql-indent-2 { padding-left: 6em; }
+.detail-wysiwyg-content .ql-indent-3 { padding-left: 9em; }
+.detail-wysiwyg-content .ql-indent-4 { padding-left: 12em; }
+.detail-wysiwyg-content .ql-indent-5 { padding-left: 15em; }
+.detail-wysiwyg-content .ql-indent-6 { padding-left: 18em; }
+.detail-wysiwyg-content .ql-indent-7 { padding-left: 21em; }
+.detail-wysiwyg-content .ql-indent-8 { padding-left: 24em; }
 
 /* Prevent inline style copy-paste issues from WYSIWYG */
 .detail-wysiwyg-content [style*="background-color"],
@@ -2496,4 +2869,534 @@ input[type="radio"] {
   color: var(--fg-3);
   font-size: 0.9rem;
   text-align: center;
+}
+
+/* ── Custom Flatpickr Theme Overrides (Glassmorphism & Asok CSS vars) ── */
+.flatpickr-calendar {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--r-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+  color: var(--fg) !important;
+  font-family: var(--font-sans) !important;
+  padding: 8px !important;
+  width: 300px !important;
+}
+
+.flatpickr-months {
+  margin-bottom: 6px !important;
+}
+
+.flatpickr-months .flatpickr-month {
+  color: var(--fg) !important;
+  fill: var(--fg) !important;
+}
+
+.flatpickr-current-month .flatpickr-monthDropdown-months {
+  color: var(--fg) !important;
+  font-weight: 600 !important;
+  font-family: var(--font-heading) !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+  font-size: 0.95rem !important;
+  padding: 2px 6px !important;
+  border-radius: var(--r-sm) !important;
+}
+
+.flatpickr-current-month .flatpickr-monthDropdown-months:hover {
+  background: var(--surface-2) !important;
+}
+
+.flatpickr-current-month input.cur-year {
+  color: var(--fg) !important;
+  font-weight: 600 !important;
+  font-family: var(--font-heading) !important;
+  font-size: 0.95rem !important;
+}
+
+.flatpickr-current-month .numInputWrapper span.arrowUp,
+.flatpickr-current-month .numInputWrapper span.arrowDown {
+  display: none !important;
+}
+
+.flatpickr-months .flatpickr-prev-month,
+.flatpickr-months .flatpickr-next-month {
+  color: var(--fg-2) !important;
+  fill: var(--fg-2) !important;
+  padding: 6px !important;
+  border-radius: var(--r-sm) !important;
+  transition: all var(--trans) !important;
+}
+
+.flatpickr-months .flatpickr-prev-month:hover,
+.flatpickr-months .flatpickr-next-month:hover {
+  background: var(--surface-2) !important;
+  color: var(--fg) !important;
+  fill: var(--fg) !important;
+}
+
+.flatpickr-weekdays {
+  height: 28px !important;
+}
+
+span.flatpickr-weekday {
+  color: var(--fg-3) !important;
+  font-weight: 500 !important;
+  font-size: 0.8rem !important;
+}
+
+.flatpickr-day {
+  color: var(--fg) !important;
+  border-radius: var(--r-sm) !important;
+  font-weight: 400 !important;
+  font-size: 0.85rem !important;
+  border: 1px solid transparent !important;
+  height: 36px !important;
+  line-height: 34px !important;
+  margin: 2px !important;
+  transition: all var(--trans) !important;
+}
+
+.flatpickr-day:hover,
+.flatpickr-day:focus {
+  background: var(--surface-2) !important;
+  border-color: transparent !important;
+}
+
+.flatpickr-day.today {
+  border-color: var(--brand) !important;
+  color: var(--brand) !important;
+  font-weight: 600 !important;
+}
+
+.flatpickr-day.today:hover {
+  background: var(--brand-pale) !important;
+  color: var(--brand) !important;
+}
+
+.flatpickr-day.selected,
+.flatpickr-day.selected:hover,
+.flatpickr-day.selected:focus {
+  background: var(--brand) !important;
+  color: var(--brand-fg) !important;
+  border-color: var(--brand) !important;
+  font-weight: 600 !important;
+}
+
+.flatpickr-day.prevMonthDay,
+.flatpickr-day.nextMonthDay {
+  color: var(--fg-3) !important;
+  opacity: 0.4 !important;
+}
+
+.flatpickr-day.flatpickr-disabled,
+.flatpickr-day.flatpickr-disabled:hover {
+  color: var(--fg-3) !important;
+  opacity: 0.25 !important;
+  background: transparent !important;
+}
+
+.flatpickr-time {
+  border-top: 1px solid var(--border) !important;
+  margin-top: 8px !important;
+  padding-top: 8px !important;
+  height: 40px !important;
+}
+
+.flatpickr-time input {
+  color: var(--fg) !important;
+  font-weight: 600 !important;
+  font-family: var(--font-sans) !important;
+}
+
+.flatpickr-time input:hover,
+.flatpickr-time input:focus {
+  background: var(--surface-2) !important;
+}
+
+.flatpickr-time .flatpickr-time-separator {
+  color: var(--fg-3) !important;
+}
+
+.flatpickr-time .flatpickr-am-pm {
+  color: var(--fg) !important;
+  font-weight: 600 !important;
+}
+
+.flatpickr-time .flatpickr-am-pm:hover {
+  background: var(--surface-2) !important;
+}
+
+/* ── Quick Access Items Hover Styling ── */
+.quick-access-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg) !important;
+  transition: all var(--trans);
+  text-decoration: none;
+}
+
+.quick-access-item:hover {
+  background: var(--surface-2);
+  padding-left: 28px;
+}
+
+.quick-access-item:last-child {
+  border-bottom: none;
+}
+
+/* ── Custom Scrollbar for all elements in Admin ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-focus);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-3);
+}
+
+/* Specific thin scrollbar for sidebar navigation */
+.admin-nav::-webkit-scrollbar {
+  width: 4px;
+}
+
+/* ── User Profile Dropdown ── */
+.user-dd-menu {
+  min-width: 250px !important;
+  text-align: left;
+}
+
+.user-info {
+  padding: 8px 12px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 226px;
+}
+
+.user-role {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.menu-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 6px 0;
+}
+
+.text-danger {
+  color: var(--danger) !important;
+}
+
+.text-danger:hover {
+  background: var(--danger-pale) !important;
+  color: var(--danger) !important;
+}
+
+/* ── Active Sessions Component Design System ─────────────── */
+.sessions-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  width: 100%;
+}
+
+.sessions-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.session-stat-card {
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--trans), box-shadow var(--trans), border-color var(--trans);
+}
+
+.session-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+  border-color: var(--border-focus);
+}
+
+.session-stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.session-stat-icon.brand {
+  background: var(--brand-pale);
+  color: var(--fg);
+}
+
+.session-stat-icon.success {
+  background: var(--success-pale);
+  color: var(--success-fg);
+}
+
+.session-stat-icon.warn {
+  background: var(--warn-pale);
+  color: var(--warn-fg);
+}
+
+.session-stat-icon.info {
+  background: var(--info-pale);
+  color: var(--info-fg);
+}
+
+.session-stat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-stat-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+.session-stat-val {
+  font-size: 1.85rem;
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  gap: 20px;
+  flex-wrap: wrap;
+  transition: all var(--trans);
+  box-shadow: var(--shadow-sm);
+}
+
+.session-item:hover {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow);
+}
+
+.session-item.is-current {
+  border-color: var(--success);
+  box-shadow: 0 0 0 1px var(--success-pale);
+}
+
+.session-avatar-wrap {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-2);
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+
+.session-avatar-wrap.active {
+  color: var(--fg);
+}
+
+.session-avatar-wrap.current {
+  color: var(--success-fg);
+  background: var(--success-pale);
+  border-color: rgba(5, 150, 105, 0.3);
+}
+
+.session-status-dot {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--success);
+  border: 2px solid var(--surface);
+}
+
+.session-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 280px;
+  flex: 1;
+}
+
+.session-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.session-user-name {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--fg);
+}
+
+.session-user-email {
+  font-size: 0.85rem;
+  color: var(--fg-3);
+}
+
+.session-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.825rem;
+  color: var(--fg-2);
+}
+
+.session-meta-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.session-timestamps {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--fg-3);
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+@media (max-width: 1024px) {
+  .sessions-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 580px) {
+  .sessions-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .session-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+/* Permission matrix — per-role access refinements (own scope + field locks) */
+.perm-refine-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all var(--trans-spring);
+}
+.perm-refine-toggle:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.perm-refine-toggle.active {
+  background: var(--brand-pale);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.perm-detail-row > .perm-detail-cell {
+  padding: 14px 16px 16px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.perm-refine-locks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+/* No owner row above -> drop the separator so it doesn't float at the top */
+.perm-detail-cell > .perm-refine-locks:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.perm-refine-title {
+  width: 100%;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: -2px;
+}
+.perm-refine-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  color: var(--fg-2);
+  cursor: pointer;
 }

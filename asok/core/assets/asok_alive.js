@@ -1,6 +1,7 @@
 window.asokWS = function (path) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  let host;
+  let wsHost;
+  let wsPrefix = window.ASOK_WS_PATH !== undefined ? window.ASOK_WS_PATH : "";
 
   // SECURITY: Only allow configurable port in development (localhost)
   if (
@@ -9,7 +10,8 @@ window.asokWS = function (path) {
     location.hostname === "0.0.0.0" ||
     location.hostname.startsWith("192.168.")
   ) {
-    const port = window.ASOK_WS_PORT || 8001;
+    const defaultPort = location.port ? parseInt(location.port, 10) : (location.protocol === "https:" ? 443 : 80);
+    const port = window.ASOK_WS_PORT || defaultPort;
     // SECURITY: Validate port range to prevent hijacking
     if (window.AsokSecurity && window.AsokSecurity.isValidPort) {
       if (!window.AsokSecurity.isValidPort(port)) {
@@ -17,14 +19,17 @@ window.asokWS = function (path) {
         throw new Error('Invalid WebSocket port configuration');
       }
     }
-    host = location.hostname + ":" + port;
+    wsHost = location.hostname + ":" + port;
   } else {
-    // Production: always use same host
-    host = location.host + "/ws";
+    // Production: use the same host[:port] as the page.
+    // A reverse proxy is expected to handle the WebSocket upgrade on wsPrefix+path.
+    // Default prefix is "" — set window.ASOK_WS_PATH = "/ws" if your proxy needs it.
+    wsHost = location.host;
   }
 
-  return new WebSocket(protocol + "//" + host + path);
+  return new WebSocket(protocol + "//" + wsHost + wsPrefix + path);
 };
+
 
 (function () {
   let ws;
@@ -38,7 +43,7 @@ window.asokWS = function (path) {
     if (connecting) return;
     if (ws) {
       if (ws.readyState === 0) return; // CONNECTING
-      if (ws.readyState === 1) ws.close(); // OPEN
+      if (ws.readyState === 1) return; // OPEN — keep the healthy socket, don't tear it down
     }
     connecting = true;
     ws = window.asokWS("/asok/live");
@@ -181,9 +186,28 @@ window.asokWS = function (path) {
     send({ op: "join_room", room: el.dataset.subscribe });
   }
 
+  function getClientStrategy(el) {
+    const dataClient = el.getAttribute('data-asok-client');
+    if (dataClient) return dataClient.trim();
+
+    if (el.hasAttribute('client:visible') || el.getAttribute('client') === 'visible') return 'visible';
+    if (el.hasAttribute('client:idle') || el.getAttribute('client') === 'idle') return 'idle';
+    if (el.hasAttribute('client:load') || el.getAttribute('client') === 'load') return 'load';
+    if (el.hasAttribute('client:only') || el.getAttribute('client') === 'only') return 'only';
+    if (el.hasAttribute('client:none') || el.getAttribute('client') === 'none') return 'none';
+
+    if (el.hasAttribute('client:media')) return 'media:' + el.getAttribute('client:media');
+
+    const clientAttr = el.getAttribute('client');
+    if (clientAttr) return clientAttr.trim();
+
+    return null;
+  }
+
   function initWS(el, skipJoin) {
     if (el.__asokIniting) return;
-    if (el.hasAttribute('client:visible') || el.hasAttribute('client:idle') || el.hasAttribute('client:load')) {
+    const strategy = getClientStrategy(el);
+    if (strategy && strategy !== 'none') {
       if (!el.__asokReadyToHydrate) return;
     }
     el.__asokIniting = true;
@@ -253,30 +277,71 @@ window.asokWS = function (path) {
   }
 
   const setupComponentIsland = (el) => {
-    if (el.hasAttribute('client:visible')) {
-      const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            el.__asokReadyToHydrate = true;
-            window.Asok._wsInit(el);
-            observer.unobserve(el);
-          }
-        });
-      });
-      observer.observe(el);
-    } else if (el.hasAttribute('client:idle')) {
-      const run = () => {
-        el.__asokReadyToHydrate = true;
-        window.Asok._wsInit(el);
-      };
-      if (window.requestIdleCallback) {
-        window.requestIdleCallback(run, { timeout: 2000 });
-      } else {
-        setTimeout(run, 100);
-      }
-    } else {
+    const strategy = getClientStrategy(el);
+    if (!strategy) {
       el.__asokReadyToHydrate = true;
       window.Asok._wsInit(el);
+      return;
+    }
+
+    if (strategy === 'none') {
+      return;
+    }
+
+    const doHydrate = () => {
+      if (el.__asokReadyToHydrate) return;
+      el.__asokReadyToHydrate = true;
+      window.Asok._wsInit(el);
+    };
+
+    if (strategy === 'visible') {
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              doHydrate();
+              observer.unobserve(el);
+            }
+          });
+        });
+        observer.observe(el);
+      } else {
+        doHydrate();
+      }
+    } else if (strategy === 'idle') {
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(doHydrate, { timeout: 2000 });
+      } else {
+        setTimeout(doHydrate, 200);
+      }
+    } else if (strategy === 'load') {
+      if (document.readyState === 'complete') {
+        doHydrate();
+      } else {
+        window.addEventListener('load', doHydrate, { once: true });
+      }
+    } else if (strategy.startsWith('media:')) {
+      const query = strategy.replace(/^media:/, '').trim().replace(/^['"]|['"]$/g, '');
+      if (query && 'matchMedia' in window) {
+        const mql = window.matchMedia(query);
+        if (mql.matches) {
+          doHydrate();
+        } else {
+          const handler = (e) => {
+            if (e.matches) {
+              doHydrate();
+              if (mql.removeEventListener) mql.removeEventListener('change', handler);
+              else if (mql.removeListener) mql.removeListener(handler);
+            }
+          };
+          if (mql.addEventListener) mql.addEventListener('change', handler);
+          else if (mql.addListener) mql.addListener(handler);
+        }
+      } else {
+        doHydrate();
+      }
+    } else {
+      doHydrate();
     }
   };
 
@@ -287,10 +352,20 @@ window.asokWS = function (path) {
   document.addEventListener("asok:success", function (e) {
     if (e.detail && e.detail.target) {
       const el = e.detail.target;
-      if (el.dataset.asokComponent) setupComponentIsland(el);
-      if (el.dataset.subscribe) initSub(el);
-      el.querySelectorAll("[data-asok-component]").forEach(setupComponentIsland);
-      el.querySelectorAll("[data-subscribe]").forEach(initSub);
+      // After an outerHTML/replaceWith swap, the event's target is the old
+      // (now-detached) element. Only operate on nodes still in the DOM.
+      if (document.body.contains(el)) {
+        if (el.dataset.asokComponent) setupComponentIsland(el);
+        if (el.dataset.subscribe) initSub(el);
+      }
+      // For child components/subscriptions, always query from body to find
+      // the newly-inserted nodes regardless of what the event target was.
+      document.body.querySelectorAll("[data-asok-component]").forEach(function (child) {
+        if (!child.__asokWsReady && !child.__asokIniting) setupComponentIsland(child);
+      });
+      document.body.querySelectorAll("[data-subscribe]").forEach(function (child) {
+        if (!child.__asokSubReady) initSub(child);
+      });
     }
   });
 

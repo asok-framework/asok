@@ -338,7 +338,9 @@ class Query(Generic[T]):
         if isinstance(values, Query):
             return self._where_in_subquery(column, values)
         if not values:
-            self._wheres.append("0")
+            # IN () is invalid SQL, so emit an always-false predicate. Use "1=0"
+            # (not a bare "0"): PostgreSQL rejects a non-boolean scalar in WHERE.
+            self._wheres.append("1=0")
             return self
         return self._where_in_values(column, values)
 
@@ -357,6 +359,37 @@ class Query(Generic[T]):
         self._wheres.append(f"{column} IN ({placeholders})")
         self._args.extend(values)
         return self
+
+    def _where_not_in_subquery(self, column: str, subquery: "Query") -> "Query[T]":
+        sq = subquery.clone()
+        sq._apply_global_scopes()
+        self._wheres.append(f"{column} NOT IN ({sq._build()})")
+        self._args.extend(sq._collect_all_args())
+        return self
+
+    def _where_not_in_values(self, column: str, values) -> "Query[T]":
+        field = self.model._fields.get(column)
+        if field:
+            values = [self.model.get_engine().prepare_value(field, v) for v in values]
+        placeholders = ", ".join(["?"] * len(values))
+        self._wheres.append(f"{column} NOT IN ({placeholders})")
+        self._args.extend(values)
+        return self
+
+    def where_not_in(self, column: str, values) -> Query[T]:
+        """Filter by records whose column value is NOT in a list of values or a subquery.
+
+        Args:
+            column: The column name to filter
+            values: Either a list of values OR a Query object (subquery)
+        """
+        if not self.model._valid_column(column):
+            raise ValueError(f"Invalid column: {column}")
+        if isinstance(values, Query):
+            return self._where_not_in_subquery(column, values)
+        if not values:
+            return self
+        return self._where_not_in_values(column, values)
 
     def like(
         self, column: str, pattern: str, escape_wildcards: bool = False
@@ -385,6 +418,17 @@ class Query(Generic[T]):
                 pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             )
         return self.where(column, "LIKE", pattern)
+
+    def where_contains(self, column: str, substring: str) -> Query[T]:
+        """Safely search for a substring within a column, automatically escaping SQL LIKE wildcards.
+
+        SECURITY: Escapes '%', '_', and '\\' characters in user input to prevent LIKE-injection.
+
+        Example:
+            User.query().where_contains('name', 'John%')
+        """
+        escaped = substring.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return self.where(column, "LIKE", f"%{escaped}%")
 
     def or_where(self, column: str, op_or_val: Any, val: Any = _UNSET) -> Query[T]:
         """Append an OR condition."""
@@ -651,9 +695,14 @@ class Query(Generic[T]):
             loader(self, rel, rel_name, active_subs, results)
 
     def _load_morph_to(self, rel, rel_name, active_subs, results) -> None:
+        for r in results:
+            r.__dict__.setdefault(f"_eager_{rel_name}", None)
         fk_id = rel.foreign_key or f"{rel_name}_id"
         fk_type = rel.owner_key or f"{rel_name}_type"
         by_type = _bucket_by_morph_type(results, fk_id, fk_type)
+        self._load_morph_buckets(by_type, rel_name, active_subs)
+
+    def _load_morph_buckets(self, by_type: dict, rel_name: str, active_subs: list) -> None:
         for t_type, pairs in by_type.items():
             target_model = MODELS_REGISTRY.get(t_type)
             if target_model:
@@ -1048,31 +1097,37 @@ class Query(Generic[T]):
     def paginate(
         self, page: int = 1, per_page: int = 10, count: bool = True
     ) -> dict[str, Any]:
-        """Paginate the current query and return results with metadata.
-
-        Args:
-            page: The page number (1-indexed).
-            per_page: Number of items per page.
-            count: If True (default), also run a SELECT COUNT(*) to get the total
-                   number of matching rows and compute total pages. Set to False
-                   to skip the count query and save a database round-trip when
-                   the total is not needed (e.g. infinite-scroll / "Load more" UIs).
-
-        Example:
-            User.query().where("active", 1).paginate(page=2)
-            User.query().where("active", 1).paginate(page=2, count=False)
-        """
-        total = self.count() if count else None
-        pages = math.ceil(total / per_page) if total is not None else None
+        """Paginate the current query and return results with metadata."""
+        page, per_page = _sanitize_page_args(page, per_page)
+        total, pages = _compute_page_counts(self, count, per_page)
         clone = self.clone()
         items = clone.limit(per_page).offset((page - 1) * per_page).get()
+
+        has_next = (page < pages) if pages is not None else (len(items) == per_page)
 
         return {
             "items": items,
             "total": total,
             "pages": pages,
             "current_page": page,
+            "per_page": per_page,
+            "has_prev": page > 1,
+            "has_next": has_next,
+            "prev_page": page - 1 if page > 1 else None,
+            "next_page": page + 1 if has_next else None,
         }
+
+
+def _sanitize_page_args(page: int, per_page: int) -> tuple[int, int]:
+    return max(1, page), max(1, per_page)
+
+
+def _compute_page_counts(query: Any, count: bool, per_page: int) -> tuple[Optional[int], Optional[int]]:
+    if not count:
+        return None, None
+    total = query.count()
+    pages = math.ceil(total / per_page)
+    return total, pages
 
     # ── Async terminal methods ────────────────────────────────────────────────
 

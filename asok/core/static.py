@@ -78,7 +78,7 @@ class StaticMixin:
             ("Content-Length", str(len(content))),
             (
                 "Cache-Control",
-                "public, max-age=86400" if not debug else "no-cache, no-store",
+                "public, max-age=31536000, immutable" if not debug else "no-cache, no-store",
             ),
         ]
         if not debug:
@@ -134,13 +134,15 @@ class StaticMixin:
     ) -> Optional[list[bytes]]:
         """Return a 403 response if static_path is outside base_path, else None."""
         try:
-            if os.path.commonpath([static_path, base_path]) != base_path:
+            real_static = os.path.realpath(os.path.abspath(static_path))
+            real_base = os.path.realpath(os.path.abspath(base_path))
+            if os.path.commonpath([real_static, real_base]) != real_base:
                 body = self._render_error_page(request, 403)
                 start_response(
                     "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]
                 )
                 return [body.encode("utf-8")]
-        except ValueError:
+        except Exception:
             body = self._render_error_page(request, 403)
             start_response(
                 "403 Forbidden", [("Content-Type", "text/html; charset=utf-8")]

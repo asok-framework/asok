@@ -5,6 +5,11 @@ from typing import Any, Optional
 
 from ..forms import Form
 from ..orm import MODELS_REGISTRY
+from .access_rules import (
+    resolve_owner_field,
+    user_is_own_scoped,
+    user_locked_fields,
+)
 from .constants import _IMAGE_EXTS, ADMIN_VERBS, FK_AUTOCOMPLETE_THRESHOLD
 from .utils import _display
 
@@ -385,6 +390,11 @@ def _populate_readonly_slugs(model: Any, readonly_set: set[str]) -> None:
     for name, field in model._fields.items():
         if getattr(field, "is_slug", False) and getattr(field, "always_update", False):
             readonly_set.add(name)
+        # Auto-managed timestamps (created_at, updated_at, ...) are shown read-only
+        # rather than skipped entirely — otherwise they never appear on the detail
+        # view even though the record clearly has them.
+        if getattr(field, "is_timestamp", False):
+            readonly_set.add(name)
 
 
 def _resolve_fk_target(target: Any) -> Any:
@@ -519,8 +529,11 @@ def _build_fieldset_groups(
 
 def _fetch_all_target_options(target: Any) -> list[dict[str, Any]]:
     try:
+        # Use the related object's display label (name/title/…) for consistency
+        # with FK selects and the roles widget — not "<Model> #<id>". _display
+        # already falls back to "#<id>" when the object has no display attribute.
         return [
-            {"id": o.id, "label": f"{target.__name__} #{o.id}"}
+            {"id": o.id, "label": _display(o)}
             for o in target.all(limit=500)
         ]
     except Exception:
@@ -531,7 +544,12 @@ def _fetch_selected_ids(item: Any, rel_name: str) -> list[Any]:
     if not item or not getattr(item, "id", None):
         return []
     try:
-        return [o.id for o in getattr(item, rel_name)()]
+        # Relations are properties returning a ModelList (see _model_relations:
+        # build_belongs_to_many_property) — access, do NOT call. Calling it raised
+        # TypeError, silently swallowed → no ids marked selected, so existing m2m
+        # (roles, tags, …) were never pre-checked in the edit form and a save
+        # wiped them (e.g. "you can't remove all your roles").
+        return [o.id for o in getattr(item, rel_name)]
     except Exception:
         return []
 
@@ -546,7 +564,8 @@ def _load_m2m_options(target: Any, item: Any, rel_name: str) -> list[dict[str, A
 
 def _fetch_inline_children(item: Any, rel_name: str) -> list[Any]:
     try:
-        return getattr(item, rel_name)()
+        # Relation property returning a ModelList — access, do NOT call.
+        return getattr(item, rel_name)
     except Exception:
         return []
 
@@ -575,6 +594,51 @@ def _build_perm_cells(
             }
         )
     return cells
+
+
+def _is_lockable_field(name: str, field: Any) -> bool:
+    """A real, user-editable column that can be marked read-only for a role."""
+    if name == "id":
+        return False
+    return not (
+        getattr(field, "is_password", False)
+        or getattr(field, "is_timestamp", False)
+        or getattr(field, "hidden", False)
+    )
+
+
+def _field_label(name: str, field: Any) -> str:
+    return getattr(field, "label", None) or name.replace("_", " ").capitalize()
+
+
+def _build_lock_fields(slug: str, model: Any, perms: set[str]) -> list[dict[str, Any]]:
+    prefix = f"{slug}.lock:"
+    out = []
+    for name, field in model._fields.items():
+        if not _is_lockable_field(name, field):
+            continue
+        perm = f"{prefix}{name}"
+        out.append(
+            {
+                "name": name,
+                "label": _field_label(name, field),
+                "perm": perm,
+                "checked": perm in perms,
+            }
+        )
+    return out
+
+
+def _build_perm_refine(slug: str, model: Any, perms: set[str]) -> dict[str, Any]:
+    """Row-scope ("own") + field-lock options shown under a matrix row."""
+    owner_field = resolve_owner_field(model)
+    lock_fields = _build_lock_fields(slug, model, perms)
+    return {
+        "owner_field": owner_field,
+        "own_checked": f"{slug}.own" in perms,
+        "lock_fields": lock_fields,
+        "has_refine": bool(owner_field or lock_fields),
+    }
 
 
 def _fetch_all_roles() -> list[Any]:
@@ -776,6 +840,7 @@ class FormMixin:
         readonly_set = set(entry["readonly_fields"])
         form_exclude = set(entry["form_exclude"])
         _populate_readonly_slugs(model, readonly_set)
+        form_exclude |= self._hidden_by_access(request, entry, model)
 
         is_creation = not (item and getattr(item, "id", None))
         schema, meta = self._build_schema_and_meta(
@@ -787,6 +852,24 @@ class FormMixin:
         self._apply_form_errors(form, errors)
 
         return form, meta
+
+    def _hidden_by_access(self, request: Any, entry: dict[str, Any], model: Any) -> set[str]:
+        """Field names to hide from the form entirely (surface reduction).
+
+        Two sources: the graphical per-role "champs verrouillés" rule
+        (`<slug>.lock:<field>`), and — for an own-scoped user — the auto-managed
+        owner FK (what stops a writer ever seeing every user). The apply path
+        re-checks these (defense in depth).
+        """
+        locked = user_locked_fields(getattr(request, "user", None), entry.get("slug", ""))
+        return locked | self._own_owner_hidden(request, entry, model)
+
+    def _own_owner_hidden(self, request: Any, entry: dict[str, Any], model: Any) -> set[str]:
+        """The auto-managed owner FK, hidden for own-scoped users (else empty)."""
+        if not user_is_own_scoped(getattr(request, "user", None), entry.get("slug", "")):
+            return set()
+        owner_field = resolve_owner_field(model)
+        return {owner_field} if owner_field else set()
 
     def _grouped_fields(
         self, entry: dict[str, Any], form: Form, meta: dict[str, dict[str, Any]]
@@ -868,18 +951,29 @@ class FormMixin:
         return out
 
     def _build_permission_matrix(self, request: Any, item: Any) -> dict[str, Any]:
-        """Build a checkbox matrix (models × verbs) for Role.permissions."""
+        """Build a checkbox matrix (models × verbs) for Role.permissions.
+
+        Each row also carries the graphical "refinements" (row-scope + field
+        locks) so a role's access can be fully shaped from the admin, with no
+        code in the models.
+        """
         current_raw, perms = _parse_permissions(item)
         wildcard = "*" in perms
         rows = []
         for slug, entry in self._registered.items():
-            cells = _build_perm_cells(slug, wildcard, perms)
-            rows.append({"slug": slug, "label": entry["label"], "cells": cells})
+            row = {
+                "slug": slug,
+                "label": entry["label"],
+                "cells": _build_perm_cells(slug, wildcard, perms),
+            }
+            row.update(_build_perm_refine(slug, entry["model"], perms))
+            rows.append(row)
         return {
             "verbs": ADMIN_VERBS,
             "rows": rows,
             "wildcard": wildcard,
             "current": current_raw,
+            "colspan": len(ADMIN_VERBS) + 2,
         }
 
     def _build_user_roles_widget(self, item: Any) -> dict[str, Any] | None:

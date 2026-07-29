@@ -114,161 +114,135 @@ class ErrorRendererMixin:
         return fallback
 
     def _render_debug_exception_page(self, request: Any, e: Exception) -> str:
-        """Render a detailed, premium debug HTML report for unhandled Python exceptions (DEBUG mode only)."""
+        """Render a clean Flask-style debug HTML report for unhandled Python exceptions."""
         import html
         import traceback
 
         tb_html = html.escape(traceback.format_exc())
-        error_msg = html.escape(f"{type(e).__name__}: {str(e)}")
-
-        ctx_details = []
-        ctx_details.append(
-            f"<tr><td><strong>Request URL</strong></td><td><code>{html.escape(request.method)} {html.escape(request.path)}</code></td></tr>"
-        )
-
-        for k, v in sorted(request.params.items()):
-            ctx_details.append(
-                f"<tr><td><strong>Param: {html.escape(k)}</strong></td><td><code>{_safe_repr(v)}</code></td></tr>"
-            )
-
-        for k, v in sorted(request.form.items()):
-            ctx_details.append(
-                f"<tr><td><strong>Form Data: {html.escape(k)}</strong></td><td><code>{_safe_repr(v)}</code></td></tr>"
-            )
-
-        ctx_table = "".join(ctx_details)
-        ctx_section = (
-            f"<table><thead><tr><th>Property / Variable</th><th>Value</th></tr></thead><tbody>{ctx_table}</tbody></table>"
-            if ctx_table
-            else "<p style='color: #9ca3af; font-style: italic;'>No request details set.</p>"
-        )
+        exc_name = type(e).__name__
+        error_msg = html.escape(str(e))
+        ctx_section = _build_debug_context_table(request)
 
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>{html.escape(type(e).__name__)} — Asok Debugger</title>
+    <title>{html.escape(exc_name)} — Asok Debugger</title>
     <style>
         body {{
-            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #0b0f19;
-            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8f9fa;
+            color: #212529;
             margin: 0;
-            padding: 40px 20px;
+            padding: 0 0 50px 0;
             line-height: 1.5;
         }}
-        .container {{
-            max-width: 900px;
-            margin: 0 auto;
-            background: #111827;
-            border: 1px solid #1f2937;
-            border-radius: 12px;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
-            overflow: hidden;
-        }}
         .header {{
-            background: #ef4444;
-            color: #fff;
+            background: #d9534f;
+            color: #ffffff;
             padding: 24px 32px;
-            border-bottom: 1px solid #dc2626;
+            border-bottom: 2px solid #c9302c;
         }}
         .header h1 {{
-            margin: 0;
-            font-size: 1.5rem;
+            margin: 0 0 8px 0;
+            font-size: 1.6rem;
             font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
         }}
-        .content {{
-            padding: 32px;
+        .header .subtitle {{
+            font-size: 1.05rem;
+            opacity: 0.95;
+            font-family: Consolas, Menlo, Monaco, monospace;
         }}
-        .error-message {{
-            background: #271c1c;
-            border: 1px solid #7f1d1d;
-            color: #fca5a5;
-            padding: 16px 20px;
-            border-radius: 8px;
-            font-size: 1.1rem;
-            font-weight: 500;
+        .container {{
+            max-width: 1000px;
+            margin: 30px auto 0 auto;
+            padding: 0 20px;
+        }}
+        .card {{
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 24px;
             margin-bottom: 24px;
-            word-break: break-word;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }}
-        .section-title {{
+        h3 {{
+            margin-top: 0;
+            margin-bottom: 15px;
             font-size: 1.1rem;
-            font-weight: 600;
-            color: #e2e8f0;
-            margin: 24px 0 12px 0;
-            border-bottom: 1px solid #374151;
+            color: #343a40;
+            border-bottom: 1px solid #e9ecef;
             padding-bottom: 8px;
         }}
         pre {{
-            background: #1e293b;
-            padding: 20px;
-            border-radius: 8px;
+            background: #f1f3f5;
+            color: #212529;
+            padding: 16px;
+            border-radius: 4px;
             overflow-x: auto;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
             font-size: 0.9rem;
-            color: #cbd5e1;
-            border: 1px solid #334155;
+            border: 1px solid #ced4da;
             margin: 0;
+            line-height: 1.5;
         }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            font-size: 0.9rem;
-        }}
-        th, td {{
+        td, th {{
+            padding: 8px 12px;
+            border-bottom: 1px solid #dee2e6;
             text-align: left;
-            padding: 10px 12px;
-            border-bottom: 1px solid #1f2937;
-        }}
-        th {{
-            background: #1f2937;
-            color: #9ca3af;
-            font-weight: 600;
-        }}
-        tr:hover td {{
-            background: #1e293b;
         }}
         code {{
-            font-family: monospace;
-            color: #a855f7;
-            background: #2e1065;
-            padding: 2px 6px;
-            border-radius: 4px;
-        }}
-        .badge {{
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            background: #f87171;
-            color: #7f1d1d;
+            font-family: Consolas, Menlo, Monaco, monospace;
+            color: #d63384;
+            background: #e9ecef;
+            padding: 2px 5px;
+            border-radius: 3px;
         }}
     </style>
 </head>
 <body>
+    <div class="header">
+        <h1>{html.escape(exc_name)}</h1>
+        <div class="subtitle">{error_msg}</div>
+    </div>
     <div class="container">
-        <div class="header">
-            <h1><span class="badge">Exception</span> Unhandled error in controller</h1>
-        </div>
-        <div class="content">
-            <div class="error-message">
-                {error_msg}
-            </div>
-
-            <h3 class="section-title">Traceback</h3>
+        <div class="card">
+            <h3>Traceback</h3>
             <pre>{tb_html}</pre>
-
-            <h3 class="section-title">Request Context & Parameters</h3>
+        </div>
+        <div class="card">
+            <h3>Request Context</h3>
             {ctx_section}
         </div>
     </div>
 </body>
 </html>
 """
+
+
+def _extract_dict_rows(prefix: str, data: dict) -> list[str]:
+    import html
+
+    return [
+        f"<tr><td><strong>{prefix}: {html.escape(k)}</strong></td><td><code>{_safe_repr(v)}</code></td></tr>"
+        for k, v in sorted(data.items())
+    ]
+
+
+def _build_debug_context_table(request: Any) -> str:
+    import html
+
+    ctx_details = [
+        f"<tr><td><strong>Request URL</strong></td><td><code>{html.escape(getattr(request, 'method', 'GET'))} {html.escape(getattr(request, 'path', '/'))}</code></td></tr>"
+    ]
+    if hasattr(request, "params"):
+        ctx_details.extend(_extract_dict_rows("Param", request.params))
+    if hasattr(request, "form"):
+        ctx_details.extend(_extract_dict_rows("Form Data", request.form))
+
+    ctx_table = "".join(ctx_details)
+    return (
+        f"<table style='width: 100%; border-collapse: collapse; font-size: 0.9rem;'><thead><tr style='background: #f8f9fa;'><th style='padding: 8px 12px; border-bottom: 1px solid #dee2e6; text-align: left;'>Property / Variable</th><th style='padding: 8px 12px; border-bottom: 1px solid #dee2e6; text-align: left;'>Value</th></tr></thead><tbody>{ctx_table}</tbody></table>"
+        if ctx_table
+        else "<p style='color: #6c757d; font-style: italic;'>No request details set.</p>"
+    )

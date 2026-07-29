@@ -10,16 +10,23 @@
   </script>
   <script>
     window.ASOK_I18N = {
+      locale: "{{ admin_locale | default('en') }}",
       confirmation: "{{ t('Confirmation') }}",
       confirm: "{{ t('Confirm') }}",
-      cancel: "{{ t('Cancel') }}"
+      cancel: "{{ t('Cancel') }}",
+      url_copied: "{{ t('URL copied to clipboard!') }}",
+      url_copy_failed: "{{ t('Failed to copy URL') }}"
     };
     window.adminPrefix = "{{ admin_prefix }}";
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="robots" content="noindex, nofollow">
+  <meta name="description"
+    content="Administration panel for {{ admin_site_name }}. Manage models, data, and settings securely.">
+  <meta name="robots" content="{{ admin_robots | default('index, follow') }}">
+  {#
   <meta name="csrf-token" content="{{ request.csrf_token_value }}">
+  #}
   <title>{% block title %}{% endblock %} — {{ admin_site_name }}</title>
   <link rel="stylesheet" href="{{ static('admin.css') }}">
   <style>
@@ -88,7 +95,6 @@
       src: url('/admin/static/fonts/outfit-800.woff2') format('woff2');
     }
   </style>
-  <link rel="stylesheet" href="{{ static('quill.snow.css') }}">
   {% if admin_favicon %}
   <link rel="icon" type="image/x-icon" href="{{ static(admin_favicon) }}">
   {% else %}
@@ -106,12 +112,27 @@
     {% endfor %}
   </div>
 
+  {% if is_impersonating %}
+  <div class="impersonation-banner">
+    <div class="container impersonation-container">
+      <div class="impersonation-content">
+        {{ icon('shield', 18) }}
+        <span>{{ t('Impersonating') }} <strong>{{ (request.user.name or request.user.email) }}</strong></span>
+      </div>
+      <form action="{{ admin_prefix }}/stop-impersonate" method="POST" data-spa-silent>
+        {{ request.csrf_input() }}
+        <button type="submit" class="stop-impersonate-btn">{{ t('Stop') }}</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="admin-shell">
 
     {# ── Sidebar (Minimalist) ────────────────────────────── #}
     <aside class="admin-sidebar glass">
       <a href="{{ admin_prefix }}" class="admin-brand" data-spa>
-        <img src="{{ static(admin_favicon or 'logo.svg') }}" alt="{{ admin_site_name }}" width="24" height="24">
+        <img src="{{ static(admin_favicon or 'logo.svg') }}" alt="" aria-hidden="true" width="24" height="24">
         <span>{{ admin_site_name }}</span>
       </a>
 
@@ -131,7 +152,7 @@
         {% set has_active = False %}
         {% for m in group.models %}{% if active == m.slug %}{% set has_active = True %}{% endif %}{% endfor %}
 
-        <details class="nav-section" {% if has_active %}open{% endif %}>
+        <details class="nav-section" {% if has_active or admin_model_groups | length <=4 %}open{% endif %}>
           <summary class="nav-group">
             <span>{{ group.name }}</span>
             {{ icon('chevron', 12) }}
@@ -149,12 +170,6 @@
         {% endfor %}
         {% endif %}
 
-        <div class="nav-group">{{ user_role_label }}</div>
-        <a href="{{ admin_prefix }}/me" class="nav-item {% if active == 'me' %}is-active{% endif %}" data-spa>
-          {{ icon('user', 14) }}
-          <span>{{ t('My Profile') }}</span>
-        </a>
-
         {% if can_view_media %}
         <a href="{{ admin_prefix }}/media" class="nav-item {% if active == 'media' %}is-active{% endif %}" data-spa>
           {{ icon('folder', 14) }}
@@ -162,35 +177,23 @@
         </a>
         {% endif %}
 
-      </nav>
+        {% if request.user and request.user.is_admin %}
+        <a href="{{ admin_prefix }}/active-sessions"
+          class="nav-item {% if active == 'active_sessions' %}is-active{% endif %}" data-spa>
+          {{ icon('monitor', 14) }}
+          <span>{{ t('Active Admin Sessions') }}</span>
+        </a>
+        <a href="{{ admin_prefix }}/trash" class="nav-item {% if active == 'trash' %}is-active{% endif %}" data-spa>
+          {{ icon('trash', 14) }}
+          <span>{{ t('Trash') }}</span>
+        </a>
+        {% endif %}
 
-      <div class="sidebar-foot" style="margin-top:auto">
-        <form method="post" action="{{ admin_prefix }}/logout" style="margin:0;padding:0">
-          <input type="hidden" name="csrf_token" value="{{ request.csrf_token_value }}">
-          <button type="submit" class="nav-item nav-item--logout" style="background:none;border:none;width:100%;cursor:pointer;text-align:left">
-            {{ icon('logout', 14) }}
-            <span>{{ t('Logout') }}</span>
-          </button>
-        </form>
-      </div>
+      </nav>
     </aside>
 
     {# ── Main area (Airy) ────────────────────────────────── #}
     <div class="admin-body">
-      {% if is_impersonating %}
-      <div class="impersonation-banner">
-        <div class="container impersonation-container">
-          <div class="impersonation-content">
-            {{ icon('shield', 18) }}
-            <span>{{ t('Impersonating') }} <strong>{{ (request.user.name or request.user.email) }}</strong></span>
-          </div>
-          <form action="{{ admin_prefix }}/stop-impersonate" method="POST" data-spa-silent>
-            {{ request.csrf_input() }}
-            <button type="submit" class="stop-impersonate-btn">{{ t('Stop') }}</button>
-          </form>
-        </div>
-      </div>
-      {% endif %}
 
       {# Topbar #}
       <header class="admin-topbar glass">
@@ -234,9 +237,39 @@
           {% endif %}
 
           {% if request.user %}
-          <a href="{{ admin_prefix }}/me" class="tb-user" data-spa style="text-decoration:none">
-            <div class="tb-avatar">{{ (request.user.email or 'A')[:1] | upper }}</div>
-          </a>
+          <div class="locale-dd" style="position:relative">
+            <button class="tb-btn tb-user" type="button" id="user-btn" data-toggle="user-menu"
+              aria-label="{{ t('User menu') }}" aria-expanded="false"
+              style="background:none;border:none;padding:0;cursor:pointer">
+              <div class="tb-avatar">{{ (request.user.email or 'A')[:1] | upper }}</div>
+            </button>
+            <div class="locale-dd-menu user-dd-menu" id="user-menu" data-dropdown hidden>
+              <div class="user-info">
+                <span class="user-name">{{ request.user.name or request.user.email }}</span>
+                <span class="user-role">{{ user_role_label }}</span>
+              </div>
+              <hr class="menu-divider">
+              <a href="{{ admin_prefix }}/me" class="custom-opt" data-spa style="text-decoration:none">
+                <span>{{ t('My Profile') }}</span>
+                {{ icon('user', 14) }}
+              </a>
+              {% if can_view_media %}
+              <a href="{{ admin_prefix }}/media" class="custom-opt" data-spa style="text-decoration:none">
+                <span>{{ t('Media Manager') }}</span>
+                {{ icon('folder', 14) }}
+              </a>
+              {% endif %}
+              <hr class="menu-divider">
+              <form method="post" action="{{ admin_prefix }}/logout" style="margin:0;padding:0">
+                {{ request.csrf_input() }}
+                <button type="submit" class="custom-opt text-danger"
+                  style="background:none;border:none;width:100%;cursor:pointer;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:8px">
+                  <span>{{ t('Logout') }}</span>
+                  {{ icon('logout', 14) }}
+                </button>
+              </form>
+            </div>
+          </div>
           {% endif %}
         </div>
       </header>
@@ -266,7 +299,7 @@
   <div id="asok-modal" class="modal-overlay">
     <div class="modal-content">
       <div class="modal-header">
-        <h3 class="modal-title" id="modal-title"></h3>
+        <h2 class="modal-title" id="modal-title"><span class="sr-only">Notice</span></h2>
       </div>
       <div class="modal-body" id="modal-body"></div>
       <div class="modal-footer">
@@ -276,8 +309,7 @@
     </div>
   </div>
 
-  <script src="{{ static('quill.js') }}"></script>
-  <script src="{{ static('admin.js') }}"></script>
+  <script src="{{ static('admin.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 

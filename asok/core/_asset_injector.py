@@ -26,6 +26,7 @@ _DIRECTIVE_MARKERS = (
     "asok-state",
     "asok-on:",
     "asok-text",
+    "asok-html",
     "asok-show",
     "asok-hide",
     "asok-class:",
@@ -33,16 +34,50 @@ _DIRECTIVE_MARKERS = (
     "asok-model",
     "asok-if",
     "asok-for",
+    "asok-key",
     "asok-init",
     "asok-ref",
     "asok-teleport",
     "asok-cloak",
+    "data-asok-cloak",
+    "data-cloak",
     "asok-fetch",
     "asok-fetch-async",
     "asok-toggle",
+    "asok-theme-toggle",
+    "data-asok-theme-toggle",
+    "data-theme-toggle",
+    "asok-cookie-banner",
+    "data-cookie-banner",
+    "asok-cookie-accept",
+    "asok-cookie-reject",
+    "asok-cookie-reset",
+    "asok-cookie-script",
+    "asok-dismiss",
+    "data-asok-dismiss",
+    "data-dismiss",
+    "asok-dismiss-trigger",
+    "data-asok-dismiss-trigger",
+    "data-dismiss-trigger",
+    "asok-copy",
+    "data-asok-copy",
+    "data-copy",
+    "asok-modal",
+    "asok-modal-open",
+    "asok-modal-close",
+    "asok-scroll-top",
+    "asok-scroll-to",
+    "asok-char-count",
+    "asok-tabs",
+    "asok-tab",
+    "asok-tab-panel",
+    "asok-progress",
+    "data-asok-progress",
+    "data-progress",
     "asok-state-ref",
     "asok-on-ref:",
     "asok-text-ref",
+    "asok-html-ref",
     "asok-show-ref",
     "asok-hide-ref",
     "asok-class-ref:",
@@ -50,6 +85,7 @@ _DIRECTIVE_MARKERS = (
     "asok-model-ref",
     "asok-if-ref",
     "asok-for-ref",
+    "asok-key-ref",
     "asok-init-ref",
     "asok-fetch-async-ref",
 )
@@ -58,6 +94,7 @@ _JS_FEATURE_MARKERS = (
     "asok-state",
     "asok-on:",
     "asok-text",
+    "asok-html",
     "asok-show",
     "asok-hide",
     "asok-class:",
@@ -65,9 +102,30 @@ _JS_FEATURE_MARKERS = (
     "asok-model",
     "asok-if",
     "asok-for",
+    "asok-cloak",
+    "data-asok-cloak",
+    "data-cloak",
 )
 
-_DATA_MARKERS = ("data-block", "data-sse", "data-url", "data-method")
+_DATA_MARKERS = (
+    "data-block",
+    "data-sse",
+    "data-url",
+    "data-method",
+    "asok-block",
+    "asok-swap",
+    "asok-target",
+    "asok-trigger",
+    "asok-action",
+    "asok-sse",
+    "asok-url",
+    "asok-method",
+    "asok-push-url",
+    "asok-indicator",
+    "asok-disable",
+    "asok-confirm",
+    "asok-include",
+)
 
 _WIDGET_MARKERS = (
     "Asok.",
@@ -89,6 +147,10 @@ _DIRECTIVE_EXPR_ATTRS = frozenset(
         "asok-state",
         "asok-init",
         "asok-fetch-async",
+        # asok-key holds a per-item expression (e.g. "item.id") used by asok-for
+        # for keyed reconciliation. It is compiled like any other expression to
+        # asok-key-ref and evaluated client-side against each item's scope.
+        "asok-key",
     }
 )
 
@@ -247,6 +309,7 @@ class AssetInjector:
     def inject(self) -> str:
         """Execute the asset injection pipeline on the page content and return the result."""
         self._ensure_pending_buffers()
+        self._inject_anti_fouc()       # ← FIRST: prevents all FOUC before any JS loads
         self._inject_meta()
         self._inject_page_id_and_assets()
         self._flush_styles_to_head()
@@ -275,6 +338,65 @@ class AssetInjector:
             request._asok_pending_scripts = ""
         if not hasattr(request, "_asok_pending_styles"):
             request._asok_pending_styles = ""
+
+    # ── 0. anti-FOUC critical CSS ────────────────────────────────
+
+    # Minimal critical CSS injected synchronously into <head> (not buffered)
+    # so it is guaranteed to be parsed before any element is rendered.
+    # Covers three flash sources:
+    #   1. asok-cloak / data-cloak  — elements that must stay hidden until JS runs
+    #   2. asok-show-ref / hide-ref — elements whose visibility depends on JS state
+    #   3. color-scheme             — prevent light-to-dark flash on dark-mode pages
+    _ANTI_FOUC_CSS = (
+        "[asok-cloak],[data-asok-cloak],[data-cloak]"
+        "{display:none!important}"
+        "[asok-show-ref],[asok-hide-ref]"
+        "{visibility:hidden}"
+        ".asok-preload *{transition:none!important}"
+    )
+
+    def _inject_anti_fouc(self) -> None:
+        """Inject critical anti-FOUC CSS directly into <head> as the very first child.
+
+        This must run before any other injection so that the browser applies
+        ``display:none`` to cloaked elements before it paints them.  We also
+        emit an inline ``<script>`` that restores ``color-scheme`` from
+        ``localStorage`` so dark/light-mode theme is set before first paint.
+        """
+        if self.is_block or getattr(self.request, "_asok_anti_fouc_done", False):
+            return
+        # Only needed when the page contains directive/cloak markers
+        if not self._needs_directives() and not self._needs_transitions():
+            return
+        self.request._asok_anti_fouc_done = True
+        nonce = self.nonce
+        # Critical CSS: synchronous, no buffering — injected right after <head>
+        critical = (
+            f'<style id="asok-critical" nonce="{nonce}">'
+            f"{self._ANTI_FOUC_CSS}"
+            f"</style>\n"
+        )
+        # Inline script: restore color-scheme/theme class before first paint
+        # Uses localStorage key "asok-theme" (value: "dark" | "light").
+        # The script is intentionally tiny and synchronous (no defer/async).
+        theme_script = (
+            f'<script nonce="{nonce}">'
+            "(function(){"
+            "try{"
+            "var d=document.documentElement;"
+            "d.classList.add('asok-preload');"
+            "var t=localStorage.getItem('asok-theme')||'system';"
+            "var m=t==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):t;"
+            "d.style.colorScheme=m;"
+            "d.setAttribute('data-theme',m);"
+            "if(m==='dark'){d.classList.add('dark');d.classList.remove('light');}"
+            "else{d.classList.add('light');d.classList.remove('dark');}"
+            "setTimeout(function(){d.classList.remove('asok-preload');},10);"
+            "}catch(e){}"
+            "})()"
+            f"</script>\n"
+        )
+        self._inject_into_head(critical + theme_script)
 
     # ── 1. meta tags ────────────────────────────────────────────
 
@@ -595,15 +717,35 @@ class AssetInjector:
 
     # ── 8. alive (WebSocket components) ────────────────────────
 
+    def _get_fallback_ws_port(self) -> Any:
+        for key in ("ASOK_WS_PORT", "ASOK_PORT"):
+            if os.environ.get(key):
+                return os.environ[key]
+        return self.request.environ.get("SERVER_PORT")
+
+    def _resolve_ws_port(self) -> int | None:
+        val = self.app.config.get("WS_PORT") or self._get_fallback_ws_port()
+        if not val:
+            return None
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return None
+
     def _inject_alive(self) -> None:
         if not self._needs_alive():
             return
         self.request._asok_alive_done = True
         nonce = self.nonce
-        ws_port = self.app.config.get("WS_PORT", 8001)
+        ws_port = self._resolve_ws_port()
+        ws_port_script = (
+            f'<script nonce="{nonce}">window.ASOK_WS_PORT = {ws_port};</script>\n'
+            if ws_port
+            else ""
+        )
         alive_js = self.app.get_asset("asok_alive.min.js")
         self.request._asok_pending_scripts += (
-            f'<script nonce="{nonce}">window.ASOK_WS_PORT = {ws_port};</script>\n'
+            f"{ws_port_script}"
             f'<script nonce="{nonce}">\n{alive_js}\n</script>\n'
         )
 
@@ -674,6 +816,8 @@ class AssetInjector:
             return
         self.request._asok_directives_done = True
         nonce = self.nonce
+        # Cloak CSS is now handled by _inject_anti_fouc — only inject the full
+        # directives CSS (transitions, custom properties, etc.) via the buffer.
         css = self.app.get_asset("asok_directives.min.css")
         self.request._asok_pending_styles += f'<style nonce="{nonce}">{css}</style>'
         registry_url = self._versioned_registry_url()
@@ -757,6 +901,8 @@ class AssetInjector:
     def _inject_directives_full(self, registry_js: str) -> None:
         self.request._asok_directives_done = True
         nonce = self.nonce
+        # Cloak CSS is now handled by _inject_anti_fouc — the full directives CSS
+        # goes into the pending buffer (before </head>) like all other framework CSS.
         css = self.app.get_asset("asok_directives.min.css")
         js = self.app.get_asset("asok_directives.min.js")
         self.request._asok_pending_styles += f'<style nonce="{nonce}">{css}</style>'

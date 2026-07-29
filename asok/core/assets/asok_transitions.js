@@ -19,9 +19,21 @@
       // is inserted as-is to preserve scoped scripts/styles/forms. Sanitization
       // is reserved for genuinely untrusted values (asok-html, WYSIWYG input).
       if (m === "outerHTML" || m === "replaceWith") {
-        const fragment = document.createRange().createContextualFragment(h);
-        const newNodes = Array.from(fragment.childNodes);
-        t.replaceWith(fragment);
+        // Build nodes via a temp div, insert them before the target, then remove
+        // the target — this guarantees newNodes are live in the DOM when returned.
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = h;
+        const newNodes = Array.from(tempDiv.childNodes);
+        if (t.parentNode) {
+          newNodes.forEach(function (node) {
+            t.parentNode.insertBefore(node, t);
+          });
+          t.remove();
+        } else {
+          // Detached target: best-effort replaceWith
+          const fragment = document.createRange().createContextualFragment(h);
+          t.replaceWith(fragment);
+        }
         return newNodes;
       }
       if (m === "innerHTML") {
@@ -31,13 +43,13 @@
       const fragment = document.createRange().createContextualFragment(h);
       const newNodes = Array.from(fragment.childNodes);
       if (m === "beforebegin") {
-        t.parentNode.insertBefore(fragment, t);
+        if (t.parentNode) t.parentNode.insertBefore(fragment, t);
       } else if (m === "afterbegin") {
         t.insertBefore(fragment, t.firstChild);
       } else if (m === "beforeend") {
         t.appendChild(fragment);
       } else if (m === "afterend") {
-        t.parentNode.insertBefore(fragment, t.nextSibling);
+        if (t.parentNode) t.parentNode.insertBefore(fragment, t.nextSibling);
       } else {
         t.insertAdjacentHTML(m, h);
       }
@@ -65,20 +77,27 @@
       });
 
       setTimeout(() => {
-        // Swap content
+        // Swap content — for outerHTML/replaceWith, target is now detached.
         const newNodes = rawSwap(target, html, mode);
         if (callback) callback(newNodes);
 
-        // Clean up leaving classes and apply entering transition
-        target.classList.remove("asok-" + type + "-out", "is-leaving");
-        target.classList.add("asok-" + type + "-in");
+        // Apply entering transition to the *inserted* nodes.
+        // For innerHTML/insert modes, target is still in the DOM and we animate it.
+        // For outerHTML/replaceWith, target is detached — animate the new nodes instead.
+        const isReplaceMode = (mode === 'outerHTML' || mode === 'replaceWith');
+        const transitionTargets = isReplaceMode ? newNodes : [target];
 
-        requestAnimationFrame(() => {
-          target.classList.add("is-entering");
-          setTimeout(() => {
-            target.classList.remove("asok-" + type + "-in", "is-entering");
-            if (durationSpecified) target.style.transitionDuration = '';
-          }, duration);
+        transitionTargets.forEach(function (el) {
+          if (!el || !el.classList) return;
+          el.classList.remove("asok-" + type + "-out", "is-leaving");
+          el.classList.add("asok-" + type + "-in");
+          requestAnimationFrame(() => {
+            el.classList.add("is-entering");
+            setTimeout(() => {
+              el.classList.remove("asok-" + type + "-in", "is-entering");
+              if (durationSpecified) el.style.transitionDuration = '';
+            }, duration);
+          });
         });
       }, duration);
     } else {
@@ -87,3 +106,4 @@
     }
   };
 })();
+

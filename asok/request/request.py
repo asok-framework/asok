@@ -375,8 +375,25 @@ class Request(
         raise UnauthorizedError(message)
 
     def login_required(self) -> None:
-        """Enforce authentication, aborting with 401 if not logged in."""
+        """Enforce authentication, aborting with 401 if not logged in.
+
+        If ``app.config["LOGIN_MESSAGE"]`` is set (and non-empty), it is
+        flashed as an ``"info"`` message *before* the 401 is raised so that
+        the login page (or any error handler) can surface the reason for the
+        redirect to the user.  Set ``LOGIN_MESSAGE`` to ``None`` or ``""``
+        to suppress the flash entirely.
+        """
         if not self.user:
+            app_ref = self.environ.get("asok.app")
+            login_message: Optional[str] = (
+                app_ref.config.get(
+                    "LOGIN_MESSAGE", "Please log in to access this page."
+                )
+                if app_ref
+                else "Please log in to access this page."
+            )
+            if login_message:
+                self.flash("info", login_message)
             self.abort_401()
 
     def not_found(self, message: Optional[str] = None) -> None:
@@ -432,17 +449,17 @@ class Request(
             self._nonce = secrets.token_urlsafe(16)
         return self._nonce
 
+    def _is_secure_cookie_required(self, app_ref: Optional[Any]) -> bool:
+        return self.scheme == "https" or bool(app_ref and not app_ref.config.get("DEBUG"))
+
     def _session_cookie(self, value: str, max_age: Optional[int] = None) -> str:
         """Formats the session cookie header."""
         app_ref: Optional[Any] = self.environ.get("asok.app")
-        samesite = "Lax"
-        if app_ref:
-            samesite = app_ref.config.get("SESSION_SAMESITE", "Lax")
-
+        samesite = app_ref.config.get("SESSION_SAMESITE", "Lax") if app_ref else "Lax"
         cookie = f"asok_session={value}; HttpOnly; Path=/; SameSite={samesite}"
         if max_age is not None:
             cookie += f"; Max-Age={max_age}"
-        if app_ref and not app_ref.config.get("DEBUG"):
+        if self._is_secure_cookie_required(app_ref):
             cookie += "; Secure"
         return cookie
 
@@ -471,7 +488,7 @@ class Request(
         forwarded = self.environ.get("HTTP_X_FORWARDED_FOR")
         if not forwarded or not self._is_proxy_trusted(remote_addr):
             return remote_addr
-        return forwarded.split(",")[-1].strip()
+        return forwarded.split(",")[0].strip()
 
     def _is_proxy_trusted(self, remote_addr: str) -> bool:
         app_ref = self.environ.get("asok.app")
@@ -570,6 +587,17 @@ class Request(
             return
         from urllib.parse import quote
 
+        # Flash the login message from app config (same as login_required does),
+        # so the login page can display the reason for the redirect.
+        app_ref = self.environ.get("asok.app")
+        login_message: Optional[str] = (
+            app_ref.config.get("LOGIN_MESSAGE", "Please log in to access this page.")
+            if app_ref
+            else "Please log in to access this page."
+        )
+        if login_message:
+            self.flash("info", login_message)
+
         next_url = self._safe_next_url()
         next_encoded = quote(next_url, safe="/?&=")
         separator = "&" if "?" in redirect_url else "?"
@@ -588,6 +616,7 @@ class Request(
             )
             return "/"
         return next_url
+
 
     @property
     def app(self) -> Asok:

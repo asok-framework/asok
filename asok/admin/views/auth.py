@@ -6,6 +6,7 @@ from typing import Any
 from ...exceptions import AbortException, RedirectException, SecurityError
 from ...forms import Form
 from ...orm import MODELS_REGISTRY
+from ..rbac import _get_user_roles
 from ..utils import (
     _encrypt_totp_secret,
     _generate_backup_codes,
@@ -39,8 +40,8 @@ class AuthViewsMixin:
             return False
         if getattr(user, "is_admin", False):
             return True
-        roles = getattr(user, "roles", None)
-        return bool(roles)
+        roles = _get_user_roles(user)
+        return len(roles) > 0
 
     def _handle_login_rate_limit(self, request: Any, remaining: int, form: Form) -> Any:
         # SECURITY: Regenerate session on rate limit to prevent session fixation
@@ -112,16 +113,30 @@ class AuthViewsMixin:
         else:
             raise e
 
+    def _handle_login_no_admin_role(self, request: Any, user: Any) -> None:
+        self._log(
+            request,
+            "login_denied_no_role",
+            "User",
+            entity_id=getattr(user, "id", None),
+        )
+        request.flash(
+            "error",
+            self.t(request, "You do not have permission to access the admin panel."),
+        )
+
     def _process_login_attempt(self, request: Any, form: Form) -> None:
         try:
             if form.validate():
                 user = request.authenticate(
                     email=form.email.value, password=form.password.value
                 )
-                if self._has_admin_access(user):
+                if not user:
+                    self._handle_login_failure(request, form.email.value)
+                elif self._has_admin_access(user):
                     self._handle_login_success(request, user)
                 else:
-                    self._handle_login_failure(request, form.email.value)
+                    self._handle_login_no_admin_role(request, user)
         except (AbortException, SecurityError) as e:
             self._handle_login_exception(request, e)
 
@@ -309,6 +324,21 @@ class AuthViewsMixin:
         )
         raise RedirectException(self.prefix + "/2fa-backup-codes")
 
+    def _handle_twofa_setup_post(
+        self, request: Any, u: Any, secret: str, form: Any
+    ) -> None:
+        if not form.validate():
+            return
+        allowed, _ = self._login_rate_check(request)
+        if not allowed:
+            request.flash("error", self.t(request, "Too many attempts. Please try again later."))
+            return
+        if _totp_verify(secret, form.code.value):
+            self._enable_2fa_on_user(request, u, secret)
+        else:
+            self._login_rate_record_failure(request)
+            request.flash("error", self.t(request, "Invalid code, try again."))
+
     def _twofa_setup(self, request: Any) -> Any:
         """Enable 2FA for the current user."""
         u = self._validate_user_for_2fa(request)
@@ -320,10 +350,7 @@ class AuthViewsMixin:
             request,
         )
         if request.method == "POST":
-            if form.validate():
-                if _totp_verify(secret, form.code.value):
-                    self._enable_2fa_on_user(request, u, secret)
-                request.flash("error", self.t(request, "Invalid code, try again."))
+            self._handle_twofa_setup_post(request, u, secret, form)
         return self._render(
             request,
             "2fa_setup.html",

@@ -54,7 +54,7 @@
       </p>
       <div class="form-group" style="max-width:320px; margin:0 auto">
         <label class="form-label" style="justify-content:center">{{ form.code._label }}</label>
-        {{ form.code.input(placeholder='000 000', autofocus=True, inputmode='numeric', pattern='[0-9]{6}', maxlength='6', style='font-size:1.5rem; letter-spacing:0.3em; text-align:center; height:56px; color:var(--brand); font-weight:700') }}
+        {{ form.code.input(placeholder='000 000', autofocus=True, autocomplete='one-time-code', inputmode='numeric', pattern='[0-9]{6}', maxlength='6', style='font-size:1.5rem; letter-spacing:0.3em; text-align:center; height:56px; color:var(--brand); font-weight:700') }}
         {% if form.code.error %}
           <div class="form-error" style="justify-content:center">{{ icon('x', 14) }} {{ form.code.error }}</div>
         {% endif %}

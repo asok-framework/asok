@@ -67,6 +67,7 @@ _IGNORE_DIRS = {
     "uploads",
     ".asok",
     "deployment",
+    "backups",
 }
 _WATCH_EXTS = (".py", ".html", ".asok", ".json", ".css", ".js")
 
@@ -88,7 +89,7 @@ def _collect_watch_dirs() -> list[str]:
 
 
 def _is_ignored_file(f: str) -> bool:
-    if f == "base.build.css":
+    if f == "base.build.css" or f.endswith((".sqlite3", ".sqlite", ".db", ".meta.json")):
         return True
     if f.startswith(".") and f != ".env":
         return True
@@ -261,7 +262,13 @@ def _load_wsgi_and_setup_logging(wsgi_path: str) -> Any:
 
 def _run_server_child(wsgi_path: str, port: int) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    os.environ["ASOK_PORT"] = str(port)
     app = _load_wsgi_and_setup_logging(wsgi_path)
+    if hasattr(app, "startup"):
+        try:
+            app.startup()
+        except Exception as startup_err:
+            print(f"Warning on startup: {startup_err}")
     print(f"Starting Asok development server on http://127.0.0.1:{port}")
     WSGIServer.allow_reuse_address = True
     httpd = make_server("127.0.0.1", port, app, handler_class=_QuietHandler)
@@ -434,6 +441,7 @@ def _get_preview_port(port_arg: int | None) -> int | None:
 
 
 def _run_preview_server(port: int, app: Any) -> None:
+    os.environ["ASOK_PORT"] = str(port)
     Style.heading("PREVIEW SERVER (PRODUCTION MODE)")
     print(
         f"  {Style.DIM}URL  {Style.RESET}{Style.BOLD}http://127.0.0.1:{port}{Style.RESET}"

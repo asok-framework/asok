@@ -475,25 +475,25 @@ class Field:
         return f
 
     @staticmethod
-    def CreatedAt() -> Field:
+    def CreatedAt(**kwargs) -> Field:
         """Automatically populated timestamp on creation."""
-        f = Field("TEXT", None, False, True)
+        f = Field("TEXT", None, False, True, **kwargs)
         f.is_timestamp = True
         f.on = "create"
         return f
 
     @staticmethod
-    def UpdatedAt() -> Field:
+    def UpdatedAt(**kwargs) -> Field:
         """Automatically populated timestamp on every update."""
-        f = Field("TEXT", None, False, True)
+        f = Field("TEXT", None, False, True, **kwargs)
         f.is_timestamp = True
         f.on = "update"
         return f
 
     @staticmethod
-    def SoftDelete() -> Field:
+    def SoftDelete(**kwargs) -> Field:
         """Column for logical deletions."""
-        f = Field("TEXT", None, False, True)
+        f = Field("TEXT", None, False, True, **kwargs)
         f.is_soft_delete = True
         return f
 

@@ -48,184 +48,220 @@ class _DefaultErrorBody(str):
     __slots__ = ()
 
 
+def _read_file_if_exists(path: Optional[str]) -> Optional[str]:
+    if path and os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            pass
+    return None
+
+
+def _get_template_source_from_error(
+    e: Exception,
+) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    from ..exceptions import TemplateError
+
+    if not isinstance(e, TemplateError):
+        return None, None, None
+
+    tpl_name = getattr(e, "template_name", None)
+    line_no = getattr(e, "line_no", None)
+    source = getattr(e, "source_code", None) or _read_file_if_exists(tpl_name)
+    return tpl_name, line_no, source
+
+
+def _format_snippet_line(i: int, line_content: str, is_error_line: bool) -> str:
+    import html
+
+    bg = (
+        "background: #f8d7da; font-weight: bold; color: #842029; border-left: 4px solid #dc3545;"
+        if is_error_line
+        else "border-left: 4px solid transparent;"
+    )
+    num_color = "#842029" if is_error_line else "#6c757d"
+    marker = " &gt;&gt; " if is_error_line else "    "
+    escaped_code = html.escape(line_content)
+    return (
+        f'<div style="line-height: 1.6; padding: 3px 10px; {bg}">'
+        f'<span style="color: {num_color}; font-weight: bold; display: inline-block; width: 45px; text-align: right; margin-right: 15px; user-select: none;">{marker}{i}</span>'
+        f'<code>{escaped_code}</code>'
+        f'</div>'
+    )
+
+
+def _build_source_snippet(source_code: str, line_no: int) -> str:
+    lines = source_code.splitlines()
+    total = len(lines)
+    start = max(1, line_no - 5)
+    end = min(total, line_no + 5)
+    rendered_lines = [
+        _format_snippet_line(i, lines[i - 1] if i <= total else "", i == line_no)
+        for i in range(start, end + 1)
+    ]
+    return f"""
+    <div style="margin-bottom: 25px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 1.1rem; color: #212529; border-bottom: 1px solid #dee2e6; padding-bottom: 8px;">Template Source Snippet</h3>
+        <div style="background: #ffffff; border: 1px solid #ced4da; border-radius: 4px; overflow-x: auto; font-family: Consolas, Menlo, Monaco, monospace; font-size: 0.9rem; padding: 10px 0;">
+            {''.join(rendered_lines)}
+        </div>
+    </div>
+    """
+
+
 def _format_compiled_code(error_msg: str) -> tuple[str, str]:
     import html
 
-    if "Compiled Code:" not in error_msg:
+    code_key = None
+    if "Compiled Code:\n" in error_msg:
+        code_key = "Compiled Code:\n"
+    elif "Code:\n" in error_msg:
+        code_key = "Code:\n"
+
+    if not code_key:
         return error_msg, ""
 
-    parts = error_msg.split("Compiled Code:\n", 1)
+    parts = error_msg.split(code_key, 1)
     error_msg_clean = parts[0].strip()
     code_block = parts[1].split("\n\nContext keys:", 1)[0].strip()
-    # Add line numbers to compiled code block
     lines = code_block.split("\n")
     numbered_lines = []
     for i, line in enumerate(lines, 1):
         numbered_lines.append(
-            f'<span style="color:#888; user-select:none; margin-right: 15px;">{i:3d}</span>{html.escape(line)}'
+            f'<span style="color:#6c757d; user-select:none; margin-right: 15px;">{i:3d}</span>{html.escape(line)}'
         )
     numbered_code = "\n".join(numbered_lines)
     compiled_code_section = f"""
-    <div style="margin-top: 30px;">
-        <h3 style="color: #cbd5e1; font-size: 1.1rem; border-bottom: 1px solid #334155; padding-bottom: 8px; margin-bottom: 12px;">Compiled Python Code</h3>
-        <pre style="background: #0f172a; padding: 15px; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.9rem; line-height: 1.5; color: #38bdf8; border: 1px solid #1e293b;">{numbered_code}</pre>
+    <div class="card">
+        <h3>Compiled Python Code</h3>
+        <pre>{numbered_code}</pre>
     </div>
     """
     return error_msg_clean, compiled_code_section
 
 
+def _build_template_error_title(tpl_name: Optional[str], line_no: Optional[int]) -> str:
+    title = f"Template rendering failed in '{tpl_name or 'Template'}'"
+    if line_no:
+        title += f" on line {line_no}"
+    return title
+
+
+def _extract_error_details(e: Exception) -> tuple[str, str]:
+    import html
+
+    orig_exc = getattr(e, "original_exception", e)
+    return type(orig_exc).__name__, html.escape(str(orig_exc) or str(e))
+
+
 def _render_debug_template_error_page(request: Request, e: Exception) -> str:
     import html
 
-    # In DEBUG mode, render a rich, user-friendly HTML error report
     tb_html = html.escape(traceback.format_exc())
-    error_msg = html.escape(str(e))
-
-    # Parse context variables keys and values (safely stringified)
-    ctx_details = []
-    for k, v in sorted(request.params.items()):
-        try:
-            v_str = html.escape(repr(v))
-        except Exception:
-            v_str = "[unrenderable]"
-        ctx_details.append(
-            f"<tr><td><strong>{html.escape(k)}</strong></td><td><code>{v_str}</code></td></tr>"
-        )
-    ctx_table = "".join(ctx_details)
-
-    ctx_section = (
-        f"<table><thead><tr><th>Variable</th><th>Value</th></tr></thead><tbody>{ctx_table}</tbody></table>"
-        if ctx_table
-        else "<p style='color: #9ca3af; font-style: italic;'>No context parameters set.</p>"
+    tpl_name, line_no, source_code = _get_template_source_from_error(e)
+    snippet_section = (
+        _build_source_snippet(source_code, line_no) if (source_code and line_no) else ""
     )
+    error_title = _build_template_error_title(tpl_name, line_no)
+    exc_type_name, error_msg = _extract_error_details(e)
+    error_msg_clean, compiled_code_section = _format_compiled_code(html.escape(str(e)))
 
-    error_msg_clean, compiled_code_section = _format_compiled_code(error_msg)
+    from .errors import _build_debug_context_table
+
+    ctx_section = _build_debug_context_table(request)
 
     html_body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Template Error — Asok Debugger</title>
+    <title>{html.escape(error_title)} — Asok Debugger</title>
     <style>
         body {{
-            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #0b0f19;
-            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8f9fa;
+            color: #212529;
             margin: 0;
-            padding: 40px 20px;
+            padding: 0 0 50px 0;
             line-height: 1.5;
         }}
-        .container {{
-            max-width: 900px;
-            margin: 0 auto;
-            background: #111827;
-            border: 1px solid #1f2937;
-            border-radius: 12px;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
-            overflow: hidden;
-        }}
         .header {{
-            background: #ef4444;
-            color: #fff;
+            background: #d9534f;
+            color: #ffffff;
             padding: 24px 32px;
-            border-bottom: 1px solid #dc2626;
+            border-bottom: 2px solid #c9302c;
         }}
         .header h1 {{
-            margin: 0;
-            font-size: 1.5rem;
+            margin: 0 0 8px 0;
+            font-size: 1.6rem;
             font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
         }}
-        .content {{
-            padding: 32px;
+        .header .subtitle {{
+            font-size: 1.05rem;
+            opacity: 0.95;
+            font-family: Consolas, Menlo, Monaco, monospace;
         }}
-        .error-message {{
-            background: #271c1c;
-            border: 1px solid #7f1d1d;
-            color: #fca5a5;
-            padding: 16px 20px;
-            border-radius: 8px;
-            font-size: 1.1rem;
-            font-weight: 500;
+        .container {{
+            max-width: 1580px;
+            margin: 30px auto 0 auto;
+            padding: 0 20px;
+        }}
+        .card {{
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 24px;
             margin-bottom: 24px;
-            word-break: break-word;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }}
-        .section-title {{
+        h3 {{
+            margin-top: 0;
+            margin-bottom: 15px;
             font-size: 1.1rem;
-            font-weight: 600;
-            color: #e2e8f0;
-            margin: 24px 0 12px 0;
-            border-bottom: 1px solid #374151;
+            color: #343a40;
+            border-bottom: 1px solid #e9ecef;
             padding-bottom: 8px;
         }}
         pre {{
-            background: #1e293b;
-            padding: 20px;
-            border-radius: 8px;
+            background: #f1f3f5;
+            color: #212529;
+            padding: 16px;
+            border-radius: 4px;
             overflow-x: auto;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
             font-size: 0.9rem;
-            color: #cbd5e1;
-            border: 1px solid #334155;
+            border: 1px solid #ced4da;
             margin: 0;
+            line-height: 1.5;
         }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            font-size: 0.9rem;
-        }}
-        th, td {{
+        td, th {{
+            padding: 8px 12px;
+            border-bottom: 1px solid #dee2e6;
             text-align: left;
-            padding: 10px 12px;
-            border-bottom: 1px solid #1f2937;
-        }}
-        th {{
-            background: #1f2937;
-            color: #9ca3af;
-            font-weight: 600;
-        }}
-        tr:hover td {{
-            background: #1e293b;
         }}
         code {{
-            font-family: monospace;
-            color: #a855f7;
-            background: #2e1065;
-            padding: 2px 6px;
-            border-radius: 4px;
-        }}
-        .badge {{
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            background: #f87171;
-            color: #7f1d1d;
+            font-family: Consolas, Menlo, Monaco, monospace;
+            color: #d63384;
+            background: #e9ecef;
+            padding: 2px 5px;
+            border-radius: 3px;
         }}
     </style>
 </head>
 <body>
+    <div class="header">
+        <h1>{html.escape(error_title)}</h1>
+        <div class="subtitle">{html.escape(exc_type_name)}: {error_msg}</div>
+    </div>
     <div class="container">
-        <div class="header">
-            <h1><span class="badge">Error</span> Template rendering failed</h1>
-        </div>
-        <div class="content">
-            <div class="error-message">
-                {error_msg_clean}
-            </div>
-
-            <h3 class="section-title">Traceback</h3>
+        {snippet_section}
+        <div class="card">
+            <h3>Python Traceback</h3>
             <pre>{tb_html}</pre>
-
-            {compiled_code_section}
-
-            <h3 class="section-title">Context Variables (Request Params)</h3>
+        </div>
+        {compiled_code_section}
+        <div class="card">
+            <h3>Request Context</h3>
             {ctx_section}
         </div>
     </div>
@@ -525,10 +561,26 @@ class WSGIMixin:
     ) -> list[bytes]:
         output = self._encode_response(res)
         headers = [("Content-Type", request.content_type)]
+        # SECURITY: this path (openapi.json, /docs, GraphQL) previously bypassed
+        # security headers entirely. Add the static baseline (X-Content-Type-Options
+        # nosniff, X-Frame-Options, Referrer-Policy, ...) so JSON can't be MIME-sniffed
+        # into an executable document and the docs page can't be framed. CSP/HSTS are
+        # intentionally omitted: a nonce CSP would break the docs page's inline
+        # scripts/handlers, and these responses are not nonce-rendered.
+        headers += self._api_baseline_security_headers()
         headers += self._cookie_headers(request, request.environ)
         headers.append(("Content-Length", str(len(output))))
         start_response(request.status, headers)
         return [output]
+
+    def _api_baseline_security_headers(self) -> list[tuple[str, str]]:
+        cached = getattr(self, "_static_security_headers_base", None)
+        if cached is None:
+            self._static_security_headers_base = (
+                self._build_static_security_headers_base()
+            )
+            cached = self._static_security_headers_base
+        return list(cached)
 
     @staticmethod
     def _encode_response(res: Any) -> bytes:
@@ -1004,20 +1056,31 @@ class WSGIMixin:
         return None
 
     def _handle_template_error(self, request: Request, e: Exception) -> Any:
+        import sys
+
+        tb_str = traceback.format_exc()
+        sys.stderr.write(f"\n[ASOK TEMPLATE ERROR] {e}\n{tb_str}\n")
+        sys.stderr.flush()
+        logger.error("Template rendering error: %s\n%s", str(e), tb_str)
+
         request.status = "500 Internal Server Error"
         if not self.config.get("DEBUG"):
-            logger.error("Template rendering error: %s", str(e))
             msg = "Template Error: An error occurred while rendering the template."
             return self._render_error_page(request, 500, message=msg)
         return _render_debug_template_error_page(request, e)
 
     def _handle_unknown_exception(self, request: Request, e: Exception) -> Any:
+        import sys
+
         error_id = str(uuid.uuid4())[:8]
+        tb_str = traceback.format_exc()
+        sys.stderr.write(f"\n[ASOK EXCEPTION ID:{error_id}] {type(e).__name__}: {e}\n{tb_str}\n")
+        sys.stderr.flush()
         logger.error(
             "[ERROR-ID:%s] Unhandled Exception: %s\n%s",
             error_id,
             str(e),
-            traceback.format_exc(),
+            tb_str,
         )
         if self.config.get("DEBUG"):
             body = self._render_debug_exception_page(request, e)
@@ -1170,8 +1233,18 @@ class WSGIMixin:
             return origin, True
         return None, False
 
+    def _is_wildcard_credentials_allowed(self) -> bool:
+        if self.config.get("CORS_ALLOW_CREDENTIALS_WITH_WILDCARD"):
+            if not self.config.get("DEBUG"):
+                logger.warning(
+                    "SECURITY WARNING: CORS_ALLOW_CREDENTIALS_WITH_WILDCARD is enabled with CORS_ORIGINS='*'. "
+                    "This allows any origin to send credentialed requests."
+                )
+            return True
+        return bool(self.config.get("DEBUG"))
+
     def _resolve_wildcard_cors(self, origin: str) -> tuple[Optional[str], bool]:
-        if self.config.get("DEBUG") and origin:
+        if origin and self._is_wildcard_credentials_allowed():
             return origin, True
         return "*", False
 
@@ -1367,24 +1440,104 @@ class WSGIMixin:
     def _run_specialized_handlers(
         self, request: Request, environ: dict[str, Any], start_response: Callable
     ) -> Optional[list[bytes]]:
-        res = self._handle_options_request(request, environ, start_response)
-        if res is not None:
-            return res
-        res = self._handle_health_check(request, start_response)
-        if res is not None:
-            return res
-        for handler in (
+        for early in (
+            lambda: self._handle_lang_switch(request, environ, start_response),
+            lambda: self._handle_options_request(request, environ, start_response),
+            lambda: self._handle_health_check(request, start_response),
+        ):
+            res = early()
+            if res is not None:
+                return res
+        return self._call_sequential_handlers(request, environ, start_response)
+
+    def _call_sequential_handlers(
+        self, request: Request, environ: dict[str, Any], start_response: Callable
+    ) -> Optional[list[bytes]]:
+        """Run the remaining specialized handlers in priority order."""
+        handlers = [
             lambda: self._handle_reload_request(request, start_response),
             lambda: self._handle_admin_request(request, environ, start_response),
             lambda: self._handle_docs_request(request, start_response),
             lambda: self._handle_graphql_request(request, start_response),
             lambda: self._handle_static_request(request, environ, start_response),
             lambda: self._handle_ssg_isr_request(request, environ, start_response),
-        ):
+        ]
+        for handler in handlers:
             res = handler()
             if res is not None:
                 return res
         return None
+
+
+    def _handle_lang_switch(
+        self, request: Request, environ: dict[str, Any], start_response: Callable
+    ) -> Optional[list[bytes]]:
+        """Intercept ?lang=xx GET requests, set the language cookie, and redirect.
+
+        Fires before SSG/routing so the ``asok_lang`` cookie is set and the
+        browser is sent to the same URL without ``?lang=`` (clean URLs).
+        SPA block requests receive ``X-Asok-Redirect`` instead of a 302.
+        """
+        from .security import _is_safe_lang_value
+
+        lang = request.args.get("lang")
+        if request.method not in ("GET", "HEAD") or not lang:
+            return None
+        if not _is_safe_lang_value(lang):
+            return None
+
+        redirect_url = self._lang_redirect_url(request)
+        cookie = self._lang_cookie_value(lang, request.scheme)
+
+        if environ.get("HTTP_X_BLOCK"):
+            return self._lang_ajax_response(redirect_url, cookie, start_response)
+        return self._lang_plain_redirect(redirect_url, cookie, start_response)
+
+    @staticmethod
+    def _lang_redirect_url(request: Request) -> str:
+        """Build the redirect URL with the ``lang`` query parameter removed."""
+        from urllib.parse import parse_qsl, urlencode
+
+        remaining = [
+            (k, v) for k, v in parse_qsl(request.raw_query_string) if k != "lang"
+        ]
+        if remaining:
+            return request.path + "?" + urlencode(remaining)
+        return request.path
+
+    @staticmethod
+    def _lang_cookie_value(lang: str, scheme: str) -> str:
+        """Build the ``Set-Cookie`` header value for the language preference."""
+        cookie = f"asok_lang={lang}; Path=/; SameSite=Lax; Max-Age=31536000"
+        if scheme == "https":
+            cookie += "; Secure"
+        return cookie
+
+    @staticmethod
+    def _lang_ajax_response(
+        redirect_url: str, cookie: str, start_response: Callable
+    ) -> list[bytes]:
+        """Return a 200 + X-Asok-Redirect for SPA block requests."""
+        start_response("200 OK", [
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("X-Asok-Redirect", redirect_url),
+            ("Set-Cookie", cookie),
+        ])
+        return [b""]
+
+    @staticmethod
+    def _lang_plain_redirect(
+        redirect_url: str, cookie: str, start_response: Callable
+    ) -> list[bytes]:
+        """Return a plain 302 redirect for normal browser requests."""
+        start_response("302 Found", [
+            ("Location", redirect_url),
+            ("Set-Cookie", cookie),
+            ("Cache-Control", "no-store"),
+        ])
+        return [b""]
+
+
 
     @staticmethod
     def _handle_health_check(

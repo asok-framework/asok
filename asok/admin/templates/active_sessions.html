@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon, btn, badge %}
+
+{% block title %}{{ t('Active Admin Sessions') }} — {{ admin_site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ t('Active Admin Sessions') }}</h1>
+    <p class="page-subtitle">
+      {{ t('Monitor, audit, and manage connected user sessions and device access in real time.') }}
+    </p>
+  </div>
+</div>
+
+{# ── Stat cards (standard .card .stat-card) ── #}
+<div class="stats-grid" style="margin-bottom:24px">
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Connected Users') }}</span>
+    <span class="stat-value">{{ total_users }}</span>
+  </div>
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Total Sessions') }}</span>
+    <span class="stat-value">{{ total_sessions }}</span>
+  </div>
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Mobile') }}</span>
+    <span class="stat-value">{{ mobile_count }}</span>
+  </div>
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Desktop') }}</span>
+    <span class="stat-value">{{ desktop_count }}</span>
+  </div>
+</div>
+
+{# ── Sessions table (standard list style) ── #}
+<div class="table-wrap">
+  <div class="list-toolbar">
+    <div class="card-section-title" style="margin:0">
+      {{ icon('shield-check', 16) }} {{ t('Active Sessions') }} ({{ sessions|length }})
+    </div>
+    <div class="seg-group">
+      <a href="{{ admin_prefix }}/active-sessions?filter=15m" class="seg-btn {% if active_filter == '15m' %}active{% endif %}" data-spa>{{ t('Online Now (15m)') }}</a>
+      <a href="{{ admin_prefix }}/active-sessions?filter=24h" class="seg-btn {% if active_filter == '24h' %}active{% endif %}" data-spa>{{ t('Recent (24h)') }}</a>
+      <a href="{{ admin_prefix }}/active-sessions?filter=all" class="seg-btn {% if active_filter == 'all' %}active{% endif %}" data-spa>{{ t('All') }}</a>
+    </div>
+  </div>
+
+  {% if sessions %}
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('User') }}</th>
+          <th>{{ t('Device') }}</th>
+          <th>{{ t('IP / Location') }}</th>
+          <th>{{ t('Activity') }}</th>
+          <th style="width:120px; text-align:right; padding-right:24px">{{ t('ACTIONS') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sess in sessions %}
+          {% set is_curr = (sess.sid == current_sid) %}
+          <tr>
+            <td>
+              <div style="font-weight:600; display:flex; align-items:center; gap:8px">
+                {{ sess.user_name }}
+                {% if sess.is_admin %}<span class="badge badge-info">Admin</span>{% endif %}
+                {% if is_curr %}
+                  <span class="badge badge-success">{{ t('This device') }}</span>
+                {% elif not sess.is_active %}
+                  <span class="badge badge-brand">{{ t('Disconnected') }}</span>
+                {% else %}
+                  <span class="badge badge-success">{{ t('Active') }}</span>
+                {% endif %}
+              </div>
+              <div class="muted" style="font-size:0.85rem">{{ sess.user_email }}</div>
+            </td>
+            <td>
+              <div style="display:flex; align-items:center; gap:6px">
+                {% if sess.is_mobile %}{{ icon('smartphone', 14, 'muted') }}{% else %}{{ icon('laptop', 14, 'muted') }}{% endif %}
+                <span>{{ sess.browser_name }}{% if sess.os_name %} <span class="muted">({{ sess.os_name }})</span>{% endif %}</span>
+              </div>
+            </td>
+            <td>
+              <div>{{ icon('globe', 12, 'muted') }} {{ sess.ip }}</div>
+              <div class="muted" style="font-size:0.85rem">{{ icon('map-pin', 12, 'muted') }} {{ sess.location }}</div>
+            </td>
+            <td>
+              <div><strong>{{ sess.last_seen_str }}</strong> <span class="muted" style="font-size:0.85rem">({{ sess.last_seen_at_str }})</span></div>
+              <div class="muted" style="font-size:0.8rem">{{ t('Connected:') }} {{ sess.created_at_str }} · {{ sess.duration_str }}</div>
+            </td>
+            <td style="text-align:right">
+              <div class="row-actions">
+                {% if sess.is_active and not is_curr %}
+                  <form method="POST" action="{{ admin_prefix }}/active-sessions/revoke" style="display:inline" data-confirm="{{ t('Revoke session?') }}">
+                    {{ request.csrf_input() }}
+                    <input type="hidden" name="sid" value="{{ sess.sid }}">
+                    <input type="hidden" name="filter" value="{{ active_filter }}">
+                    <button type="submit" class="btn btn-ghost btn-icon text-danger" title="{{ t('Revoke session') }}">
+                      {{ icon('trash', 16) }}
+                    </button>
+                  </form>
+                {% endif %}
+                {% if sess.is_active %}
+                  <form method="POST" action="{{ admin_prefix }}/active-sessions/revoke-user" style="display:inline" data-confirm="{{ t('Force logout for this user across all devices?') }}">
+                    {{ request.csrf_input() }}
+                    <input type="hidden" name="user_id" value="{{ sess.user_id }}">
+                    <input type="hidden" name="filter" value="{{ active_filter }}">
+                    <button type="submit" class="btn btn-ghost btn-icon text-danger" title="{{ t('Revoke All') }}">
+                      {{ icon('slash', 16) }}
+                    </button>
+                  </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if total_pages > 1 %}
+    <div class="list-footer" style="display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 24px; border-top:1px solid var(--border); flex-wrap:wrap">
+      <div class="muted" style="font-size:0.82rem">
+        {{ t('Showing') }} <strong>{{ start_count }}–{{ end_count }}</strong> {{ t('of') }} <strong>{{ total_count }}</strong> {{ t('sessions') }}
+      </div>
+      <div style="display:flex; align-items:center; gap:6px">
+        {% if page > 1 %}
+          <a href="{{ admin_prefix }}/active-sessions?filter={{ active_filter }}&page={{ page - 1 }}" class="btn btn-default btn-sm" data-spa>{{ icon('arrow-left', 14) }} {{ t('Previous') }}</a>
+        {% endif %}
+        {% for p in page_range %}
+          {% if p.n == 0 %}
+            <span class="btn btn-default btn-sm" style="pointer-events:none; color:var(--fg-3); min-width:36px; text-align:center">…</span>
+          {% else %}
+            <a href="{{ p.url }}" class="btn btn-sm {% if p.n == page %}btn-primary{% else %}btn-default{% endif %}" style="min-width:36px; text-align:center" data-spa>{{ p.n }}</a>
+          {% endif %}
+        {% endfor %}
+        {% if page < total_pages %}
+          <a href="{{ admin_prefix }}/active-sessions?filter={{ active_filter }}&page={{ page + 1 }}" class="btn btn-default btn-sm" data-spa>{{ t('Next') }} {{ icon('arrow-right', 14) }}</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+  {% else %}
+    <div style="padding:48px 24px">
+      <div class="empty-state">
+        {{ icon('shield-off', 48, 'empty-icon') }}
+        <p class="empty-title">{{ t('No active sessions found') }}</p>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

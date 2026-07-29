@@ -62,7 +62,21 @@ class SecurityError(AsokException):
 class TemplateError(AsokException):
     """Raised when an error occurs during template compilation or rendering."""
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        template_name: str | None = None,
+        line_no: int | None = None,
+        source_code: str | None = None,
+        compiled_code: str | None = None,
+        original_exception: Exception | None = None,
+    ):
+        super().__init__(message)
+        self.template_name = template_name
+        self.line_no = line_no
+        self.source_code = source_code
+        self.compiled_code = compiled_code
+        self.original_exception = original_exception
 
 
 class ValidationError(AsokException):

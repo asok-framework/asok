@@ -133,7 +133,8 @@ class SQLiteEngine(BaseEngine):
         return cursor.rowcount
 
     def quote_identifier(self, name: str) -> str:
-        return f'"{name}"'
+        clean = name.strip('"\'`').replace('"', '""')
+        return f'"{clean}"'
 
     def translate_query(
         self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None

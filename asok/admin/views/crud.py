@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import mimetypes
 import os
 import traceback
 from typing import Any
@@ -11,6 +10,11 @@ from typing import Any
 from ...exceptions import RedirectException
 from ...forms import Form
 from ...orm import ModelError
+from ..access_rules import (
+    resolve_owner_field,
+    user_is_own_scoped,
+    user_locked_fields,
+)
 from ..constants import ALLOWED_UPLOAD_MIMES, BLOCKED_EXTENSIONS
 from ..utils import _display
 
@@ -18,24 +22,81 @@ from ..utils import _display
 class CRUDViewsMixin:
     # ── List view ────────────────────────────────────────────
 
+    @staticmethod
+    def _apply_query_ordering(query: Any, ordering: Any) -> Any:
+        try:
+            if isinstance(ordering, (list, tuple)):
+                for s in ordering:
+                    query = query.order_by(s)
+                return query
+            return query.order_by(ordering)
+        except ValueError:
+            return query.order_by("-id")
+
+    def _sync_sessions_if_needed(self, entry: dict[str, Any]) -> None:
+        slug = entry.get("slug")
+        m_name = getattr(entry.get("model"), "__name__", "")
+        if slug in ("sessions", "active-sessions") or m_name == "AdminSession":
+            try:
+                # CRUDViewsMixin is mixed into Admin, so `self` IS the admin.
+                # (Previously called self.admin.* — an AttributeError that was
+                # silently swallowed, so the AdminSession list never refreshed
+                # from the live session store until /active-sessions was opened.)
+                self._fetch_all_raw_sessions()
+            except Exception as e:
+                import logging
+
+                logging.getLogger("asok.admin").debug(
+                    "Session sync before list failed: %s", e
+                )
+
     def _fetch_list_items(
         self, request: Any, entry: dict[str, Any], trash: bool
-    ) -> tuple[Any, int, int, int]:
-        per_page = entry["per_page"]
+    ) -> tuple[Any, int, int, int, int]:
+        self._sync_sessions_if_needed(entry)
+
+        default_per_page = entry["per_page"]
+        per_page = max(10, min(200, int(request.args.get("per_page") or default_per_page)))
         page = max(1, int(request.args.get("page", 1) or 1))
-        sort = request.args.get("sort", "-id") or "-id"
+        ordering = request.args.get("sort") or entry.get("ordering") or "-id"
 
         query = self._build_query(request, entry, with_trashed=trash)
-        try:
-            query = query.order_by(sort)
-        except ValueError:
-            query = query.order_by("-id")
+        query = self._apply_query_ordering(query, ordering)
 
         total = query.count()
         pages = max(1, (total + per_page - 1) // per_page)
         page = max(1, min(page, pages))
         items = query.limit(per_page).offset((page - 1) * per_page).get()
-        return items, page, pages, total
+        return items, page, pages, total, per_page
+
+    def _prepend_page_boundary(
+        self, request: Any, items: list, start: int
+    ) -> None:
+        if start > 1:
+            items.append({"n": 1, "url": self._qs(request, page=1)})
+            if start > 2:
+                items.append({"n": 0, "url": ""})
+
+    def _append_page_boundary(
+        self, request: Any, items: list, end: int, pages: int
+    ) -> None:
+        if end < pages:
+            if end < pages - 1:
+                items.append({"n": 0, "url": ""})
+            items.append({"n": pages, "url": self._qs(request, page=pages)})
+
+    def _compute_page_range(
+        self, request: Any, page: int, pages: int
+    ) -> list[dict]:
+        window = 2
+        start = max(1, page - window)
+        end = min(pages, page + window)
+        items: list[dict] = []
+        self._prepend_page_boundary(request, items, start)
+        for p in range(start, end + 1):
+            items.append({"n": p, "url": self._qs(request, page=p)})
+        self._append_page_boundary(request, items, end, pages)
+        return items
 
     def _build_item_dicts(
         self, items: list[Any], columns: list[str], model: Any
@@ -96,7 +157,7 @@ class CRUDViewsMixin:
         bulk_actions = []
         if entry["can_delete"]:
             if self._can(request, entry["slug"], "delete"):
-                bulk_actions.append({"name": "delete", "label": "Delete selected"})
+                bulk_actions.append({"name": "delete", "label": "Move to Trash"})
         for act in entry["actions"]:
             bulk_actions.append({"name": act, "label": act.replace("_", " ").title()})
         return bulk_actions
@@ -115,24 +176,184 @@ class CRUDViewsMixin:
             breadcrumbs.append({"label": "Trash", "url": None})
         return breadcrumbs
 
-    def _list(self, request: Any, entry: dict[str, Any], trash: bool = False) -> Any:
-        q = request.args.get("q", "") or ""
-        sort = request.args.get("sort", "-id") or "-id"
+    @staticmethod
+    def _count_model_records_for_day(model: Any, now: Any, days_ago: int) -> int:
+        import datetime
 
-        items, page, pages, total = self._fetch_list_items(request, entry, trash)
+        target_date = now - datetime.timedelta(days=days_ago)
+        # Date-only bounds with an EXCLUSIVE next-day upper bound. Comparing
+        # against "...23:59:59" (space) broke because created_at is stored ISO
+        # with a 'T' separator ('2026-07-24T13:...'), and 'T' (0x54) sorts after
+        # a space (0x20) — so `created_at <= '... 23:59:59'` excluded same-day
+        # rows and the daily chart was always 0. Date-only bounds are separator-
+        # and precision-agnostic.
+        start = target_date.strftime("%Y-%m-%d")
+        end = (target_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            return (
+                model.where("created_at", ">=", start)
+                .where("created_at", "<", end)
+                .count()
+            )
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _generate_chart_labels(now: Any) -> list[str]:
+        import datetime
+
+        return [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+
+    @classmethod
+    def _generate_chart_data(cls, model: Any, now: Any) -> list[int]:
+        return [cls._count_model_records_for_day(model, now, i) for i in range(13, -1, -1)]
+
+    @staticmethod
+    def _count_model_records_range(model: Any, start: str, end_exclusive: str) -> int:
+        # Date-only bounds; end is EXCLUSIVE (next period start) — see
+        # _count_model_records_for_day for why datetime suffixes are avoided.
+        try:
+            return (
+                model.where("created_at", ">=", start)
+                .where("created_at", "<", end_exclusive)
+                .count()
+            )
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _next_month_start(y: int, m: int) -> str:
+        ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+        return f"{ny:04d}-{nm:02d}-01"
+
+    @classmethod
+    def _generate_monthly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+        labels, data = [], []
+        for i in range(11, -1, -1):
+            m, y = now.month - i, now.year
+            while m <= 0:
+                m += 12
+                y -= 1
+            labels.append(f"{y:04d}-{m:02d}-01")
+            data.append(cls._count_model_records_range(model, f"{y:04d}-{m:02d}-01", cls._next_month_start(y, m)))
+        return labels, data
+
+    @classmethod
+    def _generate_quarterly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+        curr_q = (now.month - 1) // 3 + 1
+        labels, data = [], []
+        for i in range(3, -1, -1):
+            q, y = curr_q - i, now.year
+            while q <= 0:
+                q += 4
+                y -= 1
+            sm, em = (q - 1) * 3 + 1, q * 3
+            labels.append(f"{y:04d}-Q{q}")
+            data.append(cls._count_model_records_range(model, f"{y:04d}-{sm:02d}-01", cls._next_month_start(y, em)))
+        return labels, data
+
+    @classmethod
+    def _generate_weekly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+        import datetime
+
+        start_of_current_week = now - datetime.timedelta(days=now.weekday())
+        labels, data = [], []
+        for i in range(3, -1, -1):
+            w_start = start_of_current_week - datetime.timedelta(weeks=i)
+            w_end_excl = w_start + datetime.timedelta(days=7)
+            labels.append(w_start.strftime("%Y-%m-%d"))
+            data.append(cls._count_model_records_range(model, w_start.strftime("%Y-%m-%d"), w_end_excl.strftime("%Y-%m-%d")))
+        return labels, data
+
+    @classmethod
+    def _generate_yearly_chart(cls, model: Any, now: Any) -> tuple[list[str], list[int]]:
+        labels, data = [], []
+        for i in range(4, -1, -1):
+            y = now.year - i
+            labels.append(str(y))
+            data.append(cls._count_model_records_range(model, f"{y:04d}-01-01", f"{y + 1:04d}-01-01"))
+        return labels, data
+
+    @classmethod
+    def _collect_model_list_chart(cls, model: Any) -> dict | None:
+        fields = getattr(model, "_fields", {})
+        if "created_at" not in fields:
+            return None
+        import datetime
+
+        now = datetime.date.today()
+        d_labels = cls._generate_chart_labels(now)
+        d_data = cls._generate_chart_data(model, now)
+        w_labels, w_data = cls._generate_weekly_chart(model, now)
+        m_labels, m_data = cls._generate_monthly_chart(model, now)
+        q_labels, q_data = cls._generate_quarterly_chart(model, now)
+        y_labels, y_data = cls._generate_yearly_chart(model, now)
+
+        if sum(d_data) == 0 and model.count() == 0:
+            return None
+        return {
+            "labels": d_labels,
+            "data": d_data,
+            "daily_labels": d_labels,
+            "daily_data": d_data,
+            "weekly_labels": w_labels,
+            "weekly_data": w_data,
+            "monthly_labels": m_labels,
+            "monthly_data": m_data,
+            "quarterly_labels": q_labels,
+            "quarterly_data": q_data,
+            "yearly_labels": y_labels,
+            "yearly_data": y_data,
+        }
+
+    @staticmethod
+    def _get_list_sort(request: Any) -> str:
+        return request.args.get("sort") or "-id"
+
+    def _get_list_permissions(self, request: Any, slug: str) -> dict[str, bool]:
+        return {
+            "user_can_view": self._can(request, slug, "view"),
+            "user_can_add": self._can(request, slug, "add"),
+            "user_can_edit": self._can(request, slug, "edit"),
+            "user_can_delete": self._can(request, slug, "delete"),
+            "user_can_export": self._can(request, slug, "export"),
+        }
+
+    def _compute_page_counts(
+        self, request: Any, page: int, per_page: int, pages: int, total: int
+    ) -> dict[str, Any]:
+        start_count = (page - 1) * per_page + 1 if total > 0 else 0
+        end_count = min(page * per_page, total)
+        prev_page_url = self._qs(request, page=page - 1) if page > 1 else None
+        next_page_url = self._qs(request, page=page + 1) if page < pages else None
+        return {
+            "start_count": start_count,
+            "end_count": end_count,
+            "prev_page_url": prev_page_url,
+            "next_page_url": next_page_url,
+        }
+
+    def _list(self, request: Any, entry: dict[str, Any], trash: bool = False) -> Any:
+        q = self._get_q_param(request)
+        sort = self._get_list_sort(request)
+
+        items, page, pages, total, per_page = self._fetch_list_items(request, entry, trash)
         item_dicts = self._build_item_dicts(items, entry["columns"], entry["model"])
         bulk_edit_fields = self._build_bulk_edit_fields(request, entry, trash)
         bulk_actions = self._build_bulk_actions(request, entry, trash)
         breadcrumbs = self._build_list_breadcrumbs(entry, trash)
+        list_chart = self._collect_model_list_chart(entry["model"]) if not trash else None
 
         auth_model_name = self.app.config.get("AUTH_MODEL", "User")
         is_auth_model = entry["model"].__name__ == auth_model_name
 
-        user_can_view = self._can(request, entry["slug"], "view")
-        user_can_add = self._can(request, entry["slug"], "add")
-        user_can_edit = self._can(request, entry["slug"], "edit")
-        user_can_delete = self._can(request, entry["slug"], "delete")
-        user_can_export = self._can(request, entry["slug"], "export")
+        perms = self._get_list_permissions(request, entry["slug"])
+        counts = self._compute_page_counts(request, page, per_page, pages, total)
+
+        per_page_options = [
+            {"n": n, "url": self._qs(request, per_page=n, page=None)}
+            for n in [10, 25, 50, 100]
+        ]
 
         return self._render(
             request,
@@ -146,6 +367,13 @@ class CRUDViewsMixin:
             page=page,
             pages=pages,
             total=total,
+            start_count=counts["start_count"],
+            end_count=counts["end_count"],
+            prev_page_url=counts["prev_page_url"],
+            next_page_url=counts["next_page_url"],
+            per_page=per_page,
+            per_page_options=per_page_options,
+            page_range=self._compute_page_range(request, page, pages),
             q=q,
             sort=sort,
             filters=self._build_filters(request, entry),
@@ -160,19 +388,24 @@ class CRUDViewsMixin:
             can_add=entry["can_add"],
             can_edit=entry["can_edit"],
             can_delete=entry["can_delete"],
-            user_can_view=user_can_view,
-            user_can_add=user_can_add,
-            user_can_edit=user_can_edit,
-            user_can_delete=user_can_delete,
-            user_can_export=user_can_export,
+            user_can_view=perms["user_can_view"],
+            user_can_add=perms["user_can_add"],
+            user_can_edit=perms["user_can_edit"],
+            user_can_delete=perms["user_can_delete"],
+            user_can_export=perms["user_can_export"],
             prev_url=self._qs(request, page=page - 1),
             next_url=self._qs(request, page=page + 1),
             export_url=self._qs(request, export="csv", page=None),
             active=entry["slug"],
             breadcrumbs=breadcrumbs,
+            list_chart=list_chart,
         )
 
     def _trash(self, request: Any, entry: dict[str, Any]) -> Any:
+        # Trash (bin) is an admin-only area — enforced server-side, not just hidden.
+        forbidden = self._require_admin_only(request)
+        if forbidden is not None:
+            return forbidden
         if not entry["model"]._soft_delete_field:
             return self._render_error(
                 request,
@@ -184,9 +417,41 @@ class CRUDViewsMixin:
             )
         return self._list(request, entry, trash=True)
 
-    def _parse_bulk_ids(self, request: Any) -> list[int]:
+    def _parse_bulk_ids(self, request: Any, entry: dict[str, Any]) -> list[int]:
         ids_raw = request.form.get("ids", "")
-        return [int(i) for i in ids_raw.split(",") if i.strip().isdigit()]
+        ids = [int(i) for i in ids_raw.split(",") if i.strip().isdigit()]
+        return self._scope_bulk_ids(request, entry, ids)
+
+    def _scope_bulk_ids(
+        self, request: Any, entry: dict[str, Any], ids: list[int]
+    ) -> list[int]:
+        """Drop ids the admin scope would hide, so bulk actions can't reach them.
+
+        SECURITY: scoping must fire for BOTH the code `scope()` callback and the
+        graphical `<slug>.own` rule. The latter is the zero-code case (a role
+        permission, no callback), so gating solely on `entry["scope"]` let an
+        own-scoped user reach other users' rows via bulk delete/edit/actions.
+        """
+        if not ids or not self._bulk_scope_applies(request, entry):
+            return ids
+        allowed = self._scoped_allowed_ids(request, entry, ids)
+        return [i for i in ids if i in allowed]
+
+    def _bulk_scope_applies(self, request: Any, entry: dict[str, Any]) -> bool:
+        """True when either a code `scope()` or the graphical `.own` rule applies."""
+        if entry.get("scope"):
+            return True
+        return user_is_own_scoped(
+            getattr(request, "user", None), entry.get("slug", "")
+        )
+
+    def _scoped_allowed_ids(
+        self, request: Any, entry: dict[str, Any], ids: list[int]
+    ) -> set[int]:
+        model = entry["model"]
+        base = model.with_trashed() if model._soft_delete_field else model.query()
+        query = self._apply_admin_scope(request, base, entry)
+        return {r.id for r in query.where_in("id", ids).get()}
 
     def _filter_user_id(self, ids: list[int], user_id: Any) -> list[int]:
         out = []
@@ -221,7 +486,7 @@ class CRUDViewsMixin:
         for i in ids:
             obj = model.find(id=i)
             if obj:
-                obj.delete()
+                self._move_to_admin_trash(request, entry, obj, slug)
         self._log(
             request,
             "bulk_delete",
@@ -230,7 +495,8 @@ class CRUDViewsMixin:
             changes={"ids": ids},
         )
         request.flash(
-            "success", self.t(request, "Deleted {count} items", count=len(ids))
+            "success",
+            self.t(request, "Moved {count} items to trash", count=len(ids)),
         )
         return None
 
@@ -407,7 +673,7 @@ class CRUDViewsMixin:
 
     def _bulk_action(self, request: Any, entry: dict[str, Any]) -> None:
         action = request.form.get("action")
-        ids = self._parse_bulk_ids(request)
+        ids = self._parse_bulk_ids(request, entry)
         if not ids or not action:
             raise RedirectException(self.prefix + "/" + entry["slug"])
 
@@ -422,11 +688,8 @@ class CRUDViewsMixin:
 
     def _fetch_export_items(self, request: Any, entry: dict[str, Any]) -> list[Any]:
         query = self._build_query(request, entry)
-        sort = request.args.get("sort", "-id") or "-id"
-        try:
-            query = query.order_by(sort)
-        except ValueError:
-            query = query.order_by("-id")
+        ordering = request.args.get("sort") or entry.get("ordering") or "-id"
+        query = self._apply_query_ordering(query, ordering)
         return query.get()
 
     def _resolve_raw_csv_val(self, it: Any, col: str, model: Any) -> Any:
@@ -460,6 +723,48 @@ class CRUDViewsMixin:
             ("Content-Disposition", f'attachment; filename="{entry["slug"]}.csv"')
         ]
         return ""
+
+    def _export_csv_template(self, request: Any, entry: dict[str, Any]) -> str:
+        importable = self._importable_fields(entry["model"], request)
+        buf = io.StringIO()
+        csv.writer(buf).writerow(importable)
+        data = buf.getvalue().encode("utf-8")
+        request.content_type = "text/csv"
+        request.environ["asok.binary_response"] = data
+        request.environ["asok.extra_headers"] = [
+            (
+                "Content-Disposition",
+                f'attachment; filename="{entry["slug"]}-template.csv"',
+            )
+        ]
+        return ""
+
+    def _clone_item_data(self, model: Any, item: Any) -> dict:
+        data = {}
+        for name, field in model._fields.items():
+            if getattr(field, "is_timestamp", False):
+                continue
+            if getattr(field, "is_password", False):
+                continue
+            if getattr(field, "is_soft_delete", False):
+                continue
+            data[name] = getattr(item, name, None)
+        return data
+
+    def _handle_admin_clone(self, request: Any, entry: dict, item: Any, slug: str) -> Any:
+        if not entry["can_add"] or not self._can(request, slug, "add"):
+            return self._forbid(request)
+        data = self._clone_item_data(entry["model"], item)
+        try:
+            new_item = entry["model"].create(**data)
+            self._log(request, "clone", entry["model"].__name__, entity_id=new_item.id)
+            request.flash("success", self.t(request, "Cloned successfully"))
+            raise RedirectException(f"{self.prefix}/{slug}/{new_item.id}")
+        except RedirectException:
+            raise
+        except Exception as exc:
+            request.flash("error", str(exc))
+            raise RedirectException(f"{self.prefix}/{slug}/{item.id}")
 
     def _parse_lookup_limit(self, request: Any) -> int:
         try:
@@ -863,6 +1168,21 @@ class CRUDViewsMixin:
                 m2m = [w] + self._filter_m2m_roles(m2m)
         return m2m
 
+    def _role_permission_matrix(
+        self, request: Any, item: Any, is_role: bool
+    ) -> dict[str, Any] | None:
+        """Permission matrix for a Role — super-admin only.
+
+        SECURITY: the matrix (and its hidden `permissions` input) is only built
+        for super-admins. A `roles.edit`/`roles.view` delegate never sees or
+        submits the permission set — see _apply_role_permissions.
+        """
+        if not is_role:
+            return None
+        if not getattr(getattr(request, "user", None), "is_admin", False):
+            return None
+        return self._build_permission_matrix(request, item)
+
     def _is_editing_self(
         self, request: Any, entry: dict[str, Any], item: Any, is_user: bool
     ) -> bool:
@@ -910,9 +1230,7 @@ class CRUDViewsMixin:
         groups = self._grouped_fields(entry, form, meta)
         m2m = self._build_edit_m2m(request, entry, item, is_user, editing_self)
 
-        permission_matrix = None
-        if is_role:
-            permission_matrix = self._build_permission_matrix(request, item)
+        permission_matrix = self._role_permission_matrix(request, item, is_role)
 
         can_delete_perm = self._get_can_delete_perm(request, entry, editing_self)
 
@@ -929,6 +1247,8 @@ class CRUDViewsMixin:
             title=title,
             can_delete=can_delete_perm,
             can_add=entry["can_add"],
+            user_can_add=self._can(request, entry["slug"], "add"),
+            has_soft_delete=True,
             errors_global=(errors or {}).get("_"),
             active=entry["slug"],
             breadcrumbs=breadcrumbs,
@@ -984,11 +1304,9 @@ class CRUDViewsMixin:
         groups = self._grouped_fields(entry, form, meta)
         m2m = self._build_detail_m2m(entry, item, is_user)
 
-        permission_matrix = None
-        if is_role:
-            permission_matrix = self._build_permission_matrix(request, item)
+        permission_matrix = self._role_permission_matrix(request, item, is_role)
 
-        can_edit_perm = self._can(request, entry["slug"], "edit")
+        can_edit_perm = bool(entry["can_edit"] and self._can(request, entry["slug"], "edit"))
         can_delete_perm = self._get_can_delete_perm(request, entry, viewing_self)
 
         return self._render(
@@ -1004,6 +1322,9 @@ class CRUDViewsMixin:
             title=title,
             can_edit=can_edit_perm,
             can_delete=can_delete_perm,
+            can_add=entry["can_add"],
+            user_can_add=self._can(request, entry["slug"], "add"),
+            has_soft_delete=True,
             active=entry["slug"],
             breadcrumbs=breadcrumbs,
         )
@@ -1058,12 +1379,6 @@ class CRUDViewsMixin:
                 return blocked_ext
         return None
 
-    def _get_upload_mime_type(self, upload: Any) -> str | None:
-        if upload.content_type:
-            return upload.content_type
-        guess = mimetypes.guess_type(upload.filename)[0]
-        return guess
-
     def _validate_file_upload(self, request: Any, upload: Any) -> bool:
         blocked_ext = self._is_blocked_extension(upload.filename)
         if blocked_ext:
@@ -1072,12 +1387,14 @@ class CRUDViewsMixin:
                 self.t(request, "File type not allowed: {ext}", ext=blocked_ext),
             )
             return False
-        mime = self._get_upload_mime_type(upload)
-        if mime and mime not in ALLOWED_UPLOAD_MIMES:
-            request.flash(
-                "error",
-                self.t(request, "File type not allowed: {mime}", mime=mime),
-            )
+        # SECURITY: validate the ACTUAL file content via magic bytes, not the
+        # client-supplied Content-Type (trivially forged). This is the same
+        # authoritative check upload.save() runs; doing it here surfaces a clear
+        # error early, and save() then skips re-validation (self._validated).
+        try:
+            upload.validate_mime_type(list(ALLOWED_UPLOAD_MIMES))
+        except ValueError as e:
+            request.flash("error", str(e))
             return False
         return True
 
@@ -1191,7 +1508,7 @@ class CRUDViewsMixin:
 
     def _handle_password_field(self, request: Any, name: str, item: Any) -> None:
         val = request.form.get(name)
-        if val:
+        if val and not val.startswith("pbkdf2:"):
             setattr(item, name, val)
 
     def _is_permissions_field(self, name: str, is_role: bool) -> bool:
@@ -1214,17 +1531,43 @@ class CRUDViewsMixin:
             self._handle_password_field(request, name, item)
             return True
 
+        if self._field_apply_skipped(request, entry, name, field):
+            return True
+
+        if self._is_permissions_field(name, is_role):
+            self._apply_role_permissions(request, item)
+            return True
+
+        return self._is_admin_self_edit(name, editing_self)
+
+    def _apply_role_permissions(self, request: Any, item: Any) -> None:
+        """Write a role's permission set — super-admin only.
+
+        SECURITY: `roles.edit` lets a delegate manage a role's other fields, but
+        writing `permissions` (incl. the "*" grant) is transitively equivalent to
+        super-admin and must stay gated. For a non-admin we no-op; since
+        `permissions` is stripped from form._fields the stored value is preserved,
+        not wiped.
+        """
+        if not getattr(getattr(request, "user", None), "is_admin", False):
+            return
+        raw_perms = (request.form.get("permissions", "") or "").strip()
+        setattr(item, "permissions", self._parse_permissions(raw_perms))
+
+    def _field_apply_skipped(
+        self, request: Any, entry: dict[str, Any], name: str, field: Any
+    ) -> bool:
+        """Readonly / excluded / role-locked fields are never applied.
+
+        The lock check is server-side enforcement (defense in depth): a posted
+        value for a field the role may not edit is ignored even if the form
+        somehow carried it.
+        """
         if self._is_field_skipped(
             name, field, set(entry["readonly_fields"]), set(entry["form_exclude"])
         ):
             return True
-
-        if self._is_permissions_field(name, is_role):
-            raw_perms = (request.form.get("permissions", "") or "").strip()
-            setattr(item, "permissions", self._parse_permissions(raw_perms))
-            return True
-
-        return self._is_admin_self_edit(name, editing_self)
+        return name in user_locked_fields(getattr(request, "user", None), entry.get("slug", ""))
 
     def _apply_single_field(
         self,
@@ -1246,7 +1589,15 @@ class CRUDViewsMixin:
             self._handle_file_upload(request, item, name, field)
             return
 
-        raw = form._fields[name].value if name in form._fields else None
+        # SECURITY: a scalar field absent from the form was deliberately excluded
+        # (a privilege field stripped for this user, form_exclude, ...). Preserve
+        # the stored value instead of overwriting it with a coerced None — that
+        # would let a submission blank/zero out fields like is_admin on records
+        # the user is otherwise allowed to edit.
+        if name not in form._fields:
+            return
+
+        raw = form._fields[name].value
         if self._handle_morph_to(item, name, raw, entry["model"]):
             return
 
@@ -1267,6 +1618,11 @@ class CRUDViewsMixin:
         auth_name = self.app.config.get("AUTH_MODEL", "User")
         is_user = model.__name__ == auth_name
         editing_self = bool(is_user and self._is_self(request, entry, item))
+        # SECURITY: strip the privilege fields (is_admin, role permissions) the
+        # current user may not set BEFORE applying values. _strip_secured_fields
+        # used to run only on the render path, so a user with edit/add permission
+        # could POST is_admin=1 on another account and escalate to super-admin.
+        self._strip_secured_fields(request, form, None, is_role, editing_self)
         for name, field in model._fields.items():
             self._apply_single_field(
                 request, entry, name, field, item, form, is_role, editing_self
@@ -1282,9 +1638,23 @@ class CRUDViewsMixin:
             return True
         return bool(self._can(request, "roles", "edit"))
 
+    def _extract_raw_form_values(self, request: Any, key: str) -> list[Any]:
+        if hasattr(request.form, "getlist"):
+            vals = request.form.getlist(key)
+            if vals:
+                return vals
+        val = request.form.get(key, "")
+        return [val] if val else []
+
     def _parse_relation_ids(self, request: Any, name: str) -> list[int]:
-        ids_raw = request.form.get(f"m2m_{name}", "")
-        return [int(i) for i in ids_raw.split(",") if i.strip().isdigit()]
+        raw_list = self._extract_raw_form_values(request, f"m2m_{name}")
+        ids = [
+            int(part)
+            for raw in raw_list
+            for part in str(raw).replace(" ", "").split(",")
+            if part.isdigit()
+        ]
+        return list(dict.fromkeys(ids))
 
     def _check_self_role_removal(self, request: Any, ids: list[int]) -> bool:
         if not ids:
@@ -1301,8 +1671,16 @@ class CRUDViewsMixin:
     def _safe_sync(self, item: Any, name: str, ids: list[int]) -> None:
         try:
             item.sync(name, ids)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "Failed to sync relation '%s' for %s #%s: %s",
+                name,
+                type(item).__name__,
+                getattr(item, "id", None),
+                e,
+            )
 
     def _is_roles_self(self, editing_self: bool, name: str) -> bool:
         if not editing_self:
@@ -1323,11 +1701,18 @@ class CRUDViewsMixin:
 
         self._safe_sync(item, name, ids)
 
-    def _sync_m2m(self, request: Any, model: Any, item: Any) -> None:
+    def _is_editing_self_user(self, request: Any, model: Any, item: Any) -> bool:
         auth_name = self.app.config.get("AUTH_MODEL", "User")
-        is_user = model.__name__ == auth_name
-        is_self_uid = getattr(request.user, "id", None) == getattr(item, "id", None)
-        editing_self = bool(is_user and request.user and is_self_uid)
+        if model.__name__ != auth_name or not request.user:
+            return False
+        return getattr(request.user, "id", None) == getattr(item, "id", None)
+
+    def _sync_m2m(self, request: Any, model: Any, item: Any) -> None:
+        editing_self = self._is_editing_self_user(request, model, item)
+        auth_name = self.app.config.get("AUTH_MODEL", "User")
+
+        if model.__name__ == auth_name and hasattr(self, "_inject_user_methods"):
+            self._inject_user_methods()
 
         for name, rel in getattr(model, "_relations", {}).items():
             if rel.type == "BelongsToMany":
@@ -1368,6 +1753,19 @@ class CRUDViewsMixin:
         )
         self._handle_save_redirect(request, entry["slug"], item.id)
 
+    def _apply_owner_default(self, request: Any, entry: dict[str, Any], item: Any) -> None:
+        """Own-scoped creators can't choose an owner: stamp it with their id.
+
+        Pairs with the hidden owner field in `_build_form` — together they let a
+        writer create a record without ever seeing (or setting) another user.
+        """
+        user = getattr(request, "user", None)
+        if not user or not user_is_own_scoped(user, entry.get("slug", "")):
+            return
+        owner_field = resolve_owner_field(entry["model"])
+        if owner_field and not getattr(item, owner_field, None):
+            setattr(item, owner_field, getattr(user, "id", None))
+
     def _create(self, request: Any, entry: dict[str, Any]) -> Any:
         try:
             item = entry["model"]()
@@ -1377,6 +1775,7 @@ class CRUDViewsMixin:
                 return self._edit_form(request, entry, item, form=form, meta=meta)
 
             self._apply_form(request, entry, item, form)
+            self._apply_owner_default(request, entry, item)
 
             try:
                 self._save_and_finalize_creation(request, entry, item, form, meta)

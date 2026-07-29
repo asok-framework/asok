@@ -135,6 +135,58 @@ class ComponentMeta(type):
         return cls
 
 
+def _pop_key(kwargs: dict[str, Any], key1: str, key2: str) -> Any:
+    val = kwargs.pop(key1, None)
+    if val is not None:
+        return val
+    return kwargs.pop(key2, None)
+
+
+def _extract_strategy_flag(kwargs: dict[str, Any]) -> Optional[str]:
+    for strat in ("visible", "idle", "load", "only", "none"):
+        val = _pop_key(kwargs, f"client_{strat}", f"client:{strat}")
+        if val:
+            return strat
+    return None
+
+
+def _extract_media_directive(kwargs: dict[str, Any]) -> Optional[str]:
+    media_kw = _pop_key(kwargs, "client_media", "client:media")
+    if not media_kw:
+        return None
+    m_str = str(media_kw)
+    if m_str.startswith("media:"):
+        return m_str
+    return f"media:{m_str}"
+
+
+def _extract_client_directive(kwargs: dict[str, Any]) -> Optional[str]:
+    client = _pop_key(kwargs, "_client", "client")
+    flag_strat = _extract_strategy_flag(kwargs)
+    if flag_strat:
+        client = flag_strat
+    media_strat = _extract_media_directive(kwargs)
+    if media_strat:
+        client = media_strat
+    if not client:
+        return None
+    return str(client).strip()
+
+
+def _build_client_attr(client_val: Optional[str]) -> str:
+    import html
+
+    if not client_val:
+        return ""
+    c_str = str(client_val).strip()
+    if c_str.startswith("client:"):
+        c_str = c_str.split("client:", 1)[1].strip()
+    if c_str.startswith("media:"):
+        media_q = c_str.split("media:", 1)[1].strip()
+        return f' client:media="{html.escape(media_q)}" data-asok-client="media:{html.escape(media_q)}"'
+    return f' client:{c_str} data-asok-client="{html.escape(c_str)}"'
+
+
 class Component(metaclass=ComponentMeta):
     """Base class for isomorphic reactive components.
 
@@ -146,7 +198,7 @@ class Component(metaclass=ComponentMeta):
         # SECURITY: Use 128-bit CID to prevent brute-force attacks (was 32-bit)
         self._cid: str = kwargs.pop("_cid", secrets.token_hex(16))
         self._session: dict[str, Any] = kwargs.pop("_session", {})
-        self._client: Optional[str] = kwargs.pop("_client", None)
+        self._client: Optional[str] = _extract_client_directive(kwargs)
         self._slot: Optional[str] = None
         # Initial state
         for k, v in kwargs.items():
@@ -278,9 +330,7 @@ class Component(metaclass=ComponentMeta):
         rendered_html = render_template_string(self.render(), ctx)
         state_str = self._sign_state(secret)
 
-        client_attr = (
-            f" client:{self._client}" if getattr(self, "_client", None) else ""
-        )
+        client_attr = _build_client_attr(getattr(self, "_client", None))
 
         return SafeString(
             f'<div id="asok-{self._cid}" '

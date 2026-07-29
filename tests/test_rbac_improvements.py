@@ -10,12 +10,14 @@ from asok.testing import TestClient
 
 
 class User(Model):
+    _table = "users"
     email = Field.String()
     password = Field.Password()
     is_admin = Field.Boolean(default=False)
 
 
 class Role(Model):
+    _table = "roles"
     name = Field.String()
     label = Field.String()
     permissions = Field.Text()
@@ -38,10 +40,20 @@ def app():
     MODELS_REGISTRY["User"] = User
     MODELS_REGISTRY["Role"] = Role
 
+    # Drop stale tables if present
+    engine = User.get_engine()
+    engine.execute("PRAGMA foreign_keys = OFF")
+    for tbl in ("role_user", "mockroles", "mockusers", "users", "roles"):
+        engine.execute(f"DROP TABLE IF EXISTS {tbl}")
+    engine.execute("PRAGMA foreign_keys = ON")
+
     # Create tables
     User.create_table()
     Role.create_table()
     Post.create_table()
+    engine.execute(
+        "CREATE TABLE IF NOT EXISTS role_user (user_id INTEGER, role_id INTEGER)"
+    )
 
     # Create admin instance
     admin = Admin(app)
@@ -327,3 +339,70 @@ class TestUserWithoutRoleBlocked:
         with pytest.raises(RedirectException) as excinfo:
             admin._require_admin(request)
         assert "/admin/login" in excinfo.value.url
+
+
+class TestUserWithRoleAllowed:
+    """Test that users with non-admin roles (e.g. moderator) can log in and see allowed models."""
+
+    def test_moderator_user_login_and_impersonation_visibility(self, app):
+        app_inst, admin = app
+        app_inst.models = [User, Role, Post]
+        admin._discover()
+        engine = User.get_engine()
+
+        # Create moderator role with permissions for posts
+        mod_role = Role(name="moderator", label="Moderator", permissions="posts.view,posts.edit")
+        mod_role.save()
+
+        # Create moderator user (is_admin=False)
+        mod_user = User(email="mod@example.com", password="password123", is_admin=False)
+        mod_user.save()
+
+        # Attach role via pivot table
+        engine.execute(
+            "INSERT INTO role_user (user_id, role_id) VALUES (?, ?)",
+            (mod_user.id, mod_role.id),
+        )
+
+        # 1. Verify has_admin_access
+        assert admin._has_admin_access(mod_user) is True
+
+        # 2. Verify _require_admin does not block mod_user
+        request = MagicMock()
+        request.user = mod_user
+        request.impersonator = None
+        request.flash = MagicMock()
+        # Should not raise exception
+        admin._require_admin(request)
+
+        # 3. Verify impersonation model visibility
+        admin_user = User(email="admin@example.com", password="password123", is_admin=True)
+        admin_user.save()
+
+        req = MagicMock()
+        req.user = mod_user
+        req.impersonator = admin_user
+        req.session = {"impersonator_id": admin_user.id}
+
+        ctx = {}
+        admin._populate_model_groups_ctx(ctx, req)
+        visible_slugs = [m["slug"] for m in ctx.get("admin_models", [])]
+        assert "posts" in visible_slugs
+
+    def test_string_role_login_and_visibility(self, app):
+        app_inst, admin = app
+        app_inst.models = [User, Role, Post]
+        admin._discover()
+
+        # Create moderator role in DB
+        mod_role = Role.create(_trust=True, name="moderator", label="Moderator", permissions="posts.view")
+
+        # Create user with role "moderator"
+        user_with_str_role = User.create(_trust=True, email="mod_str@example.com", password="password123", is_admin=False)
+        user_with_str_role.role = mod_role
+
+        # Verify admin access and permission checks
+        assert admin._has_admin_access(user_with_str_role) is True
+        assert admin._can(MagicMock(user=user_with_str_role), "posts", "view") is True
+
+

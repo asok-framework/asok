@@ -20,10 +20,15 @@ def build_foreign_key_property(field_name: str, related_model: Any) -> property:
         val = getattr(self, field_name)
         if not val:
             return None
+        # related_model may be a string ("User") — resolve it lazily at access
+        # time (the target class may not be registered when the FK is declared).
+        model = MODELS_REGISTRY.get(related_model) if isinstance(related_model, str) else related_model
+        if model is None:
+            return None
         from .router import database_router_context
 
         with database_router_context(shard=getattr(self, "_shard", None)):
-            return related_model.find(id=val)
+            return model.find(id=val)
 
     return property(get_related)
 
@@ -276,8 +281,12 @@ def _execute_pivot_query(instance, rel, target_model):
             f"WHERE p.{q_pfk} = ?"
         )
         rows = engine.execute(sql, (instance.id,))
+        # _trust=True: these are trusted DB rows. Without it, the mass-assignment
+        # guard would discard `protected` columns (e.g. is_admin, password) and
+        # route encrypted fields through the wrong coercion path — corrupting
+        # BelongsToMany-loaded instances. Matches Query._instantiate_row.
         results = ModelList(
-            (target_model(**row) for row in rows),
+            (target_model(_trust=True, **row) for row in rows),
             sql=sql,
             args=[instance.id],
         )

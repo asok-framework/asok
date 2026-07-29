@@ -38,6 +38,7 @@ class ScheduledTask:
         fn: Callable,
         args: Optional[tuple] = None,
         kwargs: Optional[dict[str, Any]] = None,
+        run_initial: bool = False,
     ):
         """Initialize and start the scheduled task thread."""
         if isinstance(interval, str):
@@ -48,6 +49,7 @@ class ScheduledTask:
         self._fn = fn
         self._args = args or ()
         self._kwargs = kwargs or {}
+        self._run_initial = run_initial
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -117,15 +119,21 @@ class ScheduledTask:
             )
             return True
 
+    def _execute_task_safe(self) -> None:
+        if not self._acquire_distributed_lock():
+            return
+        try:
+            self._fn(*self._args, **self._kwargs)
+        except Exception:
+            logger.exception("Scheduled task %s failed", getattr(self._fn, "__name__", str(self._fn)))
+
     def _run(self) -> None:
         """Internal loop that executes the function at the specified interval."""
+        if self._run_initial:
+            self._execute_task_safe()
+
         while not self._stop_event.wait(timeout=self._interval):
-            if not self._acquire_distributed_lock():
-                continue
-            try:
-                self._fn(*self._args, **self._kwargs)
-            except Exception:
-                logger.exception("Scheduled task %s failed", self._fn.__name__)
+            self._execute_task_safe()
 
     def cancel(self) -> None:
         """Stop the scheduled task from recurring."""

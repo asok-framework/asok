@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon %}
+{% block title %}{{ t('Trash') }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ icon('trash', 20) }} {{ t('Trash') }}</h1>
+    <p class="page-subtitle">
+      {% if total == 0 %}{{ t('Trash is empty') }}
+      {% elif total == 1 %}1 {{ t('item in trash') }}
+      {% else %}{{ total }} {{ t('items in trash') }}{% endif %}
+    </p>
+  </div>
+  <div class="page-actions">
+    {% if total > 0 %}
+    <form method="post" action="{{ admin_prefix }}/trash/empty" style="display:inline"
+          data-block="#page-body" data-push-url
+          data-confirm="{{ t('Permanently delete all items in trash?') }}">
+      {{ request.csrf_input() }}
+      {% if model_filter %}
+      <input type="hidden" name="model_slug" value="{{ model_filter }}">
+      {% endif %}
+      <button type="submit" class="btn btn-ghost btn-sm text-danger">
+        {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Empty trash') }}</span>
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if model_slugs | length > 1 %}
+<div style="margin-bottom:16px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+  <span class="muted" style="font-size:0.85rem">{{ t('Filter') }}:</span>
+  <a href="{{ admin_prefix }}/trash" class="btn btn-sm {% if not model_filter %}btn-primary{% else %}btn-secondary{% endif %}" data-spa>
+    {{ t('All') }}
+  </a>
+  {% for m in model_slugs %}
+  <a href="{{ admin_prefix }}/trash?model_slug={{ m.slug }}" class="btn btn-sm {% if model_filter == m.slug %}btn-primary{% else %}btn-secondary{% endif %}" data-spa>
+    {{ m.label }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if items %}
+<div class="card">
+  <div class="table-wrap" style="box-shadow:none">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('Model') }}</th>
+          <th>{{ t('ID') }}</th>
+          <th>{{ t('Record') }}</th>
+          <th>{{ t('Deleted at') }}</th>
+          <th style="width:180px; text-align:right"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>
+            <a href="{{ admin_prefix }}/{{ it.model_slug }}" class="badge badge-ghost" data-spa style="text-decoration:none">
+              {{ it.model_slug }}
+            </a>
+          </td>
+          <td class="muted" style="font-family:monospace">#{{ it.object_id }}</td>
+          <td>{{ it.object_repr or '—' }}</td>
+          <td class="muted" style="font-size:0.85rem">{{ it.deleted_at }}</td>
+          <td style="text-align:right; white-space:nowrap">
+            <form method="post" action="{{ admin_prefix }}/trash/{{ it.id }}/restore"
+                  style="display:inline"
+                  data-block="#page-body" data-push-url>
+              {{ request.csrf_input() }}
+              <button type="submit" class="btn btn-ghost btn-sm" title="{{ t('Restore') }}">
+                {{ icon('history', 14) }} {{ t('Restore') }}
+              </button>
+            </form>
+            <form method="post" action="{{ admin_prefix }}/trash/{{ it.id }}/delete"
+                  style="display:inline"
+                  data-block="#page-body" data-push-url
+                  data-confirm="{{ t('Permanently delete this record?') }}">
+              {{ request.csrf_input() }}
+              <button type="submit" class="btn btn-ghost btn-sm text-danger" title="{{ t('Delete permanently') }}">
+                {{ icon('x', 14) }}
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if pages > 1 %}
+<div class="pagination" style="margin-top:20px; border-radius: var(--r-lg); border: 1px solid var(--border)">
+  <div style="font-size: 0.82rem; color: var(--fg-3)">
+    {{ t('Showing') }} <strong>{{ start_count }}–{{ end_count }}</strong> {{ t('of') }} <strong>{{ total }}</strong> {{ t('items') }}
+  </div>
+  <div class="pagination-btns">
+    {% if page > 1 %}
+      <a href="{{ admin_prefix }}/trash?page={{ page - 1 }}{% if model_filter %}&model_slug={{ model_filter }}{% endif %}" class="btn btn-default btn-sm" data-spa>
+        {{ icon('arrow-left', 14) }} {{ t('Previous') }}
+      </a>
+    {% endif %}
+    {% for p in range(1, pages + 1) %}
+      <a href="{{ admin_prefix }}/trash?page={{ p }}{% if model_filter %}&model_slug={{ model_filter }}{% endif %}"
+         class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-default{% endif %}" style="min-width:36px; text-align:center" data-spa>{{ p }}</a>
+    {% endfor %}
+    {% if page < pages %}
+      <a href="{{ admin_prefix }}/trash?page={{ page + 1 }}{% if model_filter %}&model_slug={{ model_filter }}{% endif %}" class="btn btn-default btn-sm" data-spa>
+        {{ t('Next') }} {{ icon('arrow-right', 14) }}
+      </a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state" style="padding:80px 20px">
+  {{ icon('trash', 48) }}
+  <p class="empty-text" style="margin-top:16px">{{ t('Trash is empty') }}</p>
+</div>
+{% endif %}
+
+{% endblock %}

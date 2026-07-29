@@ -38,14 +38,14 @@
           {{ icon('home', 16) }} <span>{{ t('Go to Dashboard') }}</span>
         </a>
       {% elif error_code == 404 %}
-        <a href="javascript:history.back()" class="btn btn-default">
+        <a href="#" class="btn btn-default btn-back" data-prefix="{{ admin_prefix }}">
           {{ icon('arrow-left', 16) }} <span>{{ t('Go Back') }}</span>
         </a>
         <a href="{{ admin_prefix }}" class="btn btn-primary" data-spa>
           {{ icon('home', 16) }} <span>{{ t('Go to Dashboard') }}</span>
         </a>
       {% elif error_code == 500 %}
-        <a href="javascript:location.reload()" class="btn btn-primary">
+        <a href="#" class="btn btn-primary btn-reload">
           {{ icon('refresh-cw', 16) }} <span>{{ t('Retry') }}</span>
         </a>
         <a href="{{ admin_prefix }}" class="btn btn-default" data-spa>

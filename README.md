@@ -7,6 +7,7 @@
   <a href="https://github.com/asok-framework/asok/blob/main/LICENSE"><img src="https://img.shields.io/github/license/asok-framework/asok?style=for-the-badge&color=4169e1" alt="License"></a>
   <a href="https://pypi.org/project/asok/"><img src="https://img.shields.io/pypi/v/asok?style=for-the-badge&color=228b22" alt="PyPI Version"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10+-3776ab?style=for-the-badge&logo=python&logoColor=white" alt="Python Version"></a>
+  <a href="https://asok-framework.github.io/asok-docs/"><img src="https://img.shields.io/badge/Documentation-Python%20Docs-success?style=for-the-badge&logo=sphinx&logoColor=white" alt="Documentation"></a>
   <a href="https://github.com/asok-framework/asok/actions"><img src="https://img.shields.io/github/actions/workflow/status/asok-framework/asok/tests.yml?style=for-the-badge&label=tests" alt="Tests"></a>
 </p>
 
@@ -18,7 +19,7 @@ Asok is a batteries-included Python web framework built entirely on the standard
 
 Built for developers who want a complete stack without assembling one.
 
-🌐 **[Documentation](https://asok-framework.com/docs)** · 💬 **[Discord](https://discord.com/invite/aYYkuPT3qR)** · 🎥 **[Tutorials](https://www.youtube.com/@asok-framework)**
+🌐 **[Python Library Documentation](https://asok-framework.github.io/asok-docs/)** · 📚 **[Website](https://asok-framework.com)** · 💬 **[Discord](https://discord.com/invite/aYYkuPT3qR)** · 🎥 **[Tutorials](https://www.youtube.com/@asok-framework)**
 
 ---
 

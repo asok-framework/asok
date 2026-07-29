@@ -5,6 +5,18 @@
  *  version: 2.0.0
 */
 
-[asok-cloak] {
-  display: none !important
+/*
+ * NOTE: [asok-cloak], [data-asok-cloak], [data-cloak], [asok-show-ref],
+ * [asok-hide-ref] are handled by the inline critical CSS injected directly
+ * into <head> by the asset injector (_inject_anti_fouc), which guarantees
+ * zero FOUC regardless of when this stylesheet loads.
+ *
+ * visibility:hidden on [asok-show-ref]/[asok-hide-ref] is removed in JS
+ * (via el.style.visibility = '') at first initialization, so no CSS rule
+ * is needed here for cleanup.
+*/
+
+.asok-copied:not([data-copied]):not([asok-copied-text])::after {
+  content: " ✓";
+  opacity: 0.9;
 }

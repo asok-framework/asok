@@ -26,6 +26,48 @@
     cacheKeys.push(key);
   }
 
+  function getAttr(el, name) {
+    if (!el || !el.getAttribute) return null;
+    let val = el.getAttribute('asok-' + name);
+    if (val !== null) return val;
+    val = el.getAttribute('data-' + name);
+    if (val !== null) return val;
+    val = el.getAttribute('data-asok-' + name);
+    if (val !== null) return val;
+    return null;
+  }
+
+  function hasAttr(el, name) {
+    if (!el || !el.hasAttribute) return false;
+    return (
+      el.hasAttribute('asok-' + name) ||
+      el.hasAttribute('data-' + name) ||
+      el.hasAttribute('data-asok-' + name)
+    );
+  }
+
+  // Release per-element SPA resources (SSE connections, polling intervals) before
+  // a node is removed from the DOM. Without this, swapping out content that holds
+  // an asok-sse EventSource or an `every ...` trigger leaks the connection/timer,
+  // which keeps firing on a detached node for the rest of the session.
+  function cleanupSpaResources(node) {
+    if (!node || node.nodeType !== 1) return;
+    const release = function (el) {
+      if (el.__asokSse) {
+        try { el.__asokSse.close(); } catch (e) { }
+        delete el.__asokSse;
+        delete el.__asokSseSetup;
+      }
+      if (el.__asokEveryInterval) {
+        clearInterval(el.__asokEveryInterval);
+        delete el.__asokEveryInterval;
+        delete el.__asokTriggerSetup;
+      }
+    };
+    release(node);
+    if (node.querySelectorAll) node.querySelectorAll('*').forEach(release);
+  }
+
   // Retrieve the CSRF token from page meta tag
   function getCsrfToken() {
     const meta = document.querySelector('meta[name=csrf-token]');
@@ -75,12 +117,15 @@
   }
 
   function doSwap(target, html, mode, pushData) {
+    if (mode === 'append') mode = 'beforeend';
+    if (mode === 'prepend') mode = 'afterbegin';
     const realTarget = target._isBlockMarker ? target._startMarker.parentNode : target;
 
     const cleanNodes = function (nodes) {
       const targets = Array.isArray(nodes) ? nodes : [nodes];
       targets.forEach(function (t) {
         if (!t) return;
+        cleanupSpaResources(t);
         if (t.querySelectorAll) {
           t.querySelectorAll('[data-asok-component]').forEach(function (el) {
             delete el.__asokWsReady;
@@ -130,15 +175,17 @@
         script.parentNode.replaceChild(newScript, script);
       });
 
-      // Re-initialize directives and lifecycles
+      // Re-initialize directives and lifecycles.
+      // window.Asok.init already chains AsokDirectives.init (see the init wrapping
+      // in asok_directives.js / asok_spa.js), so calling both would run the
+      // directive pass twice on every inserted node. Fall back to a direct
+      // AsokDirectives.init only if the Asok.init chain isn't present.
       nodes.forEach(function (node) {
-        if (node.querySelectorAll) {
-          if (window.AsokDirectives && window.AsokDirectives.init) {
-            window.AsokDirectives.init(node);
-          }
-          if (window.Asok && window.Asok.init) {
-            window.Asok.init(node);
-          }
+        if (!node.querySelectorAll) return;
+        if (window.Asok && window.Asok.init) {
+          window.Asok.init(node);
+        } else if (window.AsokDirectives && window.AsokDirectives.init) {
+          window.AsokDirectives.init(node);
         }
       });
 
@@ -156,8 +203,9 @@
 
         document.body.style.overflow = '';
 
-        if (pushData.src && pushData.src.dataset && pushData.src.dataset.pushUrl !== undefined) {
-          const pushUrl = pushData.src.dataset.pushUrl || pushData.url;
+        const pushUrlAttr = pushData.src ? getAttr(pushData.src, 'push-url') : null;
+        if (pushData.src && (pushUrlAttr !== null || (pushData.src.dataset && pushData.src.dataset.pushUrl !== undefined))) {
+          const pushUrl = pushUrlAttr || pushData.src.dataset.pushUrl || pushData.url;
           history.pushState({ b: pushData.b, sel: pushData.sel, mode: mode, url: pushData.url }, '', pushUrl);
         }
 
@@ -211,22 +259,62 @@
         sibling = sibling.nextSibling;
       }
 
-      cleanNodes(nodesToRemove);
+      // Build new nodes from html (for all insert modes that need new content)
+      const buildNewNodes = function (htmlStr) {
+        const tempContainer = document.createElement('div');
+        tempContainer.innerHTML = htmlStr;
+        return Array.from(tempContainer.childNodes);
+      };
 
-      nodesToRemove.forEach(function (node) {
-        node.remove();
-      });
+      var insertedNodes;
 
-      const tempContainer = document.createElement('div');
-      // HTML is server-rendered (same-origin, trusted); insert as-is to preserve
-      // scoped scripts/styles/forms. Sanitization is reserved for untrusted input.
-      tempContainer.innerHTML = html;
-      const insertedNodes = Array.from(tempContainer.childNodes);
-      insertedNodes.forEach(function (node) {
-        startMarker.parentNode.insertBefore(node, endMarker);
-      });
+      if (mode === 'delete') {
+        // Delete mode: remove all nodes between markers, insert nothing
+        cleanNodes(nodesToRemove);
+        nodesToRemove.forEach(function (node) { node.remove(); });
+        insertedNodes = [];
+      } else if (mode === 'beforebegin') {
+        // Insert before the start marker (outside the block)
+        insertedNodes = buildNewNodes(html);
+        if (startMarker.parentNode) {
+          insertedNodes.forEach(function (node) {
+            startMarker.parentNode.insertBefore(node, startMarker);
+          });
+        }
+      } else if (mode === 'afterend') {
+        // Insert after the end marker (outside the block)
+        insertedNodes = buildNewNodes(html);
+        if (endMarker.parentNode) {
+          const afterEnd = endMarker.nextSibling;
+          insertedNodes.forEach(function (node) {
+            endMarker.parentNode.insertBefore(node, afterEnd);
+          });
+        }
+      } else if (mode === 'afterbegin') {
+        // Prepend inside block (before existing block content, after start marker)
+        insertedNodes = buildNewNodes(html);
+        const firstChild = startMarker.nextSibling === endMarker ? endMarker : startMarker.nextSibling;
+        insertedNodes.forEach(function (node) {
+          startMarker.parentNode.insertBefore(node, firstChild);
+        });
+      } else if (mode === 'beforeend') {
+        // Append inside block (after existing block content, before end marker)
+        insertedNodes = buildNewNodes(html);
+        insertedNodes.forEach(function (node) {
+          endMarker.parentNode.insertBefore(node, endMarker);
+        });
+      } else {
+        // Default (innerHTML / outerHTML / replaceWith): replace block content
+        cleanNodes(nodesToRemove);
+        nodesToRemove.forEach(function (node) { node.remove(); });
+        insertedNodes = buildNewNodes(html);
+        insertedNodes.forEach(function (node) {
+          startMarker.parentNode.insertBefore(node, endMarker);
+        });
+      }
 
       afterSwap(insertedNodes);
+
     } else if (target.tagName === 'META') {
       target.content = html;
       afterSwap([target]);
@@ -239,20 +327,36 @@
 
       if (window.Asok && window.Asok.swap) {
         window.Asok.swap(target, html, mode, function (newNodes) {
-          afterSwap(newNodes || [target]);
+          // For replace modes, target is detached — pass inserted nodes, not old target
+          afterSwap(newNodes && newNodes.length ? newNodes : (mode === 'outerHTML' || mode === 'replaceWith' || mode === 'delete' ? [] : [target]));
         });
       } else {
-        // Fallback swap (used when Asok.swap is unavailable). Server HTML is
-        // trusted and inserted as-is, consistent with the primary swap path.
         const safeHtml = html;
 
         if (mode === 'delete') {
           target.remove();
           afterSwap([]);
         } else if (mode === 'outerHTML' || mode === 'replaceWith') {
-          const fragment = document.createRange().createContextualFragment(safeHtml);
-          const newNodes = Array.from(fragment.childNodes);
-          target.replaceWith(fragment);
+          // Build the fragment, then capture nodes AFTER transferring them into the DOM
+          // so that afterSwap receives live, connected nodes (not detached fragment children).
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = safeHtml;
+          const newNodes = Array.from(tempDiv.childNodes);
+          // insertBefore each node from tempDiv before target, then remove target
+          if (target.parentNode) {
+            newNodes.forEach(function (node) {
+              target.parentNode.insertBefore(node, target);
+            });
+            target.remove();
+          } else {
+            // target has no parent (detached) — best effort: use replaceWith
+            const fragment = document.createRange().createContextualFragment(safeHtml);
+            target.replaceWith(fragment);
+          }
+          // Update <title> if any of the new nodes is or contains a <title>
+          newNodes.forEach(function (node) {
+            if (node.tagName === 'TITLE') document.title = node.innerText || node.textContent;
+          });
           afterSwap(newNodes);
         } else if (mode === 'innerHTML') {
           target.innerHTML = safeHtml;
@@ -261,13 +365,17 @@
           const fragment = document.createRange().createContextualFragment(safeHtml);
           const newNodes = Array.from(fragment.childNodes);
           if (mode === 'beforebegin') {
-            target.parentNode.insertBefore(fragment, target);
+            if (target.parentNode) {
+              target.parentNode.insertBefore(fragment, target);
+            }
           } else if (mode === 'afterbegin') {
             target.insertBefore(fragment, target.firstChild);
           } else if (mode === 'beforeend') {
             target.appendChild(fragment);
           } else if (mode === 'afterend') {
-            target.parentNode.insertBefore(fragment, target.nextSibling);
+            if (target.parentNode) {
+              target.parentNode.insertBefore(fragment, target.nextSibling);
+            }
           } else {
             target.insertAdjacentHTML(mode, safeHtml);
           }
@@ -279,6 +387,7 @@
       }
     }
   }
+
 
   // Fetch the page and perform swapping
   function performBlockSwap(url, blockName, selector, mode, options, sourceElement) {
@@ -306,7 +415,6 @@
 
         const redirectUrl = res.headers.get('X-Asok-Redirect');
         if (redirectUrl) {
-          // SECURITY: Validate redirect URL to prevent open redirect attacks
           if (window.AsokSecurity && window.AsokSecurity.isSafeUrl) {
             if (!window.AsokSecurity.isSafeUrl(redirectUrl)) {
               console.error('[Asok] Blocked unsafe redirect URL:', redirectUrl);
@@ -356,38 +464,49 @@
       }
 
       const tempDiv = document.createElement('div');
-      // tempDiv is a detached parser for the server response (same-origin,
-      // trusted). Content is inserted as-is by doSwap()/Asok.swap().
       tempDiv.innerHTML = html;
 
-      // Execute root-level scripts (like the directives registry) before swapping templates/content
-      tempDiv.querySelectorAll('script').forEach(function (script) {
-        let parent = script.parentNode;
-        while (parent && parent !== tempDiv) {
-          if (parent.tagName === 'TEMPLATE') return;
-          parent = parent.parentNode;
-        }
-        const newScript = document.createElement('script');
-        const nonce = script.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
-        if (nonce) newScript.nonce = nonce;
-        if (script.src) newScript.src = script.src;
-        newScript.textContent = script.textContent;
-        newScript.dataset.run = '1';
-        script.dataset.run = '1';
-        document.body.appendChild(newScript);
-        newScript.remove();
-      });
+      const templates = tempDiv.querySelectorAll('template[data-block], template[asok-block]');
 
-      const templates = tempDiv.querySelectorAll('template[data-block]');
-      const shouldPushUrl = (sourceElement && sourceElement.dataset && sourceElement.dataset.pushUrl !== undefined) || (!sourceElement && url);
+      // Pre-execute "loose" scripts (outside block templates) ONLY on a
+      // block-template swap. There, afterSwap only runs scripts inside the
+      // inserted template content, so top-level scripts must run here.
+      // For a full-HTML (non-template) swap, doSwap→afterSwap already inserts and
+      // runs these scripts, so pre-executing them here would run them twice.
+      if (templates.length) {
+        tempDiv.querySelectorAll('script').forEach(function (script) {
+          // #asok-scoped-js is (re)injected by the scoped-JS handler below.
+          if (script.id === 'asok-scoped-js') return;
+          let parent = script.parentNode;
+          while (parent && parent !== tempDiv) {
+            if (parent.tagName === 'TEMPLATE') return;
+            parent = parent.parentNode;
+          }
+          const newScript = document.createElement('script');
+          const nonce = script.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+          if (nonce) newScript.nonce = nonce;
+          if (script.src) newScript.src = script.src;
+          newScript.textContent = script.textContent;
+          newScript.dataset.run = '1';
+          script.dataset.run = '1';
+          document.body.appendChild(newScript);
+          newScript.remove();
+        });
+      }
+      const pushUrlAttr = sourceElement ? getAttr(sourceElement, 'push-url') : null;
+      const shouldPushUrl = (sourceElement && (pushUrlAttr !== null || (sourceElement.dataset && sourceElement.dataset.pushUrl !== undefined))) || (!sourceElement && url);
       const pushData = shouldPushUrl ? { shouldPush: true, src: sourceElement, url: url, b: blockName, sel: selector } : null;
 
       if (templates.length) {
         for (let i = 0; i < templates.length; i++) {
           const tpl = templates[i];
-          const target = findTargetElement(tpl.dataset.block);
+          const tplBlock = getAttr(tpl, 'block') || tpl.dataset.block;
+          const target = findTargetElement(tplBlock);
+          let tplSwap = getAttr(tpl, 'swap') || tpl.dataset.swap || 'innerHTML';
+          if (tplSwap === 'append') tplSwap = 'beforeend';
+          if (tplSwap === 'prepend') tplSwap = 'afterbegin';
           if (target) {
-            doSwap(target, tpl.innerHTML, tpl.dataset.swap || 'innerHTML', i === templates.length - 1 ? pushData : null);
+            doSwap(target, tpl.innerHTML, tplSwap, i === templates.length - 1 ? pushData : null);
           }
         }
       } else {
@@ -418,7 +537,6 @@
         return tag;
       };
 
-      // Handle scoped CSS
       const newCss = getScopedTag('#asok-scoped-css');
       const oldCss = document.getElementById('asok-scoped-css');
       if (newCss) {
@@ -428,7 +546,6 @@
         oldCss.remove();
       }
 
-      // Handle scoped JS
       const newJs = getScopedTag('#asok-scoped-js');
       const oldJs = document.getElementById('asok-scoped-js');
       if (newJs) {
@@ -442,10 +559,7 @@
         oldJs.remove();
       }
 
-      // Handle page-id meta attributes
       const findPageId = function () {
-        // BUGFIX: createNodeIterator is a Document method, not an Element method.
-        // tempDiv.body is undefined on a div element — use document.createNodeIterator(tempDiv, ...).
         const it = document.createNodeIterator(tempDiv, NodeFilter.SHOW_COMMENT);
         let comment;
         while ((comment = it.nextNode())) {
@@ -483,15 +597,19 @@
   // Resolve form parameters, actions, and blocks
   function resolveRequestParameters(el) {
     const form = el.tagName === 'FORM' ? el : el.closest('form');
-    const blockName = el.dataset.block || (form ? form.dataset.block : null);
+    const blockName = getAttr(el, 'block') || (form ? getAttr(form, 'block') : null);
     if (!blockName) return null;
 
-    const selector = el.dataset.target || blockName.split(',')[0];
-    const swapMode = el.dataset.swap || 'innerHTML';
-    let url, method, body = null;
-    const actionValue = el.dataset.action || (form ? form.dataset.action : null);
+    const targetAttr = getAttr(el, 'target');
+    const selector = targetAttr || blockName.split(',')[0];
+    let swapMode = getAttr(el, 'swap') || (form ? getAttr(form, 'swap') : null) || 'innerHTML';
+    if (swapMode === 'append') swapMode = 'beforeend';
+    if (swapMode === 'prepend') swapMode = 'afterbegin';
 
-    if (form && (el === form || el.type === 'submit' || el.dataset.action)) {
+    let url, method, body = null;
+    const actionValue = getAttr(el, 'action') || (form ? getAttr(form, 'action') : null);
+
+    if (form && (el === form || el.type === 'submit' || hasAttr(el, 'action'))) {
       url = form.action || location.pathname;
       method = (form.method || 'POST').toUpperCase();
       const formData = new FormData(form);
@@ -503,7 +621,6 @@
         formData.append(el.name, el.value);
       }
 
-      // SECURITY: Check for sensitive data before allowing GET method
       if (method === 'GET' && window.AsokSecurity && window.AsokSecurity.hasSensitiveData) {
         if (window.AsokSecurity.hasSensitiveData(formData)) {
           console.warn('[Asok Security] Forcing POST for form with sensitive data');
@@ -530,8 +647,8 @@
         url += (url.indexOf('?') < 0 ? '?' : '&') + '_action=' + actionValue;
       }
     } else {
-      url = el.dataset.url || location.pathname;
-      method = (el.dataset.method || (actionValue ? 'POST' : 'GET')).toUpperCase();
+      url = getAttr(el, 'url') || location.pathname;
+      method = (getAttr(el, 'method') || (actionValue ? 'POST' : 'GET')).toUpperCase();
       const formData = new FormData();
       if (el.name) {
         formData.append(el.name, el.value || '');
@@ -539,7 +656,6 @@
       if (actionValue) {
         formData.append('_action', actionValue);
       }
-      // SECURITY: Check for sensitive data before allowing GET method
       if (method === 'GET' && window.AsokSecurity && window.AsokSecurity.hasSensitiveData) {
         if (window.AsokSecurity.hasSensitiveData(formData)) {
           console.warn('[Asok Security] Forcing POST for form with sensitive data');
@@ -561,7 +677,7 @@
       }
     }
 
-    const includeSelector = el.dataset.include;
+    const includeSelector = getAttr(el, 'include');
     if (includeSelector) {
       const extraElements = document.querySelectorAll(includeSelector);
       extraElements.forEach(function (x) {
@@ -580,15 +696,15 @@
 
   // Get indicator elements for visual feedback during requests
   function getIndicatorElements(el) {
-    const selector = el.dataset.indicator;
-    if (selector === undefined) return [];
-    if (selector === '') return [el];
+    const selector = getAttr(el, 'indicator');
+    if (selector === null && el.dataset.indicator === undefined) return [];
+    if (selector === '' || selector === null) return [el];
     return Array.prototype.slice.call(document.querySelectorAll(selector));
   }
 
   // Get elements that should be disabled during a request
   function getDisableElements(el) {
-    if (el.dataset.disable === undefined) return [];
+    if (!hasAttr(el, 'disable') && el.dataset.disable === undefined) return [];
     if (el.tagName === 'FORM') {
       return Array.prototype.slice.call(el.querySelectorAll('button,input[type=submit]'));
     }
@@ -597,7 +713,7 @@
 
   // Execute block swap request
   function triggerBlockRequest(el) {
-    const confirmMessage = el.dataset.confirm;
+    const confirmMessage = getAttr(el, 'confirm');
     if (confirmMessage && !confirm(confirmMessage)) return;
 
     const resolved = resolveRequestParameters(el);
@@ -618,7 +734,7 @@
       x.disabled = true;
     });
 
-    const isPageNavigation = (el.dataset && el.dataset.pushUrl !== undefined) || el.tagName === 'A';
+    const isPageNavigation = (el.dataset && el.dataset.pushUrl !== undefined) || hasAttr(el, 'push-url') || el.tagName === 'A';
     const pageContainer = document.querySelector('[data-asok-page-transition]');
 
     if (isPageNavigation && pageContainer) {
@@ -680,9 +796,10 @@
   // Listeners setup
   document.addEventListener('submit', function (e) {
     const form = e.target;
-    if (!form.dataset || !form.dataset.block) return;
+    if (!hasAttr(form, 'block')) return;
 
-    const triggerEvent = (form.dataset.trigger || 'submit').split(/\s+/)[0];
+    const triggerAttr = getAttr(form, 'trigger') || 'submit';
+    const triggerEvent = triggerAttr.split(/\s+/)[0];
     if (triggerEvent !== 'submit') return;
 
     e.preventDefault();
@@ -690,34 +807,35 @@
   });
 
   document.addEventListener('mouseover', function (e) {
-    const link = e.target.closest('[data-block]');
+    const link = e.target.closest('[asok-block], [data-block], [data-asok-block]');
     if (
       link &&
       link.tagName === 'A' &&
-      link.dataset.url !== 'none' &&
-      (link.dataset.trigger || 'click').split(/\s+/)[0] === 'click'
+      getAttr(link, 'url') !== 'none' &&
+      (getAttr(link, 'trigger') || 'click').split(/\s+/)[0] === 'click'
     ) {
-      prefetchBlock(link.href, link.dataset.block);
+      prefetchBlock(link.href, getAttr(link, 'block'));
     }
   });
 
   document.addEventListener('click', function (e) {
     if (e.target.closest('[data-asok-component]')) return;
 
-    const el = e.target.closest('[data-block]');
+    const el = e.target.closest('[asok-block], [data-block], [data-asok-block]');
     if (!el || el.tagName === 'FORM') return;
 
     const isInteractive =
       el.tagName === 'A' ||
       el.tagName === 'BUTTON' ||
       el.tagName === 'INPUT' ||
-      el.hasAttribute('data-url') ||
-      el.hasAttribute('data-action') ||
-      el.hasAttribute('data-trigger');
+      hasAttr(el, 'url') ||
+      hasAttr(el, 'action') ||
+      hasAttr(el, 'trigger');
 
     if (!isInteractive) return;
 
-    const triggerEvent = (el.dataset.trigger || 'click').split(/\s+/)[0];
+    const triggerAttr = getAttr(el, 'trigger') || 'click';
+    const triggerEvent = triggerAttr.split(/\s+/)[0];
     if (triggerEvent !== 'click') return;
 
     e.preventDefault();
@@ -731,21 +849,23 @@
 
     // SSE event sources
     elements.forEach(function (n) {
-      if (n.hasAttribute && n.hasAttribute('data-sse')) {
+      if (hasAttr(n, 'sse')) {
         if (n.__asokSseSetup) return;
         n.__asokSseSetup = 1;
 
-        const eventSource = new EventSource(n.dataset.sse);
-        const selector = n.dataset.block || ('#' + n.id);
-        const swapMode = n.dataset.swap || 'innerHTML';
+        const sseUrl = getAttr(n, 'sse');
+        const eventSource = new EventSource(sseUrl);
+        // Track it so cleanupSpaResources() can close it when the node is swapped out.
+        n.__asokSse = eventSource;
+        const selector = getAttr(n, 'block') || ('#' + n.id);
+        let swapMode = getAttr(n, 'swap') || 'innerHTML';
+        if (swapMode === 'append') swapMode = 'beforeend';
+        if (swapMode === 'prepend') swapMode = 'afterbegin';
 
         eventSource.onmessage = function (ev) {
           const tempContainer = document.createElement('div');
-          // SECURITY: tempContainer is not inserted into DOM, only used to parse templates
-          // The actual content is sanitized when passed through doSwap() -> Asok.swap()
           tempContainer.innerHTML = ev.data;
 
-          // Execute root-level scripts (like the directives registry) before swapping templates/content
           tempContainer.querySelectorAll('script').forEach(function (script) {
             let parent = script.parentNode;
             while (parent && parent !== tempContainer) {
@@ -762,14 +882,18 @@
             newScript.remove();
           });
 
-          const templates = tempContainer.querySelectorAll('template[data-block]');
+          const templates = tempContainer.querySelectorAll('template[data-block], template[asok-block]');
 
           if (templates.length) {
             for (let i = 0; i < templates.length; i++) {
               const tpl = templates[i];
-              const target = findTargetElement(tpl.dataset.block);
+              const blockName = getAttr(tpl, 'block') || tpl.dataset.block;
+              const target = findTargetElement(blockName);
+              let tplSwap = getAttr(tpl, 'swap') || tpl.dataset.swap || 'innerHTML';
+              if (tplSwap === 'append') tplSwap = 'beforeend';
+              if (tplSwap === 'prepend') tplSwap = 'afterbegin';
               if (target) {
-                doSwap(target, tpl.innerHTML, tpl.dataset.swap || 'innerHTML', null);
+                doSwap(target, tpl.innerHTML, tplSwap, null);
               }
             }
           } else {
@@ -784,11 +908,12 @@
 
     // Custom triggers
     elements.forEach(function (n) {
-      if (n.hasAttribute && n.hasAttribute('data-block') && n.hasAttribute('data-trigger')) {
+      if (hasAttr(n, 'block') && hasAttr(n, 'trigger')) {
         if (n.__asokTriggerSetup) return;
         n.__asokTriggerSetup = 1;
 
-        const trigger = parseTriggerOption(n.dataset.trigger);
+        const triggerAttr = getAttr(n, 'trigger');
+        const trigger = parseTriggerOption(triggerAttr);
         if (trigger.event === 'submit' || trigger.event === 'click') return;
 
         if (trigger.event === 'load') {
@@ -798,7 +923,8 @@
 
         if (trigger.event === 'every') {
           triggerBlockRequest(n);
-          setInterval(function () {
+          // Track it so cleanupSpaResources() can clear it when the node is swapped out.
+          n.__asokEveryInterval = setInterval(function () {
             triggerBlockRequest(n);
           }, trigger.interval);
           return;

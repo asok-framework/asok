@@ -78,6 +78,7 @@ def print_help() -> None:
             ("createsuperuser", "Create or update an administrative user"),
             ("dumpdata", "Dump database records to a JSON fixture file"),
             ("loaddata", "Load records from a JSON fixture file"),
+            ("backup", "Manage database backups & disaster recovery (run/status/restore)"),
         ],
         "Tools": [
             ("tailwind", "Manage Tailwind CSS (install/build/enable)"),
@@ -398,6 +399,19 @@ def _register_database_commands(subparsers) -> None:
     loaddata_parser = subparsers.add_parser("loaddata")
     loaddata_parser.add_argument("file")
 
+    backup_parser = subparsers.add_parser("backup")
+    backup_subparsers = backup_parser.add_subparsers(dest="backup_subcommand")
+    backup_run_p = backup_subparsers.add_parser("run")
+    backup_run_p.add_argument("--target", default=None)
+    backup_status_p = backup_subparsers.add_parser("status")
+    backup_status_p.add_argument("--target", default=None)
+    backup_list_p = backup_subparsers.add_parser("list")
+    backup_list_p.add_argument("--target", default=None)
+    backup_restore_p = backup_subparsers.add_parser("restore")
+    backup_restore_p.add_argument("--source", default=None)
+    backup_restore_p.add_argument("--snapshot", default=None, help="Snapshot ID or filename to restore from")
+    backup_restore_p.add_argument("--force", action="store_true")
+
 
 def _register_make_command(subparsers) -> None:
     make_parser = subparsers.add_parser("make")
@@ -561,6 +575,12 @@ def _cmd_loaddata(args, sub_parsers) -> None:
     run_loaddata(file_path=args.file)
 
 
+def _cmd_backup(args, sub_parsers) -> None:
+    from .backup import handle_backup_command
+
+    handle_backup_command(args)
+
+
 def _cmd_seed(args, sub_parsers) -> None:
     run_seed()
 
@@ -617,6 +637,7 @@ _COMMAND_HANDLERS = {
     "db": _cmd_db,
     "dumpdata": _cmd_dumpdata,
     "loaddata": _cmd_loaddata,
+    "backup": _cmd_backup,
     "seed": _cmd_seed,
     "routes": _cmd_routes,
     "shell": _cmd_shell,

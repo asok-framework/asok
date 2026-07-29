@@ -115,21 +115,32 @@ def _emit_for_token(state: CompilerState, token: str) -> None:
 
 
 def _check_unclosed_delimiters(
-    token: str, current_line: int, template_name: Optional[str]
+    token: str,
+    current_line: int,
+    template_name: Optional[str],
+    template_string: Optional[str] = None,
 ) -> None:
     if "{{" in token:
         idx = token.find("{{")
         line_offset = token[:idx].count("\n")
+        line_no = current_line + line_offset
         prefix = f"Template '{template_name}'" if template_name else "Template"
         raise TemplateError(
-            f"{prefix} Syntax Error: Unclosed template expression '{{' on line {current_line + line_offset}"
+            f"{prefix} Syntax Error: Unclosed template expression '{{' on line {line_no}",
+            template_name=template_name,
+            line_no=line_no,
+            source_code=template_string,
         )
     if "{%" in token:
         idx = token.find("{%")
         line_offset = token[:idx].count("\n")
+        line_no = current_line + line_offset
         prefix = f"Template '{template_name}'" if template_name else "Template"
         raise TemplateError(
-            f"{prefix} Syntax Error: Unclosed template statement '{{%' on line {current_line + line_offset}"
+            f"{prefix} Syntax Error: Unclosed template statement '{{%' on line {line_no}",
+            template_name=template_name,
+            line_no=line_no,
+            source_code=template_string,
         )
 
 
@@ -143,17 +154,20 @@ def _build_compiled_callable(
             state.emit(f"__template_line__ = {current_line}")
             _emit_for_token(state, token)
         else:
-            _check_unclosed_delimiters(token, current_line, template_name)
+            _check_unclosed_delimiters(token, current_line, template_name, template_string)
             _emit_for_token(state, token)
         current_line += token.count("\n")
     compiled_code = "\n".join(state.code)
-    run_fn = _exec_template_code(compiled_code, template_name)
+    run_fn = _exec_template_code(compiled_code, template_name, template_string)
     run_fn._compiled_code = compiled_code
+    run_fn._template_string = template_string
     return run_fn
 
 
 def _exec_template_code(
-    compiled_code: str, template_name: Optional[str] = None
+    compiled_code: str,
+    template_name: Optional[str] = None,
+    template_string: Optional[str] = None,
 ) -> Callable[..., Any]:
     # SECURITY: empty __builtins__ blocks ``exec``/``eval``/``open``/``__import__``
     # from compiled templates. Safe builtins (range, len, str, ...) are resolved
@@ -182,7 +196,11 @@ def _exec_template_code(
     except Exception as e:
         prefix = f"Template '{template_name}'" if template_name else "Template"
         raise TemplateError(
-            f"{prefix} Compilation Error: {str(e)}\n\nCode:\n{compiled_code}"
+            f"{prefix} Compilation Error: {str(e)}\n\nCode:\n{compiled_code}",
+            template_name=template_name,
+            source_code=template_string,
+            compiled_code=compiled_code,
+            original_exception=e,
         )
     return env["__run_template"]
 
@@ -222,6 +240,7 @@ def _compile_and_run(
                 tb = tb.tb_next
 
             code_str = getattr(run_fn, "_compiled_code", "unknown")
+            source_str = getattr(run_fn, "_template_string", template_string)
             msg = str(e)
             prefix = ""
             if template_name:
@@ -235,7 +254,12 @@ def _compile_and_run(
                 msg = f"{prefix}: {msg}"
 
             raise TemplateError(
-                f"{msg}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}"
+                f"{msg}\n\nCompiled Code:\n{code_str}\n\nContext keys: {list(context.keys())}",
+                template_name=template_name,
+                line_no=line_no,
+                source_code=source_str,
+                compiled_code=code_str,
+                original_exception=e,
             ) from e
 
     return _generator_wrapper()

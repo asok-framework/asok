@@ -15,6 +15,12 @@
         {{ icon('history', 14) }} <span style="margin-left:4px">{{ t('History') }}</span>
       </a>
     {% endif %}
+    {# Trash (bin) is an admin-only area #}
+    {% if item and item.id and request.user and request.user.is_admin %}
+      <a href="{{ admin_prefix }}/trash?model_slug={{ slug }}" class="btn btn-ghost btn-sm" data-spa>
+        {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Trash') }}</span>
+      </a>
+    {% endif %}
     <a href="{{ admin_prefix }}/{{ slug }}"
        class="btn btn-default btn-sm" data-spa>
       {{ icon('x', 14) }} <span style="margin-left:4px">{{ t('Cancel') }}</span>
@@ -85,12 +91,40 @@
               <tbody>
                 {% for row in permission_matrix.rows %}
                   <tr>
-                    <td style="font-weight:600; padding-left:16px">{{ row.label }}</td>
+                    <td style="font-weight:600; padding-left:16px">
+                      {{ row.label }}
+                      {% if row.has_refine %}
+                        <button type="button" class="perm-refine-toggle" data-toggle-detail="{{ row.slug }}" title="{{ t('Refine access') }}" aria-label="{{ t('Refine access') }}">{{ icon('filter', 14) }}</button>
+                      {% endif %}
+                    </td>
                     {% for cell in row.cells %}
                       <td><input type="checkbox" class="perm-cb" data-perm="{{ cell.perm }}" {% if cell.checked %}checked{% endif %}></td>
                     {% endfor %}
                     <td style="padding-right:16px"><input type="checkbox" class="perm-row-all" data-slug="{{ row.slug }}"></td>
                   </tr>
+                  {% if row.has_refine %}
+                    <tr class="perm-detail-row" data-detail-for="{{ row.slug }}" hidden>
+                      <td colspan="{{ permission_matrix.colspan }}" class="perm-detail-cell">
+                        {% if row.owner_field %}
+                          <label class="perm-refine-item">
+                            <input type="checkbox" class="perm-extra" data-perm="{{ row.slug }}.own" {% if row.own_checked %}checked{% endif %}>
+                            <span>{{ t('Only records they own') }} <span class="muted">· {{ row.owner_field }}</span></span>
+                          </label>
+                        {% endif %}
+                        {% if row.lock_fields %}
+                          <div class="perm-refine-locks">
+                            <span class="perm-refine-title">{{ t('Read-only fields') }}</span>
+                            {% for lf in row.lock_fields %}
+                              <label class="perm-refine-item">
+                                <input type="checkbox" class="perm-extra" data-perm="{{ lf.perm }}" {% if lf.checked %}checked{% endif %}>
+                                <span>{{ lf.label }}</span>
+                              </label>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endif %}
                 {% endfor %}
               </tbody>
             </table>
@@ -113,7 +147,13 @@
               {% endif %}
             </div>
             
-            <input type="hidden" class="m2m-hidden" name="m2m_{{ m.name }}" data-name="{{ m.name }}">
+            {% set init_selected = [] %}
+            {% if m.options %}
+              {% for opt in m.options %}
+                {% if opt.selected %}{% do init_selected.append(opt.id ~ '') %}{% endif %}
+              {% endfor %}
+            {% endif %}
+            <input type="hidden" class="m2m-hidden" name="m2m_{{ m.name }}" data-name="{{ m.name }}" value="{{ init_selected|join(',') }}">
             
             {% if m.options %}
               {% if m.options | length > 5 %}
@@ -157,14 +197,19 @@
             {{ t('Save & add another') }}
           </button>
         {% endif %}
+        {% if item and item.id and can_add and user_can_add %}
+          <a href="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/clone" class="btn btn-default" data-spa>
+            {{ icon('copy', 14) }} <span style="margin-left:4px">{{ t('Clone') }}</span>
+          </a>
+        {% endif %}
       </div>
       <div>
         {% if item and item.id and can_delete %}
           <button type="submit"
                   formaction="{{ admin_prefix }}/{{ slug }}/{{ item.id }}/delete"
                   class="btn btn-ghost text-danger"
-                  data-confirm="{{ t('Permanently delete this record?') }}">
-            {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Delete') }}</span>
+                  data-confirm="{{ t('Move this record to trash?') }}">
+            {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Move to Trash') }}</span>
           </button>
         {% endif %}
       </div>

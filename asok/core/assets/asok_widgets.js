@@ -61,6 +61,7 @@
   };
 
   window.Asok.handleOtpKeyup = (event) => {
+    if (!event || !event.target) return;
     if (event.target.value && event.key !== 'Backspace') {
       const next = event.target.nextElementSibling;
       if (next && next.tagName === 'INPUT') next.focus();
@@ -164,10 +165,18 @@
 
   window.Asok.removeDropzoneFile = (state, index, inputEl) => {
     state.files = state.files.filter((_, i) => i !== index);
-    const dt = new DataTransfer();
-    state.files.forEach(f => dt.items.add(f._file));
-    if (inputEl) {
-      inputEl.files = dt.files;
+    // Only rebuild DataTransfer from files that carry the original File object.
+    // Files coming from handleFilesChange store { name, size, url } without _file.
+    const filesWithHandle = state.files.filter(f => f && f._file instanceof File);
+    if (filesWithHandle.length > 0) {
+      const dt = new DataTransfer();
+      filesWithHandle.forEach(f => dt.items.add(f._file));
+      if (inputEl) {
+        inputEl.files = dt.files;
+      }
+    } else if (inputEl) {
+      // Clear the input when no native File handles remain
+      inputEl.value = '';
     }
   };
 

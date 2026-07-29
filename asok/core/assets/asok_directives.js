@@ -244,6 +244,11 @@
       const isShown = evaluateExpression(getAttr('asok-show-ref'), state, el);
       if (!el._asokShowInitialized) {
         el._asokShowInitialized = true;
+        // Override the visibility:hidden set by anti-FOUC critical CSS.
+        // The [asok-show-ref] attribute stays on the element, so the stylesheet
+        // rule keeps matching; clearing the inline style ('') is not enough —
+        // we must set an inline 'visible' to win over the stylesheet.
+        el.style.visibility = 'visible';
         el.style.display = isShown ? '' : 'none';
       } else {
         const isCurrentlyShown = el.style.display !== 'none';
@@ -274,6 +279,11 @@
       const isHidden = evaluateExpression(getAttr('asok-hide-ref'), state, el);
       if (!el._asokHideInitialized) {
         el._asokHideInitialized = true;
+        // Override the visibility:hidden set by anti-FOUC critical CSS.
+        // The [asok-hide-ref] attribute stays on the element, so the stylesheet
+        // rule keeps matching; clearing the inline style ('') is not enough —
+        // we must set an inline 'visible' to win over the stylesheet.
+        el.style.visibility = 'visible';
         el.style.display = isHidden ? 'none' : '';
       } else {
         const isCurrentlyHidden = el.style.display === 'none';
@@ -383,10 +393,16 @@
       if (val && !conditionMet) {
         if (!item._n) {
           const fragment = item.content.cloneNode(true);
-          item._n = fragment.firstElementChild;
-          item.parentNode.insertBefore(fragment, item.nextSibling);
-          contexts.set(item._n, contexts.get(el) || { state: state, refs: {} });
-          if (window.Asok && window.Asok.init) window.Asok.init(item._n); else init(item._n);
+          const child = fragment.firstElementChild;
+          // Guard: only insert (and track) if the template is still in the DOM.
+          // If parentNode is null the template was removed by an outerHTML swap;
+          // skip silently so item._n stays null and won't become an orphan.
+          if (item.parentNode) {
+            item._n = child;
+            item.parentNode.insertBefore(fragment, item.nextSibling);
+            contexts.set(item._n, contexts.get(el) || { state: state, refs: {} });
+            if (window.Asok && window.Asok.init) window.Asok.init(item._n); else init(item._n);
+          }
         }
         conditionMet = 1;
       } else if (item._n) {
@@ -396,11 +412,100 @@
     });
   };
 
+  // Evaluate the asok-key expression for one item. The compiled registry fn uses
+  // `with($||{})`, so passing a scope object exposing the loop var/index resolves
+  // expressions like "item.id". Falls back to the positional index if unavailable.
+  const evalForKey = (keyRef, itemVar, indexVar, item, index, el) => {
+    const fn = (window.__asok_registry || {})[keyRef];
+    if (!fn) return index;
+    try {
+      return fn(
+        { [itemVar]: item, [indexVar]: index },
+        window.Asok.store, el, null, {},
+        (cb) => Promise.resolve().then(cb)
+      );
+    } catch (e) {
+      return index;
+    }
+  };
+
+  // Keyed reconciliation for asok-for (opt-in via asok-key). Reuses and reorders
+  // existing DOM nodes by key instead of destroying/rebuilding the whole list —
+  // this preserves input focus, running transitions and nested component state.
+  const updateForKeyed = (el, state, items, itemVar, indexVar, keyRef) => {
+    const oldByKey = el._keyed || new Map();
+    const newChildren = [];
+    const newByKey = new Map();
+    const seen = new Set();
+
+    items.forEach((item, index) => {
+      const key = String(evalForKey(keyRef, itemVar, indexVar, item, index, el));
+      let child = oldByKey.get(key);
+      if (child && !seen.has(key)) {
+        // Reuse: mutate the raw scope in place (bypassing the reactive proxy, so
+        // no re-entrant updateScope), then refresh this child's bindings below.
+        if (child.__asokScope) {
+          child.__asokScope[itemVar] = item;
+          child.__asokScope[indexVar] = index;
+        }
+        child.__asokReused = 1;
+      } else {
+        const fragment = el.content.cloneNode(true);
+        child = fragment.firstElementChild;
+        if (!child) return;
+        const rawScope = { [itemVar]: item, [indexVar]: index };
+        const subState = createReactiveProxy(rawScope, () => updateScope(findStateOwner(el)), state);
+        child.__asokScope = rawScope;
+        contexts.set(child, { state: subState, refs: {}, cleanup: [] });
+        child.__asokNew = 1;
+      }
+      newChildren.push(child);
+      newByKey.set(key, child);
+      seen.add(key);
+    });
+
+    // Remove children whose key disappeared (cleaning up their listeners first).
+    const newSet = new Set(newChildren);
+    (el._children || []).forEach(child => {
+      if (!newSet.has(child)) {
+        cleanupOld(child);
+        child.remove();
+      }
+    });
+
+    // Reorder: lay children out in the new order, ending right before the marker.
+    // Walk back-to-front so each node lands immediately before the next one;
+    // skip nodes already in place to avoid needless DOM moves.
+    let anchor = el._marker;
+    for (let i = newChildren.length - 1; i >= 0; i--) {
+      const child = newChildren[i];
+      if (child.nextSibling !== anchor && el._marker.parentNode) {
+        el._marker.parentNode.insertBefore(child, anchor);
+      }
+      anchor = child;
+    }
+
+    // Init freshly created children (now connected); refresh reused ones in place.
+    newChildren.forEach(child => {
+      if (child.__asokNew) {
+        delete child.__asokNew;
+        if (window.Asok && window.Asok.init) window.Asok.init(child); else init(child);
+      } else if (child.__asokReused) {
+        delete child.__asokReused;
+        updateScope(child, 0);
+      }
+    });
+
+    el._children = newChildren;
+    el._keyed = newByKey;
+  };
+
   // Update asok-for loops
   const updateForDirective = (el, state) => {
     el._ai = 1; // Mark as initialized
     const ref = el.getAttribute('asok-for-ref');
     const varName = el.getAttribute('asok-for-var');
+    const keyRef = el.getAttribute('asok-key-ref');
     const items = evaluateExpression(ref, state, el) || [];
     let itemsJSON;
     try {
@@ -422,7 +527,19 @@
 
     if (!el._marker) {
       el._marker = document.createComment('for');
-      el.parentNode.insertBefore(el._marker, el.nextSibling);
+      // Guard: el may be detached after an outerHTML swap of its parent
+      if (el.parentNode) {
+        el.parentNode.insertBefore(el._marker, el.nextSibling);
+      }
+    }
+
+    // If the template is detached, skip rendering children
+    if (!el.parentNode && !el._marker.parentNode) return;
+
+    // Opt-in keyed path: reuse/reorder nodes by key instead of full rebuild.
+    if (keyRef) {
+      updateForKeyed(el, state, items, itemVar, indexVar, keyRef);
+      return;
     }
 
     (el._children || []).forEach(child => child.remove());
@@ -434,7 +551,11 @@
       const subState = createReactiveProxy({ [itemVar]: item, [indexVar]: index }, () => updateScope(findStateOwner(el)), state);
 
       contexts.set(child, { state: subState, refs: {}, cleanup: [] });
-      el.parentNode.insertBefore(fragment, el._marker);
+      if (el._marker.parentNode) {
+        el._marker.parentNode.insertBefore(fragment, el._marker);
+      } else if (el.parentNode) {
+        el.parentNode.insertBefore(fragment, el._marker);
+      }
       el._children.push(child);
       if (window.Asok && window.Asok.init) window.Asok.init(child); else init(child);
     });
@@ -754,12 +875,16 @@
     if (!root) return;
     const elements = [root, ...root.querySelectorAll('*')];
     elements.forEach(el => {
+      // Collect keys to delete after the forEach to avoid mutating the Map
+      // during iteration (non-deterministic on some older JS engines).
+      const keysToDelete = [];
       dependencyMap.forEach((set, key) => {
         set.delete(el);
         if (set.size === 0) {
-          dependencyMap.delete(key);
+          keysToDelete.push(key);
         }
       });
+      keysToDelete.forEach(key => dependencyMap.delete(key));
       const ctx = contexts.get(el);
       if (ctx && ctx.cleanup) {
         ctx.cleanup.forEach(fn => {
@@ -821,10 +946,14 @@
         // Handle cloaking globally immediately for non-island elements
         if (document.documentElement) {
           document.documentElement.removeAttribute('asok-cloak');
+          document.documentElement.removeAttribute('data-asok-cloak');
+          document.documentElement.removeAttribute('data-cloak');
         }
-        document.querySelectorAll('[asok-cloak]').forEach(e => {
+        document.querySelectorAll('[asok-cloak], [data-asok-cloak], [data-cloak]').forEach(e => {
           if (!isInsideUnhydratedIsland(e)) {
             e.removeAttribute('asok-cloak');
+            e.removeAttribute('data-asok-cloak');
+            e.removeAttribute('data-cloak');
           }
         });
         document.querySelectorAll('script').forEach(s => s.dataset.run = '1');
@@ -941,14 +1070,18 @@
     // Cloaking cleanup
     const cleanRoot = root === document ? document : root;
     if (cleanRoot.querySelectorAll) {
-      if (cleanRoot.hasAttribute && cleanRoot.hasAttribute('asok-cloak')) {
-        if (!isInsideUnhydratedIsland(cleanRoot)) {
-          cleanRoot.removeAttribute('asok-cloak');
+      ['asok-cloak', 'data-asok-cloak', 'data-cloak'].forEach(attr => {
+        if (cleanRoot.hasAttribute && cleanRoot.hasAttribute(attr)) {
+          if (!isInsideUnhydratedIsland(cleanRoot)) {
+            cleanRoot.removeAttribute(attr);
+          }
         }
-      }
-      cleanRoot.querySelectorAll('[asok-cloak]').forEach(e => {
+      });
+      cleanRoot.querySelectorAll('[asok-cloak], [data-asok-cloak], [data-cloak]').forEach(e => {
         if (!isInsideUnhydratedIsland(e)) {
           e.removeAttribute('asok-cloak');
+          e.removeAttribute('data-asok-cloak');
+          e.removeAttribute('data-cloak');
         }
       });
     }
@@ -964,19 +1097,434 @@
     init();
   }
 
-  // Extend Asok lifecycle APIs if present
-  if (window.Asok) {
-    const oldInit = window.Asok.init;
-    window.Asok.init = (el) => {
-      if (oldInit) oldInit(el);
-      init(el);
-    };
+  // Built-in Declarative Theme System
+  const getStoredTheme = () => {
+    try { return localStorage.getItem('asok-theme') || 'system'; } catch (e) { return 'system'; }
+  };
+
+  const getSystemTheme = () => (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+
+  const applyTheme = (mode) => {
+    const resolved = mode === 'system' ? getSystemTheme() : mode;
+    document.documentElement.style.colorScheme = resolved;
+    document.documentElement.setAttribute('data-theme', resolved);
+    if (resolved === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else {
+      document.documentElement.classList.add('light');
+      document.documentElement.classList.remove('dark');
+    }
+    globalStore.theme = resolved;
+    globalStore.themeMode = mode;
+    document.dispatchEvent(new CustomEvent('asok:theme', { detail: { theme: resolved, mode } }));
+  };
+
+  const setTheme = (mode) => {
+    const valid = ['light', 'dark', 'system'].includes(mode) ? mode : 'system';
+    try { localStorage.setItem('asok-theme', valid); } catch (e) {}
+    applyTheme(valid);
+  };
+
+  const toggleTheme = () => {
+    const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    setTheme(current);
+  };
+
+  applyTheme(getStoredTheme());
+
+  if (window.matchMedia) {
+    try {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        if (getStoredTheme() === 'system') applyTheme('system');
+      });
+    } catch (e) {}
   }
 
-  // Global namespace hooks
+  document.addEventListener('click', (e) => {
+    const toggleEl = e.target.closest('[asok-theme-toggle], [data-asok-theme-toggle], [data-theme-toggle]');
+    if (!toggleEl) return;
+    const attrVal = (toggleEl.getAttribute('asok-theme-toggle') || toggleEl.getAttribute('data-asok-theme-toggle') || toggleEl.getAttribute('data-theme-toggle') || '').trim();
+    if (attrVal && ['light', 'dark', 'system'].includes(attrVal)) {
+      setTheme(attrVal);
+    } else {
+      toggleTheme();
+    }
+  });
+
+  // Built-in Declarative Cookie Consent System
+  const getStoredConsent = () => {
+    try { return localStorage.getItem('asok-cookie-consent') || 'pending'; } catch (e) { return 'pending'; }
+  };
+
+  const updateConsentUI = (status) => {
+    globalStore.cookieConsent = status;
+    document.querySelectorAll('[asok-cookie-banner], [data-asok-cookie-banner], [data-cookie-banner]').forEach(banner => {
+      if (status === 'pending') {
+        banner.style.display = '';
+        banner.removeAttribute('hidden');
+      } else {
+        banner.style.display = 'none';
+        banner.setAttribute('hidden', '');
+      }
+    });
+    if (status === 'accepted') {
+      document.querySelectorAll('script[type="text/plain"][asok-cookie-script], script[type="text/plain"][data-cookie-script]').forEach(s => {
+        if (s.dataset.cookieActivated) return;
+        s.dataset.cookieActivated = '1';
+        const newScript = document.createElement('script');
+        const nonce = s.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+        if (nonce) newScript.nonce = nonce;
+        if (s.src) newScript.src = s.src;
+        newScript.textContent = s.textContent;
+        s.parentNode.replaceChild(newScript, s);
+      });
+    }
+    document.dispatchEvent(new CustomEvent('asok:cookie-consent', { detail: { status } }));
+  };
+
+  const setCookieConsent = (status) => {
+    const valid = ['accepted', 'rejected'].includes(status) ? status : 'rejected';
+    try { localStorage.setItem('asok-cookie-consent', valid); } catch (e) {}
+    updateConsentUI(valid);
+  };
+
+  const resetCookieConsent = () => {
+    try { localStorage.removeItem('asok-cookie-consent'); } catch (e) {}
+    updateConsentUI('pending');
+  };
+
+  updateConsentUI(getStoredConsent());
+
+  document.addEventListener('click', (e) => {
+    const acceptEl = e.target.closest('[asok-cookie-accept], [data-asok-cookie-accept], [data-cookie-accept]');
+    if (acceptEl) {
+      setCookieConsent('accepted');
+      return;
+    }
+    const rejectEl = e.target.closest('[asok-cookie-reject], [data-asok-cookie-reject], [data-cookie-reject]');
+    if (rejectEl) {
+      setCookieConsent('rejected');
+      return;
+    }
+    const resetEl = e.target.closest('[asok-cookie-reset], [data-asok-cookie-reset], [data-cookie-reset]');
+    if (resetEl) {
+      resetCookieConsent();
+      return;
+    }
+  });
+
+  // Built-in Dismissible Elements System (Announcements, Banners, Alerts)
+  const isDismissed = (key) => {
+    if (!key) return false;
+    try { return localStorage.getItem('asok-dismiss:' + key) === 'true'; } catch (e) { return false; }
+  };
+
+  const dismissElement = (key, targetEl) => {
+    if (key) {
+      try { localStorage.setItem('asok-dismiss:' + key, 'true'); } catch (e) {}
+    }
+    const container = targetEl || (key ? document.querySelector(`[asok-dismiss="${key}"], [data-asok-dismiss="${key}"], [data-dismiss="${key}"]`) : null);
+    if (container) {
+      container.style.display = 'none';
+      container.setAttribute('hidden', '');
+    }
+    document.dispatchEvent(new CustomEvent('asok:dismiss', { detail: { key } }));
+  };
+
+  const initDismissables = (root = document) => {
+    const selector = '[asok-dismiss], [data-asok-dismiss], [data-dismiss]';
+    const els = root.querySelectorAll ? root.querySelectorAll(selector) : [];
+    els.forEach(el => {
+      const key = el.getAttribute('asok-dismiss') || el.getAttribute('data-asok-dismiss') || el.getAttribute('data-dismiss');
+      if (key && isDismissed(key)) {
+        el.style.display = 'none';
+        el.setAttribute('hidden', '');
+      }
+    });
+  };
+
+  initDismissables();
+
+  document.addEventListener('click', (e) => {
+    const triggerEl = e.target.closest('[asok-dismiss-trigger], [data-asok-dismiss-trigger], [data-dismiss-trigger]');
+    if (!triggerEl) return;
+    const parentContainer = triggerEl.closest('[asok-dismiss], [data-asok-dismiss], [data-dismiss]');
+    const key = triggerEl.getAttribute('asok-dismiss-trigger') || triggerEl.getAttribute('data-asok-dismiss-trigger') || triggerEl.getAttribute('data-dismiss-trigger') || (parentContainer ? (parentContainer.getAttribute('asok-dismiss') || parentContainer.getAttribute('data-asok-dismiss') || parentContainer.getAttribute('data-dismiss')) : '');
+    dismissElement(key, parentContainer);
+  });
+
+  // Global namespace — must be created before we wrap init so the chain works
+  // regardless of script load order (directives may load before or after spa.js).
   window.Asok = window.Asok || {};
 
+  window.Asok.setTheme = setTheme;
+  window.Asok.toggleTheme = toggleTheme;
+  window.Asok.getTheme = () => document.documentElement.getAttribute('data-theme') || 'light';
+  window.Asok.acceptCookies = () => setCookieConsent('accepted');
+  window.Asok.rejectCookies = () => setCookieConsent('rejected');
+  window.Asok.resetCookieConsent = resetCookieConsent;
+  window.Asok.getCookieConsent = getStoredConsent;
+  window.Asok.dismiss = dismissElement;
+  window.Asok.isDismissed = isDismissed;
 
+  // ── 1. Copy to Clipboard Directive (asok-copy) ───────────────
+  const copyToClipboard = (text, triggerEl) => {
+    let contentToCopy = text;
+    if (text && text.startsWith('#')) {
+      const target = document.querySelector(text);
+      if (target) contentToCopy = target.value || target.textContent || '';
+    } else if ((!contentToCopy || contentToCopy === 'true') && triggerEl) {
+      const parentBlock = triggerEl.closest('.code-block, code-block, [asok-code-block]');
+      const preEl = parentBlock ? parentBlock.querySelector('pre, code') : triggerEl.nextElementSibling;
+      if (preEl) {
+        contentToCopy = preEl.value || preEl.textContent || '';
+      } else {
+        contentToCopy = triggerEl.value || triggerEl.textContent || '';
+      }
+    }
+    if (!contentToCopy) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(contentToCopy).then(() => {
+        if (triggerEl) {
+          triggerEl.classList.add('asok-copied');
+          const copiedText = triggerEl.getAttribute('asok-copied-text') || triggerEl.getAttribute('data-copied');
+          const origText = triggerEl.getAttribute('data-label') || triggerEl.getAttribute('data-orig-text') || triggerEl.textContent;
+          if (!triggerEl.hasAttribute('data-orig-text')) {
+            triggerEl.setAttribute('data-orig-text', origText);
+          }
+          if (copiedText) {
+            triggerEl.textContent = copiedText;
+          }
+          setTimeout(() => {
+            triggerEl.classList.remove('asok-copied');
+            if (copiedText) {
+              triggerEl.textContent = triggerEl.getAttribute('data-orig-text') || origText;
+            }
+          }, 2000);
+        }
+        document.dispatchEvent(new CustomEvent('asok:copied', { detail: { text: contentToCopy, element: triggerEl } }));
+      }).catch(() => {});
+    }
+  };
+
+  // ── 2. Accessible Modal Directive (asok-modal) ───────────────
+  const openModal = (modalId) => {
+    const modal = document.querySelector(`[asok-modal="${modalId}"], [data-asok-modal="${modalId}"], [data-modal="${modalId}"]`);
+    if (!modal) return;
+    if (modal.tagName === 'DIALOG' && modal.showModal) {
+      modal.showModal();
+    } else {
+      modal.style.display = '';
+      modal.removeAttribute('hidden');
+      modal.classList.add('is-open');
+    }
+    document.dispatchEvent(new CustomEvent('asok:modal-open', { detail: { modalId } }));
+  };
+
+  const closeModal = (targetEl) => {
+    const modal = targetEl ? targetEl.closest('[asok-modal], [data-asok-modal], [data-modal]') : null;
+    if (!modal) return;
+    if (modal.tagName === 'DIALOG' && modal.close) {
+      modal.close();
+    } else {
+      modal.style.display = 'none';
+      modal.setAttribute('hidden', '');
+      modal.classList.remove('is-open');
+    }
+    document.dispatchEvent(new CustomEvent('asok:modal-close', { detail: { modal } }));
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const openModals = document.querySelectorAll('[asok-modal].is-open, [data-asok-modal].is-open, [data-modal].is-open');
+      openModals.forEach(m => closeModal(m));
+    }
+  });
+
+  // ── 3. Smooth Scroll Helpers (asok-scroll-top / asok-scroll-to)
+  const scrollToElement = (target) => {
+    if (target === 'top' || !target) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      const el = typeof target === 'string' ? document.querySelector(target) : target;
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const initScrollTopButtons = (root = document) => {
+    const selector = '[asok-scroll-top], [data-asok-scroll-top], [data-scroll-top]';
+    const buttons = (root.querySelectorAll ? root.querySelectorAll(selector) : []);
+    if (!buttons.length) return;
+
+    const updateVisibility = () => {
+      const currentScroll = window.scrollY || document.documentElement.scrollTop || 0;
+      buttons.forEach(btn => {
+        const rawAttr = btn.getAttribute('asok-scroll-top') || btn.getAttribute('data-asok-scroll-top') || btn.getAttribute('data-scroll-top') || '';
+        const threshold = parseInt(rawAttr, 10) || 200;
+        const isScrollable = document.documentElement.scrollHeight > window.innerHeight + 50;
+
+        if (isScrollable && currentScroll >= threshold) {
+          btn.style.display = '';
+          btn.removeAttribute('hidden');
+          btn.classList.add('is-visible', 'active');
+        } else {
+          btn.style.display = 'none';
+          btn.setAttribute('hidden', '');
+          btn.classList.remove('is-visible', 'active');
+        }
+      });
+    };
+
+    window.addEventListener('scroll', updateVisibility, { passive: true });
+    window.addEventListener('resize', updateVisibility, { passive: true });
+    updateVisibility();
+  };
+
+  initScrollTopButtons();
+
+  // ── 4. Character Counter Directive (asok-char-count) ─────────
+  const initCharCounters = (root = document) => {
+    const counters = root.querySelectorAll('[asok-char-count], [data-asok-char-count], [data-char-count]');
+    counters.forEach(counter => {
+      const targetSelector = counter.getAttribute('asok-char-count') || counter.getAttribute('data-asok-char-count') || counter.getAttribute('data-char-count');
+      const input = document.querySelector(targetSelector);
+      if (!input) return;
+      const update = () => {
+        const max = parseInt(input.getAttribute('maxlength') || '0', 10);
+        const current = input.value ? input.value.length : 0;
+        if (max > 0) {
+          counter.textContent = `${current} / ${max}`;
+        } else {
+          counter.textContent = `${current}`;
+        }
+      };
+      input.addEventListener('input', update);
+      update();
+    });
+  };
+
+  initCharCounters();
+
+  // ── 5. Declarative Tabs Directive (asok-tabs) ────────────────
+  const initTabs = (root = document) => {
+    document.addEventListener('click', (e) => {
+      const tabBtn = e.target.closest('[asok-tab], [data-asok-tab], [data-tab]');
+      if (!tabBtn) return;
+      const tabId = tabBtn.getAttribute('asok-tab') || tabBtn.getAttribute('data-asok-tab') || tabBtn.getAttribute('data-tab');
+      const tabContainer = tabBtn.closest('[asok-tabs], [data-asok-tabs], [data-tabs]') || document;
+      
+      tabContainer.querySelectorAll('[asok-tab], [data-asok-tab], [data-tab]').forEach(btn => {
+        const id = btn.getAttribute('asok-tab') || btn.getAttribute('data-asok-tab') || btn.getAttribute('data-tab');
+        if (id === tabId) {
+          btn.classList.add('is-active', 'active');
+          btn.setAttribute('aria-selected', 'true');
+        } else {
+          btn.classList.remove('is-active', 'active');
+          btn.setAttribute('aria-selected', 'false');
+        }
+      });
+
+      tabContainer.querySelectorAll('[asok-tab-panel], [data-asok-tab-panel], [data-tab-panel]').forEach(panel => {
+        const pid = panel.getAttribute('asok-tab-panel') || panel.getAttribute('data-asok-tab-panel') || panel.getAttribute('data-tab-panel');
+        if (pid === tabId) {
+          panel.style.display = '';
+          panel.removeAttribute('hidden');
+        } else {
+          panel.style.display = 'none';
+          panel.setAttribute('hidden', '');
+        }
+      });
+    });
+  };
+
+  initTabs();
+
+  // ── 7. Declarative Top Navigation Progress Bar (asok-progress) ────
+  const startProgress = () => {
+    const selector = '[asok-progress], [data-asok-progress], [data-progress]';
+    const bars = document.querySelectorAll(selector);
+    bars.forEach(bar => {
+      const fill = bar.firstElementChild || bar;
+      bar.style.opacity = '1';
+      fill.style.width = '0%';
+      void fill.offsetWidth; // Force reflow
+      const maxVal = bar.getAttribute('asok-progress') || bar.getAttribute('data-asok-progress') || bar.getAttribute('data-progress');
+      const maxPercent = parseInt(maxVal, 10) || 90;
+      fill.style.width = maxPercent + '%';
+    });
+  };
+
+  const finishProgress = () => {
+    const selector = '[asok-progress], [data-asok-progress], [data-progress]';
+    const bars = document.querySelectorAll(selector);
+    bars.forEach(bar => {
+      const fill = bar.firstElementChild || bar;
+      fill.style.width = '100%';
+      setTimeout(() => {
+        bar.style.opacity = '0';
+        setTimeout(() => { fill.style.width = '0%'; }, 200);
+      }, 250);
+    });
+  };
+
+  // Auto-listen to navigation events & link clicks
+  document.addEventListener('asok:before', startProgress);
+  document.addEventListener('asok:success', finishProgress);
+  document.addEventListener('asok:error', finishProgress);
+
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a[href]:not([target="_blank"]):not([href^="#"]):not([href^="javascript:"])');
+    if (link && link.href && !link.hasAttribute('asok-no-progress')) {
+      const url = new URL(link.href, window.location.href);
+      if (url.origin === window.location.origin && (url.pathname !== window.location.pathname || url.search !== window.location.search)) {
+        startProgress();
+      }
+    }
+  });
+
+  window.addEventListener('beforeunload', startProgress);
+
+  window.Asok.startProgress = startProgress;
+  window.Asok.finishProgress = finishProgress;
+
+  // Global click delegator for copy, modal-open, modal-close, scroll
+  document.addEventListener('click', (e) => {
+    const copyEl = e.target.closest('[asok-copy], [data-asok-copy], [data-copy]');
+    if (copyEl) {
+      const text = copyEl.getAttribute('asok-copy') || copyEl.getAttribute('data-asok-copy') || copyEl.getAttribute('data-copy');
+      copyToClipboard(text, copyEl);
+    }
+    const modalOpenEl = e.target.closest('[asok-modal-open], [data-asok-modal-open], [data-modal-open]');
+    if (modalOpenEl) {
+      const modalId = modalOpenEl.getAttribute('asok-modal-open') || modalOpenEl.getAttribute('data-asok-modal-open') || modalOpenEl.getAttribute('data-modal-open');
+      openModal(modalId);
+    }
+    const modalCloseEl = e.target.closest('[asok-modal-close], [data-asok-modal-close], [data-modal-close]');
+    if (modalCloseEl) {
+      closeModal(modalCloseEl);
+    }
+    const scrollTopEl = e.target.closest('[asok-scroll-top], [data-asok-scroll-top], [data-scroll-top]');
+    if (scrollTopEl) {
+      scrollToElement('top');
+    }
+    const scrollToEl = e.target.closest('[asok-scroll-to], [data-asok-scroll-to], [data-scroll-to]');
+    if (scrollToEl) {
+      const target = scrollToEl.getAttribute('asok-scroll-to') || scrollToEl.getAttribute('data-asok-scroll-to') || scrollToEl.getAttribute('data-scroll-to');
+      scrollToElement(target);
+    }
+  });
+
+  // Always wrap window.Asok.init unconditionally (not inside `if (window.Asok)`
+  // which silently skips when directives.js loads before spa.js and window.Asok
+  // does not yet exist). This guarantees AsokDirectives.init is always called.
+  const _prevDirectivesInit = window.Asok.init;
+  window.Asok.init = (el) => {
+    if (_prevDirectivesInit) _prevDirectivesInit(el);
+    init(el);
+  };
+
+  window.Asok.store = globalStore;
 
   window.AsokDirectives = {
     init,
@@ -986,5 +1534,4 @@
     version: '2.0.0',
     w: contexts
   };
-  window.Asok.store = globalStore;
 })();
