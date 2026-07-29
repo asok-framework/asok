@@ -202,6 +202,43 @@ def _pluralize_filter(
     return plural_str
 
 
+def _fallback_markdown_links(s: str) -> SafeString:
+    def _repl_link(m: re.Match) -> str:
+        label, url = m.group(1), m.group(2)
+        return (
+            f'<a href="{_html.escape(url)}" target="_blank" rel="noopener"'
+            f' class="underline hover:opacity-80">{_html.escape(label)}</a>'
+        )
+
+    return SafeString(re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _repl_link, s))
+
+
+def _strip_single_paragraph(html: str) -> str:
+    if html.startswith("<p>") and html.endswith("</p>") and html.count("<p>") == 1:
+        return html[3:-4]
+    return html
+
+
+def _markdown_to_html_str(s: str) -> str:
+    try:
+        import markdown
+
+        return _strip_single_paragraph(markdown.markdown(s))
+    except ImportError:
+        return str(_fallback_markdown_links(s))
+
+
+def _markdown_filter(v: Any) -> SafeString:
+    """Convert Markdown text into safe HTML string.
+
+    Supports Python 'markdown' package if installed, or falls back to
+    regex link conversion [label](url) -> <a href="url">label</a>.
+    """
+    if not v:
+        return SafeString("")
+    return SafeString(_markdown_to_html_str(str(v)))
+
+
 TEMPLATE_FILTERS = {
     "string": lambda v: str(v) if v is not None else "",
     "upper": lambda v: str(v).upper(),
@@ -237,4 +274,5 @@ TEMPLATE_FILTERS = {
     # Base64 decoding filter for signatures and images
     "decode_base64": _decode_base64_filter,
     "display": _display_filter,
+    "markdown": _markdown_filter,
 }
