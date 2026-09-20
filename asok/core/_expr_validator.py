@@ -268,7 +268,14 @@ def _strip_js_comments(expr: str) -> str:
 
 
 def normalize_js_expression(stmt: str) -> str:
-    expr = stmt.replace("||", " or ").replace("&&", " and ")
+    expr = (
+        stmt.replace("||", " or ")
+        .replace("&&", " and ")
+        .replace("??", " or ")
+    )
+    expr = re.sub(r"\?\.\s*([a-zA-Z0-9_$]+)", r".\1", expr)
+    expr = re.sub(r"\?\.\s*\[", "[", expr)
+    expr = re.sub(r"\?\.\s*\(", "(", expr)
     expr = _normalize_dollar_vars(expr)
     expr = _normalize_js_keywords(expr)
     return expr

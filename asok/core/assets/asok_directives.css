@@ -20,3 +20,7 @@
   content: " ✓";
   opacity: 0.9;
 }
+
+[asok-link], [data-asok-link], [data-link] {
+  cursor: pointer;
+}

@@ -757,8 +757,8 @@ class WebSocketServer:
     def _register(self, conn: Connection) -> None:
         with self._conn_lock:
             self._connections.setdefault(conn.path, set()).add(conn)
-        if conn.user and hasattr(conn.user, "id"):
-            user_id = conn.user.id
+        user_id = getattr(conn.user, "id", None) if conn.user else None
+        if user_id is not None:
             with self._conn_lock:
                 old_count = self.presence_counts.get(user_id, 0)
                 self.presence_counts[user_id] = old_count + 1

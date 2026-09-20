@@ -64,7 +64,7 @@ class Asok(
         self.root_dir: str = os.path.abspath(root_dir or os.getcwd())
         import asok
 
-        self.version = getattr(asok, "__version__", "0.6.0")
+        self.version = getattr(asok, "__version__", "0.7.0")
         self.dirs: dict[str, str] = {
             "LOCALES": "src/locales",
             "PAGES": "src/pages",
@@ -99,6 +99,7 @@ class Asok(
             "GRAPHQL_DISABLE_INTROSPECTION": None,
             "STRICT_STATIC_TEMPLATES": False,
             "STRICT_VARIABLES": True,
+            "ENABLE_SPA_FALLBACK": True,
         }
 
         # Lifecycle hooks
@@ -145,6 +146,8 @@ class Asok(
         "data-cloak",
         "asok-fetch",
         "asok-fetch-async",
+        "asok-fetch-post",
+        "asok-fetch-post-async",
         "asok-theme-toggle",
         "data-asok-theme-toggle",
         "data-theme-toggle",

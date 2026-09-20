@@ -435,7 +435,10 @@ def test_fetch_directives_validation():
     assert "window.__asok_registry = Object.assign" in result
     assert "fetch('/api/products')" in result
     # It must be compiled as an async function in the registry
-    assert "async function($, $store, $el, $event, $refs, $nextTick)" in result
+    assert (
+        "async function($, $store, $el, $event, $refs, $nextTick, $route, $fetch)"
+        in result
+    )
 
     # Test load trigger compiles as well
     content_load = (
@@ -448,7 +451,58 @@ def test_fetch_directives_validation():
     assert "window.__asok_registry = Object.assign" in result_load
     assert "fetch('/api/users')" in result_load
     # It must be compiled as an async function in the registry
-    assert "async function($, $store, $el, $event, $refs, $nextTick)" in result_load
+    assert (
+        "async function($, $store, $el, $event, $refs, $nextTick, $route, $fetch)"
+        in result_load
+    )
+
+
+def test_optional_chaining_expression_validation():
+    """Test that optional chaining (response?.message) passes security precompilation."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    content = (
+        "<html><head></head><body>"
+        '<div asok-state="{ response: null }">'
+        '  <p asok-text="response?.message || \'Succès\'"></p>'
+        "</div>"
+        "</body></html>"
+    )
+    result = app._inject_assets(content, request, "testnonce123")
+    assert "response?.message" in result
+
+
+def test_fetch_post_directive_compilation():
+    """Test that asok-fetch-post and asok-fetch-post-async directives are recognized and compiled."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    content = (
+        "<html><head></head><body>"
+        '<form asok-fetch-post="/api/contact" asok-reset>'
+        '  <input asok-model="name" type="text" name="name">'
+        '  <button type="submit">Send</button>'
+        "</form>"
+        "</body></html>"
+    )
+    result = app._inject_assets(content, request, "testnonce123")
+    assert 'asok-fetch-post="/api/contact"' in result
+    assert "initFetchPost" in app.get_asset("asok_directives.js")
 
 
 def test_directive_validation_security_hardening():

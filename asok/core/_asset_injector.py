@@ -43,6 +43,8 @@ _DIRECTIVE_MARKERS = (
     "data-cloak",
     "asok-fetch",
     "asok-fetch-async",
+    "asok-fetch-post",
+    "asok-fetch-post-async",
     "asok-toggle",
     "asok-theme-toggle",
     "data-asok-theme-toggle",
@@ -85,9 +87,17 @@ _DIRECTIVE_MARKERS = (
     "asok-model-ref",
     "asok-if-ref",
     "asok-for-ref",
-    "asok-key-ref",
-    "asok-init-ref",
-    "asok-fetch-async-ref",
+)
+
+_LINK_MARKERS = ("asok-link", "data-asok-link", "data-link")
+_COPY_MARKERS = ("asok-copy", "data-asok-copy", "data-copy")
+_ROUTER_MARKERS = (
+    "asok-router",
+    "asok-route",
+    "asok-link",
+    "data-asok-router",
+    "data-asok-route",
+    "data-asok-link",
 )
 
 _JS_FEATURE_MARKERS = (
@@ -282,6 +292,18 @@ def _assert_safe_expression(app, name: str, val: str) -> None:
     )
 
 
+def _content_has_transition_markers(content: str) -> bool:
+    for marker in (
+        "asok-transition",
+        "data-asok-transition",
+        "data-asok-page-transition",
+        "asok-page-transition",
+    ):
+        if marker in content:
+            return True
+    return False
+
+
 class AssetInjector:
     """Wraps a single _inject_assets invocation in a stateful, testable object."""
 
@@ -320,6 +342,7 @@ class AssetInjector:
         self._inject_alive()
         self._inject_nonce_in_existing_tags()
         self._inject_directives()
+        self._inject_router()
         self._inject_widgets()
         self._inject_reload()
         self._flush_pending_styles()
@@ -683,9 +706,9 @@ class AssetInjector:
     def _needs_transitions(self) -> bool:
         if self.is_block or getattr(self.request, "_asok_transition_done", False):
             return False
-        if "asok-transition" in self.content:
-            return True
-        return self.stream and self.only_scripts
+        return _content_has_transition_markers(self.content) or (
+            self.stream and self.only_scripts
+        )
 
     # ── 7. reactive SPA ─────────────────────────────────────────
 
@@ -794,6 +817,11 @@ class AssetInjector:
             return True
         return getattr(self.request, "_asok_needs_directives", False)
 
+    def _needs_router(self) -> bool:
+        if any(attr in self.content for attr in _ROUTER_MARKERS):
+            return True
+        return getattr(self.request, "_asok_needs_router", False)
+
     def _has_precompiled_registry_file(self) -> bool:
         debug = self.app.config.get("DEBUG", False)
         if debug:
@@ -808,15 +836,36 @@ class AssetInjector:
     def _registry_min_file_path(self) -> str:
         return os.path.join(self.app._partials_path, "js", "directives_registry.min.js")
 
+    def _inject_copy_style_if_needed(self) -> None:
+        if not any(m in self.content for m in _COPY_MARKERS):
+            return
+        self.request._asok_pending_styles += (
+            f'<style nonce="{self.nonce}">.asok-copied:not([data-copied]):not([asok-copied-text]):after{{content:" \\2713";opacity:.9}}</style>'
+        )
+
+    def _inject_link_style_if_needed(self) -> None:
+        if getattr(self.request, "_asok_link_style_done", False):
+            return
+        if not any(m in self.content for m in _LINK_MARKERS):
+            return
+        self.request._asok_link_style_done = True
+        self.request._asok_pending_styles += (
+            f'<style nonce="{self.nonce}">[asok-link],[data-asok-link],[data-link]{{cursor:pointer}}</style>'
+        )
+
+    def _inject_directives_css(self) -> None:
+        if getattr(self.request, "_asok_directives_css_done", False):
+            return
+        self.request._asok_directives_css_done = True
+        self._inject_copy_style_if_needed()
+        self._inject_link_style_if_needed()
+
     def _inject_precompiled_directives(self) -> None:
         if getattr(self.request, "_asok_directives_done", False) or self.is_block:
             return
         self.request._asok_directives_done = True
         nonce = self.nonce
-        # Cloak CSS is now handled by _inject_anti_fouc — only inject the full
-        # directives CSS (transitions, custom properties, etc.) via the buffer.
-        css = self.app.get_asset("asok_directives.min.css")
-        self.request._asok_pending_styles += f'<style nonce="{nonce}">{css}</style>'
+        self._inject_directives_css()
         registry_url = self._versioned_registry_url()
         js = self.app.get_asset("asok_directives.min.js")
         supplementary = self._compile_dynamic_directives()
@@ -876,16 +925,19 @@ class AssetInjector:
             + "\n});\n"
         )
 
+    def _registry_body(self, expr: str, is_stmt: bool) -> str:
+        if not expr.strip():
+            return "return undefined"
+        return f"return ({expr})" if not is_stmt else expr
+
     def _registry_entry(self, h: str, expr: str) -> str:
         is_stmt = self._expression_is_statement(expr)
         if expr.strip().startswith("{") and not is_stmt:
             expr = f"({expr})"
-        body = f"return ({expr})" if not is_stmt else expr
-        body = re.sub(r"\s+", " ", body).strip()
-        is_async = self.app._is_async_expression_cached(expr)
-        fn_prefix = "async " if is_async else ""
+        body = re.sub(r"\s+", " ", self._registry_body(expr, is_stmt)).strip()
+        fn_prefix = "async " if self.app._is_async_expression_cached(expr) else ""
         return (
-            f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick)"
+            f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick, $route, $fetch)"
             f" {{ with($||{{}}) {{ {body} }} }}"
         )
 
@@ -898,15 +950,26 @@ class AssetInjector:
     def _inject_directives_full(self, registry_js: str) -> None:
         self.request._asok_directives_done = True
         nonce = self.nonce
-        # Cloak CSS is now handled by _inject_anti_fouc — the full directives CSS
-        # goes into the pending buffer (before </head>) like all other framework CSS.
-        css = self.app.get_asset("asok_directives.min.css")
+        self._inject_directives_css()
         js = self.app.get_asset("asok_directives.min.js")
-        self.request._asok_pending_styles += f'<style nonce="{nonce}">{css}</style>'
         self.request._asok_pending_scripts += (
             f'<script nonce="{nonce}">\n'
             f'window.Asok = window.Asok || {{}}; window.Asok.nonce = "{nonce}";\n'
             f"{registry_js}\n{js}\n</script>"
+        )
+
+    # ── 10b. client router ──────────────────────────────────────
+
+    def _inject_router(self) -> None:
+        if not self._needs_router():
+            return
+        if getattr(self.request, "_asok_router_done", False):
+            return
+        self.request._asok_router_done = True
+        self._inject_link_style_if_needed()
+        r_js = self.app.get_asset("asok_router.min.js")
+        self.request._asok_pending_scripts += (
+            f'\n<script nonce="{self.nonce}">\n{r_js}\n</script>'
         )
 
     # ── 11. widgets ─────────────────────────────────────────────

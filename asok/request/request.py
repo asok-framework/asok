@@ -568,7 +568,8 @@ class Request(
         code = loc.get("country", "")
         if code and code != "Unknown":
             return code
-        return self._LANG_TO_COUNTRY.get(self.lang, "US")
+        lang_key = self.lang or ""
+        return self._LANG_TO_COUNTRY.get(lang_key, "US")
 
     @staticmethod
     def _resolve_city(loc: dict[str, Any], country_info: dict[str, Any]) -> str:
@@ -638,17 +639,106 @@ class Request(
 
     @property
     def host(self) -> str:
-        """The Host header value with validation against injection attacks."""
-        host = self.environ.get("HTTP_HOST", "localhost")
-        # SECURITY: reject control chars to block injection attacks.
-        if any(c in host for c in ("\r", "\n", "\t", " ", "\x00")):
+        """The Host header value (including port if present) with ALLOWED_HOSTS and injection validation."""
+        cached = self.__dict__.get("_host_cache")
+        if cached is not None:
+            return cached
+        raw_host = self.environ.get("HTTP_HOST") or self._fallback_environ_host()
+        if self._is_malformed_host(raw_host):
+            resolved = "localhost"
+        else:
+            resolved = self._validate_allowed_host(raw_host)
+        self.__dict__["_host_cache"] = resolved
+        return resolved
+
+    def _validate_allowed_host(self, raw_host: str) -> str:
+        app_ref = self.environ.get("asok.app")
+        if not app_ref:
+            return raw_host
+        allowed_hosts = app_ref.config.get("ALLOWED_HOSTS")
+        if not allowed_hosts or allowed_hosts == "*" or allowed_hosts == ["*"]:
+            return raw_host
+        return self._check_host_against_allowed(raw_host, allowed_hosts, app_ref)
+
+    def _is_host_matched(self, allowed: str, raw_host: str, host_name: str) -> bool:
+        if allowed in ("*", raw_host, host_name):
+            return True
+        return bool(allowed.startswith(".") and (host_name.endswith(allowed) or host_name == allowed[1:]))
+
+    def _check_host_against_allowed(self, raw_host: str, allowed_hosts: Any, app_ref: Any) -> str:
+        host_name = self._strip_host_port(raw_host)
+        hosts_list = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
+        if any(self._is_host_matched(h, raw_host, host_name) for h in hosts_list):
+            return raw_host
+
+        import logging
+        logging.getLogger("asok.security").warning(
+            "Host header poisoning attempt blocked: Host %r not in ALLOWED_HOSTS %r",
+            raw_host, allowed_hosts
+        )
+        return self._fallback_allowed_host(app_ref, hosts_list)
+
+    @staticmethod
+    def _app_url_netloc(app_ref: Any) -> str:
+        app_url = app_ref.config.get("APP_URL")
+        if not app_url:
+            return ""
+        from urllib.parse import urlsplit
+        parsed = urlsplit(app_url if "://" in app_url else f"http://{app_url}")
+        return parsed.netloc or ""
+
+    @classmethod
+    def _fallback_allowed_host(cls, app_ref: Any, hosts_list: list[str]) -> str:
+        netloc = cls._app_url_netloc(app_ref)
+        if netloc:
+            return netloc
+        return next((h for h in hosts_list if h and h != "*"), "localhost")
+
+    def _fallback_environ_host(self) -> str:
+        server_name = self.environ.get("SERVER_NAME", "localhost")
+        server_port = self.environ.get("SERVER_PORT", "")
+        if server_port and server_port not in ("80", "443"):
+            return f"{server_name}:{server_port}"
+        return server_name
+
+    @staticmethod
+    def _is_malformed_host(raw_host: str) -> bool:
+        if any(c in raw_host for c in ("\r", "\n", "\t", " ", "\x00", ";")):
             import logging
 
             logging.getLogger("asok.security").warning(
-                "Malformed Host header detected: %r", host
+                "Malformed Host header detected: %r", raw_host
             )
-            return "localhost"
-        return self._strip_host_port(host)
+            return True
+        return False
+
+    @property
+    def hostname(self) -> str:
+        """The Host header value without port."""
+        return self._strip_host_port(self.host)
+
+    @property
+    def host_url(self) -> str:
+        """The scheme and host URL with a trailing slash (e.g. 'http://localhost:8000/')."""
+        return f"{self.scheme}://{self.host}/"
+
+    @property
+    def base_url(self) -> str:
+        """The full URL excluding query string (e.g. 'http://localhost:8000/path')."""
+        path = self.path if self.path.startswith("/") else f"/{self.path}"
+        return f"{self.scheme}://{self.host}{path}"
+
+    @property
+    def url(self) -> str:
+        """The full URL including scheme, host, path, and query string."""
+        if self.raw_query_string:
+            return f"{self.base_url}?{self.raw_query_string}"
+        return self.base_url
+
+    @property
+    def full_url(self) -> str:
+        """Alias for request.url."""
+        return self.url
 
     @staticmethod
     def _strip_host_port(host: str) -> str:

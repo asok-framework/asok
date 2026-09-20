@@ -11,6 +11,25 @@ from asok.exceptions import RedirectException
 from asok.utils.security import is_safe_url, request_authority, secure_filename
 
 
+class JsonAccessor(dict):
+    """Hybrid accessor for JSON request data and JSON response generation."""
+
+    def __init__(self, request: Any) -> None:
+        raw = getattr(request, "json_body", None)
+        data = raw if isinstance(raw, dict) else {}
+        super().__init__(data)
+        self._request = request
+
+    def __call__(self, data: Any = None, status: int = 200) -> str:
+        if data is None:
+            raw = getattr(self._request, "json_body", None)
+            data = raw if raw is not None else dict(self)
+        if status != 200 and hasattr(self._request, "status_code"):
+            self._request.status_code(status)
+        self._request.content_type = "application/json"
+        return json.dumps(data)
+
+
 class ResponseMixin:
     """Mixin for response manipulation, redirects and file downloads on Request."""
 
@@ -30,10 +49,14 @@ class ResponseMixin:
         self.response_headers.append((clean_name, clean_value))
         return self
 
-    def json(self: Any, data: Any) -> str:
-        """Return a JSON response."""
-        self.content_type = "application/json"
-        return json.dumps(data)
+    @property
+    def json(self: Any) -> JsonAccessor:
+        """Access parsed JSON request data or generate a JSON response."""
+        return JsonAccessor(self)
+
+    def get_json(self: Any) -> Any:
+        """Return parsed JSON payload (dict, list, etc.)."""
+        return getattr(self, "json_body", None)
 
     def api(self: Any, data: Any, status: int = 200) -> str:
         """Return a standardized JSON API success response."""
@@ -208,7 +231,7 @@ class ResponseMixin:
         filepath: str,
         filename: Optional[str] = None,
         as_attachment: bool = True,
-        base_dir: Optional[str] = None,
+        base_dir: str | Path | None = None,
     ) -> str:
         """Return a file download response.
 

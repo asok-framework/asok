@@ -350,13 +350,19 @@ class RoutingMixin:
 
         return None, captured_params
 
+    @staticmethod
+    def _is_unsafe_segment(seg: str) -> bool:
+        if seg in ("..", "."):
+            return True
+        return "\x00" in seg or "\\" in seg
+
     def _walk_route(
         self, segments: list[str], current_base: str, captured_params: dict[str, Any]
     ) -> tuple[Optional[str], dict[str, Any]]:
         """Recursively walk the pages directory to find a matching route file."""
         if not segments:
             return self._walk_route_terminal(current_base, captured_params)
-        if segments[0] in ("..", "."):
+        if self._is_unsafe_segment(segments[0]):
             return None, captured_params
 
         walkers = (

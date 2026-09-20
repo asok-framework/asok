@@ -154,39 +154,120 @@ def request_authority(request) -> str:
     return _parse_request_host(request)
 
 
+def _is_direct_host_match(netloc: str, request) -> bool:
+    host = request.headers.get("Host", "")
+    req_host = getattr(request, "host", "")
+    return netloc in (host, req_host) if netloc else False
+
+
+def _extract_app_ref(request):
+    environ = getattr(request, "environ", {})
+    return getattr(request, "app", None) or (
+        environ.get("asok.app") if isinstance(environ, dict) else None
+    )
+
+
+def _is_allowed_origin(netloc: str, request, is_internal_check: bool = True) -> bool:
+    if not netloc:
+        return False
+    if _is_direct_host_match(netloc, request):
+        return True
+    app_ref = _extract_app_ref(request)
+    return _check_app_allowed_origins(netloc, app_ref, is_internal_check=is_internal_check) if app_ref else False
+
+
+def _check_app_allowed_origins(netloc: str, app_ref, is_internal_check: bool = True) -> bool:
+    if _check_cors_origins(netloc, app_ref, is_internal_check=is_internal_check):
+        return True
+    if _check_app_url(netloc, app_ref):
+        return True
+    return _check_allowed_hosts(netloc, app_ref, is_internal_check=is_internal_check)
+
+
+def _matches_cors_item(netloc: str, cors: str, is_internal_check: bool = False) -> bool:
+    if cors == "*":
+        return not is_internal_check
+    target = cors if "://" in cors else f"http://{cors}"
+    return urlsplit(target).netloc == netloc
+
+
+def _check_cors_origins(netloc: str, app_ref, is_internal_check: bool = False) -> bool:
+    origins = app_ref.config.get("CORS_ORIGINS", [])
+    cors_list = [origins] if isinstance(origins, str) else origins
+    return any(_matches_cors_item(netloc, c, is_internal_check=is_internal_check) for c in cors_list)
+
+
+def _check_app_url(netloc: str, app_ref) -> bool:
+    app_url = app_ref.config.get("APP_URL")
+    if not app_url:
+        return False
+    parsed_app = urlsplit(app_url if "://" in app_url else f"http://{app_url}")
+    return parsed_app.netloc == netloc
+
+
+def _matches_allowed_host(host_item: str, netloc: str, host_name: str, is_internal_check: bool) -> bool:
+    if host_item == "*" and is_internal_check:
+        return False
+    return host_item in ("*", netloc, host_name)
+
+
+def _check_allowed_hosts(netloc: str, app_ref, is_internal_check: bool = True) -> bool:
+    allowed_hosts = app_ref.config.get("ALLOWED_HOSTS", [])
+    hosts_list = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
+    host_name = netloc.split(":")[0]
+    return any(_matches_allowed_host(h, netloc, host_name, is_internal_check) for h in hosts_list)
+
+
+def _is_direct_navigation(request) -> bool:
+    sec_mode = request.headers.get("Sec-Fetch-Mode", "").lower()
+    sec_dest = request.headers.get("Sec-Fetch-Dest", "").lower()
+    accept = request.headers.get("Accept", "").lower()
+    if sec_mode == "navigate" or sec_dest == "document":
+        return True
+    return bool("text/html" in accept and "application/json" not in accept and "Sec-Fetch-Mode" not in request.headers)
+
+
+def _is_sec_fetch_site_internal(sec_site: str, origin: str, request) -> Optional[bool]:
+    if sec_site in ("none", "cross-site"):
+        return False
+    if sec_site == "same-origin":
+        return True
+    if sec_site == "same-site":
+        app_ref = _extract_app_ref(request)
+        return bool(app_ref and app_ref.config.get("ALLOW_SAME_SITE_INTERNAL", False))
+    return None
+
+
+def _is_internal_request(request) -> bool:
+    if _is_direct_navigation(request):
+        return False
+
+    sec_site = request.headers.get("Sec-Fetch-Site", "").lower()
+    origin = request.headers.get("Origin", "")
+    sec_result = _is_sec_fetch_site_internal(sec_site, origin, request)
+    if sec_result is not None:
+        return sec_result
+
+    target_url = origin or request.headers.get("Referer", "")
+    if target_url:
+        return _is_allowed_origin(urlsplit(target_url).netloc, request)
+
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    return is_ajax
+
+
 def internal_only(fn):
     """
-    Blocks access to an endpoint if the request does not originate from the application itself.
-    Checks for XMLHttpRequest and matches the Host with the Origin/Referer.
+    Restricts access to internal application components.
+    Blocks browser direct address bar visits (Sec-Fetch-Mode: navigate) and cross-site
+    browser requests. Non-browser API tools sending custom X-Requested-With or internal
+    headers must be authenticated or protected via CSRF / session tokens.
     """
     from functools import wraps
 
     @wraps(fn)
     def wrapper(request, *args, **kwargs):
-        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-
-        host = request.headers.get("Host", "")
-        referer = request.headers.get("Referer", "")
-        origin = request.headers.get("Origin", "")
-
-        is_same_origin = False
-        if host:
-            # SECURITY: Parse URLs properly to extract netloc, prevent substring bypass
-            # e.g., Host: example.com shouldn't match Referer: https://attacker.com/example.com
-            from urllib.parse import urlparse
-
-            if referer:
-                parsed_referer = urlparse(referer)
-                # Compare netloc (domain:port) exactly
-                if parsed_referer.netloc == host:
-                    is_same_origin = True
-
-            if origin and not is_same_origin:
-                parsed_origin = urlparse(origin)
-                if parsed_origin.netloc == host:
-                    is_same_origin = True
-
-        if not (is_ajax and is_same_origin):
+        if not _is_internal_request(request):
             return request.api_error(
                 "Endpoint restricted to internal application use only.", status=403
             )

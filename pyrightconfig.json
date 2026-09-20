@@ -1,0 +1,13 @@
+{
+  "include": ["asok"],
+  "exclude": ["**/__pycache__", "build", "dist", "venv", ".venv"],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalSubscript": "none",
+  "reportOptionalIterable": "none",
+  "reportArgumentType": "none",
+  "reportFunctionMemberAccess": "none"
+}

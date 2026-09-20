@@ -63,8 +63,18 @@ class SSGISRMixin:
             raise ValueError(f"Path traversal bloqué : {path!r}")
         return candidate
 
+    def _configured_locales(self) -> list[str]:
+        config_locales = self.config.get("LOCALES")
+        if not config_locales:
+            return []
+        locales_list = [config_locales] if isinstance(config_locales, str) else list(config_locales)
+        return locales_list if len(locales_list) > 1 else []
+
     def _get_active_locales(self) -> list[str]:
         """Return the list of configured locales, or an empty list for single-lang apps."""
+        configured = self._configured_locales()
+        if configured or not self.config.get("MULTILINGUAL"):
+            return configured
         locales = getattr(self, "locales", {})
         return list(locales.keys()) if len(locales) > 1 else []
 

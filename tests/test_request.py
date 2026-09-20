@@ -235,3 +235,58 @@ def test_request_app_property():
     }
     req = Request(environ)
     assert req.app is app
+
+
+def test_request_url_properties():
+    from asok.request import Request
+
+    environ = {
+        "wsgi.url_scheme": "https",
+        "HTTP_HOST": "asok-framework.com:8443",
+        "PATH_INFO": "/docs/01-getting-started",
+        "QUERY_STRING": "q=test&lang=fr",
+    }
+    req = Request(environ)
+    assert req.host == "asok-framework.com:8443"
+    assert req.hostname == "asok-framework.com"
+    assert req.host_url == "https://asok-framework.com:8443/"
+    assert req.base_url == "https://asok-framework.com:8443/docs/01-getting-started"
+    assert req.url == "https://asok-framework.com:8443/docs/01-getting-started?q=test&lang=fr"
+    assert req.full_url == req.url
+
+
+def test_internal_only_decorator():
+    from asok.core import Asok
+    from asok.request import Request
+    from asok.utils.security import internal_only
+
+    app = Asok()
+
+    @internal_only
+    def api_endpoint(request):
+        return request.api("OK")
+
+    # 1. Allowed same-origin fetch from within application
+    req1 = Request({"HTTP_HOST": "localhost:8000", "HTTP_SEC_FETCH_SITE": "same-origin", "HTTP_SEC_FETCH_MODE": "cors", "asok.app": app})
+    res1 = api_endpoint(req1)
+    assert req1.code == 200
+    assert "OK" in res1
+
+    # 2. Blocked direct address bar navigation (opening URL in browser tab)
+    req2 = Request({"HTTP_HOST": "localhost:8000", "HTTP_SEC_FETCH_SITE": "none", "HTTP_SEC_FETCH_MODE": "navigate", "asok.app": app})
+    res2 = api_endpoint(req2)
+    assert req2.code == 403
+    assert "Endpoint restricted" in res2
+
+    # 3. Blocked raw external request (cURL / Postman without internal headers)
+    req3 = Request({"HTTP_HOST": "localhost:8000", "asok.app": app})
+    res3 = api_endpoint(req3)
+    assert req3.code == 403
+    assert "Endpoint restricted" in res3
+
+    # 4. Blocked cross-site request from another domain
+    req4 = Request({"HTTP_HOST": "localhost:8000", "HTTP_SEC_FETCH_SITE": "cross-site", "HTTP_ORIGIN": "https://attacker.com", "asok.app": app})
+    res4 = api_endpoint(req4)
+    assert req4.code == 403
+    assert "Endpoint restricted" in res4
+

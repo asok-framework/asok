@@ -33,3 +33,5 @@ env/
 
 db.sqlite3
 :memory:
+
+implementation_plan.md

@@ -10,9 +10,9 @@ from io import BytesIO
 
 from .style import Style
 
-TAILWIND_VERSION = "4.3.0"
+TAILWIND_VERSION = "4.3.3"
 IMAGE_VERSION = "1.6.0"
-ASSETS_VERSION = "0.28.0"
+ASSETS_VERSION = "0.28.2"
 
 _GRAPHIQL_STATIC_DIR = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "api", "static", "graphiql"

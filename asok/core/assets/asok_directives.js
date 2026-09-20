@@ -6,6 +6,79 @@
   // The element currently being evaluated, for reactive dependency tracking
   let currentSubscriber = null;
 
+  const getCsrfToken = () => {
+    // The server uses the double-submit pattern: it validates the submitted
+    // token against the `asok_csrf` cookie. The cookie is therefore the source
+    // of truth and MUST be preferred. A server-rendered <meta>/<input> can go
+    // stale on SSG/ISR-cached or SPA-fallback pages (baked at generation time
+    // while the cookie is regenerated per visitor), which caused CSRF failures.
+    const match = document.cookie.match(/(?:^|; )(?:asok_csrf|csrf_token)=([^;]*)/);
+    if (match) return decodeURIComponent(match[1]);
+    const meta = document.querySelector('meta[name=csrf-token]');
+    if (meta && meta.content) return meta.content;
+    const input = document.querySelector('input[name=csrf_token]');
+    if (input && input.value) return input.value;
+    return (window.Asok && window.Asok.csrfToken) ? window.Asok.csrfToken : '';
+  };
+
+  const _nativeFetch = window.fetch;
+  // SECURITY: only attach the CSRF token to same-origin requests so it is never
+  // leaked to third-party endpoints via cross-origin fetches.
+  const isSameOrigin = (url) => {
+    try {
+      return new URL(url, window.location.href).origin === window.location.origin;
+    } catch (e) {
+      return true; // relative / opaque URLs resolve against the current origin
+    }
+  };
+  const asokFetch = (url, options = {}) => {
+    const opts = Object.assign({}, options);
+    if (opts.headers instanceof Headers) {
+      const hObj = {};
+      opts.headers.forEach((v, k) => { hObj[k] = v; });
+      opts.headers = hObj;
+    } else {
+      opts.headers = Object.assign({}, opts.headers || {});
+    }
+
+    const token = (url && typeof url === 'string' && !isSameOrigin(url)) ? '' : getCsrfToken();
+    if (token) {
+      const hasCsrf = Object.keys(opts.headers).some(k => k.toLowerCase() === 'x-csrf-token');
+      if (!hasCsrf) {
+        opts.headers['X-CSRF-Token'] = token;
+      }
+      if (opts.body instanceof FormData && !opts.body.has('csrf_token')) {
+        opts.body.append('csrf_token', token);
+      }
+    }
+    if (!opts.credentials) {
+      opts.credentials = 'same-origin';
+    }
+    return _nativeFetch(url, opts);
+  };
+
+  const ensureFormCsrfInput = (form) => {
+    if (!form || !form.tagName || form.tagName.toLowerCase() !== 'form') return;
+    const token = getCsrfToken();
+    if (!token) return;
+    let input = form.querySelector('input[name="csrf_token"]');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'csrf_token';
+      form.appendChild(input);
+    }
+    // Always refresh the value: a stale server-rendered / SSG-baked token would
+    // otherwise be submitted natively and rejected against the current cookie.
+    input.value = token;
+  };
+
+  window.Asok = window.Asok || {};
+  window.Asok.fetch = asokFetch;
+  window.Asok.getCsrfToken = getCsrfToken;
+  window.$fetch = asokFetch;
+  window.fetch = asokFetch;
+
   // Global store reactive proxy
   const globalStore = new Proxy({}, {
     get(target, prop) {
@@ -57,7 +130,9 @@
       el,
       event,
       ctx.refs || {},
-      (callback) => Promise.resolve().then(callback) // nextTick implementation
+      (callback) => Promise.resolve().then(callback), // nextTick implementation
+      window.AsokRouter ? window.AsokRouter.route : (window.Asok ? window.Asok.$route : null),
+      window.Asok ? window.Asok.fetch : asokFetch
     ];
   };
 
@@ -80,6 +155,7 @@
       return fn(...getArgumentsForExpression(state, el, event));
     } catch (e) {
       console.error("Asok event execution error:", e);
+      throw e;
     }
   };
 
@@ -617,7 +693,17 @@
     return new Proxy(obj, {
       get(target, prop) {
         if (prop === '_isProxy') return true;
-        const val = (prop in target) ? target[prop] : (parentState ? parentState[prop] : undefined);
+        let val;
+        if (prop in target) {
+          val = target[prop];
+        } else if (parentState && prop in parentState) {
+          val = parentState[prop];
+        } else if (typeof prop === 'string' && typeof window !== 'undefined' && prop in window) {
+          val = window[prop];
+        } else {
+          val = undefined;
+        }
+
         if (typeof val === 'function') {
           if (['push', 'pop', 'splice', 'shift', 'unshift', 'reverse', 'sort'].includes(prop)) {
             return (...args) => {
@@ -631,7 +717,10 @@
         return createReactiveProxy(val, onChange, parentState);
       },
       has(target, prop) {
-        return prop in target || (parentState && prop in parentState);
+        if (typeof prop === 'symbol' || (typeof prop === 'string' && prop.startsWith('_'))) {
+          return prop in target || (parentState && prop in parentState);
+        }
+        return true;
       },
       set(target, prop, value) {
         if (prop in target) {
@@ -807,7 +896,7 @@
     if (el._fetchInitialized) return;
     const url = el.getAttribute('asok-fetch');
     const targetProp = el.getAttribute('asok-fetch-as') || 'data';
-    const trigger = el.getAttribute('asok-fetch-on') || 'load';
+    const trigger = el.getAttribute('asok-fetch-on') || (el.tagName.toLowerCase() === 'form' ? 'submit' : 'load');
     const owner = findStateOwner(el);
     if (!url || !owner) return;
 
@@ -815,16 +904,21 @@
     el._fetchInitialized = 1;
 
     const doFetch = async () => {
+      if (state.loading) return;
       try {
         state.loading = true;
         state.error = null;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(res.statusText);
+        const fetchFn = (window.Asok && window.Asok.fetch) ? window.Asok.fetch : asokFetch;
+        const res = await fetchFn(url);
+        state.status = res.status;
+        state.statusCode = res.status;
+        state.ok = res.ok;
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         const data = await res.json();
         state[targetProp] = data;
         state.loading = false;
       } catch (e) {
-        state.error = e.message;
+        state.error = e.message || 'Fetch error';
         state.loading = false;
       }
     };
@@ -832,7 +926,10 @@
     if (trigger === 'load') {
       doFetch();
     } else {
-      const handler = () => doFetch();
+      const handler = (e) => {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        doFetch();
+      };
       el.addEventListener(trigger, handler);
       contexts.get(owner).cleanup.push(() => el.removeEventListener(trigger, handler));
     }
@@ -842,32 +939,219 @@
   const initFetchAsync = (el) => {
     if (el._fetchAsyncInitialized) return;
     const ref = el.getAttribute('asok-fetch-async-ref');
-    const trigger = el.getAttribute('asok-fetch-on') || 'click';
-    const owner = findStateOwner(el);
-    if (!ref || !owner) return;
+    if (!ref) return;
 
-    const state = contexts.get(owner).state;
+    const owner = findStateOwner(el);
+    let state;
+    if (owner && contexts.has(owner)) {
+      state = contexts.get(owner).state;
+    } else {
+      if (!el._fallbackState) {
+        const raw = {};
+        el._fallbackState = createReactiveProxy(raw, () => updateScope(el));
+        contexts.set(el, { state: el._fallbackState, cleanup: [], refs: {}, _teleportedScopes: [] });
+      }
+      state = el._fallbackState;
+    }
+
+    const isForm = el.tagName.toLowerCase() === 'form';
+    const formEl = isForm ? el : (el.type === 'submit' || el.closest('form') ? el.closest('form') : null);
+    const hasExplicitTrigger = el.hasAttribute('asok-fetch-on');
+    const trigger = hasExplicitTrigger
+      ? el.getAttribute('asok-fetch-on')
+      : (formEl ? 'submit' : 'click');
+
+    const targetElement = (!hasExplicitTrigger && trigger === 'submit' && formEl) ? formEl : el;
     el._fetchAsyncInitialized = 1;
 
-    const doAsync = async () => {
+    const resetFormIfNeeded = () => {
+      const hasResetAttr = el.hasAttribute('asok-reset') || el.hasAttribute('data-asok-reset') ||
+                           (formEl && (formEl.hasAttribute('asok-reset') || formEl.hasAttribute('data-asok-reset')));
+      if (!hasResetAttr) return;
+
+      if (formEl) {
+        try { formEl.reset(); } catch (_) {}
+        formEl.querySelectorAll('[asok-model]').forEach(input => {
+          const modelProp = input.getAttribute('asok-model');
+          if (modelProp && modelProp in state) {
+            state[modelProp] = '';
+          }
+        });
+      }
+    };
+
+    const doAsync = async (event) => {
+      if (state.loading) return;
       try {
         state.loading = true;
         state.error = null;
-        await executeEventExpression(ref, state, null, el);
+        await executeEventExpression(ref, state, event, el);
         state.loading = false;
+        resetFormIfNeeded();
       } catch (e) {
-        state.error = e.message;
+        state.error = e.message || 'Async action error';
         state.loading = false;
       }
     };
 
     if (trigger === 'load') {
-      doAsync();
+      doAsync(null);
     } else {
-      const handler = () => doAsync();
-      el.addEventListener(trigger, handler);
-      contexts.get(owner).cleanup.push(() => el.removeEventListener(trigger, handler));
+      const handler = (e) => {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        doAsync(e);
+      };
+      targetElement.addEventListener(trigger, handler);
+      const ownerCtx = owner ? contexts.get(owner) : contexts.get(el);
+      if (ownerCtx && ownerCtx.cleanup) {
+        ownerCtx.cleanup.push(() => targetElement.removeEventListener(trigger, handler));
+      }
     }
+  };
+
+  // Declarative POST fetch (asok-fetch-post & asok-fetch-post-async)
+  const initFetchPost = (el) => {
+    if (el._fetchPostInitialized) return;
+    const url = el.getAttribute('asok-fetch-post') || el.getAttribute('asok-fetch-post-async');
+    if (!url) return;
+
+    const owner = findStateOwner(el);
+    let state;
+    if (owner && contexts.has(owner)) {
+      state = contexts.get(owner).state;
+    } else {
+      if (!el._fallbackState) {
+        const raw = {};
+        el._fallbackState = createReactiveProxy(raw, () => updateScope(el));
+        contexts.set(el, { state: el._fallbackState, cleanup: [], refs: {}, _teleportedScopes: [] });
+      }
+      state = el._fallbackState;
+    }
+
+    const isForm = el.tagName.toLowerCase() === 'form';
+    const formEl = isForm ? el : (el.type === 'submit' || el.closest('form') ? el.closest('form') : null);
+    const hasExplicitTrigger = el.hasAttribute('asok-fetch-on');
+    const trigger = hasExplicitTrigger
+      ? el.getAttribute('asok-fetch-on')
+      : (formEl ? 'submit' : 'click');
+
+    const targetElement = (!hasExplicitTrigger && trigger === 'submit' && formEl) ? formEl : el;
+    const targetProp = el.getAttribute('asok-fetch-as') || 'response';
+
+    el._fetchPostInitialized = 1;
+
+    const resetFormIfNeeded = () => {
+      const hasResetAttr = el.hasAttribute('asok-reset') || el.hasAttribute('data-asok-reset') ||
+                           (formEl && (formEl.hasAttribute('asok-reset') || formEl.hasAttribute('data-asok-reset')));
+      if (!hasResetAttr) return;
+
+      if (formEl) {
+        try { formEl.reset(); } catch (_) {}
+        formEl.querySelectorAll('[asok-model]').forEach(input => {
+          const modelProp = input.getAttribute('asok-model');
+          if (modelProp && modelProp in state) {
+            state[modelProp] = '';
+          }
+        });
+      }
+    };
+
+    const doPost = async (event) => {
+      if (state.loading) return;
+      try {
+        state.loading = true;
+        state.error = null;
+
+        const payload = {};
+        if (formEl) {
+          const formData = new FormData(formEl);
+          formData.forEach((val, key) => {
+            payload[key] = val;
+          });
+        }
+        Object.keys(state).forEach(key => {
+          if (!key.startsWith('_') && key !== 'loading' && key !== 'error' && key !== targetProp) {
+            payload[key] = state[key];
+          }
+        });
+
+        const fetchFn = (window.Asok && window.Asok.fetch) ? window.Asok.fetch : asokFetch;
+        const res = await fetchFn(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        state.status = res.status;
+        state.statusCode = res.status;
+        state.ok = res.ok;
+
+        if (!res.ok) {
+          let errText = `HTTP ${res.status}: ${res.statusText}`;
+          try {
+            const errJson = await res.json();
+            if (errJson && errJson.message) errText = errJson.message;
+          } catch (_) {}
+          throw new Error(errText);
+        }
+
+        const data = await res.json();
+        state[targetProp] = data;
+        state.loading = false;
+        resetFormIfNeeded();
+      } catch (e) {
+        state.error = e.message || 'Fetch error';
+        state.loading = false;
+      }
+    };
+
+    if (trigger === 'load') {
+      doPost(null);
+    } else {
+      const handler = (e) => {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        doPost(e);
+      };
+      targetElement.addEventListener(trigger, handler);
+      const ownerCtx = owner ? contexts.get(owner) : contexts.get(el);
+      if (ownerCtx && ownerCtx.cleanup) {
+        ownerCtx.cleanup.push(() => targetElement.removeEventListener(trigger, handler));
+      }
+    }
+  };
+
+  const updateMetaTagDirective = (selector, nameAttr, attrValue, content) => {
+    let meta = document.querySelector(selector);
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute(nameAttr, attrValue);
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute('content', content);
+  };
+
+  const applyMetaItemDirective = (key, val) => {
+    if (!key || val === undefined || val === null) return;
+    const strVal = String(val);
+    if (key === 'title') {
+      document.title = strVal;
+    } else if (key.startsWith('og:')) {
+      updateMetaTagDirective(`meta[property="${key}"]`, 'property', key, strVal);
+    } else {
+      updateMetaTagDirective(`meta[name="${key}"]`, 'name', key, strVal);
+    }
+  };
+
+  const initMeta = (el) => {
+    if (!el || !el.attributes) return;
+    Array.from(el.attributes).forEach(attr => {
+      const name = attr.name;
+      if (name.startsWith('asok-meta:') || name.startsWith('data-asok-meta:')) {
+        const key = name.replace(/^(data-)?asok-meta:/, '');
+        const val = attr.value;
+        applyMetaItemDirective(key, val);
+      }
+    });
   };
 
   // Clean up references and event listeners
@@ -910,6 +1194,7 @@
       delete el._teleportInitialized;
       delete el._fetchInitialized;
       delete el._fetchAsyncInitialized;
+      delete el._fetchPostInitialized;
       delete el._updateValue;
       delete el._asokPrevClasses;
       delete el._asokShowInitialized;
@@ -1062,8 +1347,17 @@
       if (el.hasAttribute('asok-fetch-async-ref')) {
         initFetchAsync(el);
       }
+      if (el.hasAttribute('asok-fetch-post') || el.hasAttribute('asok-fetch-post-async')) {
+        initFetchPost(el);
+      }
       if (Array.from(el.attributes).some(attr => attr.name.startsWith('asok-on-ref:'))) {
         initEvents(el);
+      }
+      if (Array.from(el.attributes).some(attr => attr.name.startsWith('asok-meta:') || attr.name.startsWith('data-asok-meta:'))) {
+        initMeta(el);
+      }
+      if (el.tagName && el.tagName.toLowerCase() === 'form') {
+        ensureFormCsrfInput(el);
       }
     });
 

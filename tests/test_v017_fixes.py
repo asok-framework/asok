@@ -911,3 +911,35 @@ def test_cache_page_key_raw_query_string():
     assert cache.keys[0] != cache.keys[1]
     assert "q=a%26b" in cache.keys[0]
     assert "q=a&b" in cache.keys[1]
+
+
+def test_request_json_accessors():
+    import json
+    from io import BytesIO
+
+    from asok.request import Request
+
+    payload = json.dumps({"name": "John", "email": "john@example.com"}).encode("utf-8")
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/api/users",
+        "CONTENT_TYPE": "application/json",
+        "CONTENT_LENGTH": str(len(payload)),
+        "SERVER_NAME": "localhost",
+        "SERVER_PORT": "80",
+        "wsgi.input": BytesIO(payload),
+    }
+    req = Request(environ)
+
+    # 1. Access as dictionary property
+    assert req.json.get("name") == "John"
+    assert req.json["email"] == "john@example.com"
+
+    # 2. Access via get_json() and json_body
+    assert req.get_json() == {"name": "John", "email": "john@example.com"}
+    assert req.json_body == {"name": "John", "email": "john@example.com"}
+
+    # 3. Call as a response function
+    res_str = req.json({"status": "ok"})
+    assert req.content_type == "application/json"
+    assert json.loads(res_str) == {"status": "ok"}

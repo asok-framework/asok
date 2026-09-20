@@ -73,6 +73,8 @@ class TemplateMixin:
         "asok-cloak",
         "asok-fetch",
         "asok-fetch-async",
+        "asok-fetch-post",
+        "asok-fetch-post-async",
         "asok-theme-toggle",
         "data-asok-theme-toggle",
         "data-theme-toggle",
@@ -105,17 +107,28 @@ class TemplateMixin:
         "data-progress",
     ]
 
+    _ASOK_ROUTER_MARKERS = [
+        "asok-router",
+        "asok-route",
+        "asok-link",
+        "asok-active-class",
+        "asok-meta",
+        "data-asok-router",
+        "data-asok-route",
+        "data-asok-link",
+    ]
+
     def _initial_template_path(self: Any, filepath: str, root: str) -> str:
         """Build the initial absolute path for a template file."""
-        if (
-            not os.path.isabs(filepath)
-            and not filepath.startswith("src/")
-            and hasattr(self, "_current_page_file")
-            and self._current_page_file
-        ):
-            return os.path.join(os.path.dirname(self._current_page_file), filepath)
-        return os.path.join(root, filepath)
+        if os.path.isabs(filepath) or filepath.startswith("src/"):
+            return os.path.join(root, filepath)
+        page_file = getattr(self, "_current_page_file", None)
+        if page_file:
+            return os.path.join(os.path.dirname(page_file), filepath)
+        cand = os.path.join(root, "src", "pages", filepath)
+        return cand if os.path.isfile(cand) else os.path.join(root, filepath)
 
+    @staticmethod
     def _swap_extension(path: str) -> str:
         base_path, current_ext = os.path.splitext(path)
         target = (
@@ -127,20 +140,23 @@ class TemplateMixin:
             return base_path + target
         return path
 
-    def _try_resolve_extensions(path: str) -> str:  # noqa: N805
+    @staticmethod
+    def _try_resolve_extensions(path: str) -> str:
         """Attempt to resolve a template path by appending or swapping extensions."""
         for ext in (".html", ".asok"):
             if os.path.isfile(path + ext):
                 return path + ext
         return TemplateMixin._swap_extension(path)
 
+    @staticmethod
     def _is_partial_template(normalized: str) -> bool:
         return any(
             d in normalized
             for d in ("/partials/", "/html/", "/components/", "/templates/")
         )
 
-    def _validate_template_name(path: str) -> None:  # noqa: N805
+    @staticmethod
+    def _validate_template_name(path: str) -> None:
         """Raise ValueError if a page template has an invalid filename."""
         if TemplateMixin._is_partial_template(path.replace("\\", "/")):
             return
@@ -182,6 +198,8 @@ class TemplateMixin:
     def _check_asok_directives(self: Any, content: str) -> None:
         if any(attr in content for attr in TemplateMixin._ASOK_DIRECTIVES):
             self._asok_needs_directives = True
+        if any(attr in content for attr in TemplateMixin._ASOK_ROUTER_MARKERS):
+            self._asok_needs_router = True
 
     def _resolve_template(self: Any, filepath: str) -> tuple[str, Any]:
         """Convert a template path to its content and identify the partials roots."""
@@ -625,7 +643,8 @@ class TemplateMixin:
                 return webp_path
         return filepath
 
-    def _resolve_min_js(filepath: str, root: str) -> str:  # noqa: N805
+    @staticmethod
+    def _resolve_min_js(filepath: str, root: str) -> str:
         """Return the minified JS path if a .min.js file exists."""
         if not filepath.endswith(".js") or filepath.endswith(".min.js"):
             return filepath
@@ -634,7 +653,8 @@ class TemplateMixin:
             return min_path
         return filepath
 
-    def _resolve_min_css(filepath: str, root: str) -> str:  # noqa: N805
+    @staticmethod
+    def _resolve_min_css(filepath: str, root: str) -> str:
         """Return the minified CSS path if a .min.css file exists."""
         if not filepath.endswith(".css") or filepath.endswith(
             (".min.css", ".build.css")
@@ -663,7 +683,8 @@ class TemplateMixin:
             return self._resolve_webp_path(filepath, root)
         return self._resolve_minified_path(filepath, app_ref, root)
 
-    def _build_static_url(target_path: str) -> str:  # noqa: N805
+    @staticmethod
+    def _build_static_url(target_path: str) -> str:
         """Build the public URL for a static asset, serving from S3 if configured."""
         if os.environ.get("ASOK_SERVE_STATIC_FROM_S3", "false").lower() != "true":
             return "/" + target_path.lstrip("/")
@@ -677,7 +698,8 @@ class TemplateMixin:
             pass
         return "/" + target_path.lstrip("/")
 
-    def _append_static_version(url: str, target_path: str, app_ref: Any) -> str:  # noqa: N805
+    @staticmethod
+    def _append_static_version(url: str, target_path: str, app_ref: Any) -> str:
         """Append a cache-busting version query param to the static URL."""
         if not app_ref:
             return url

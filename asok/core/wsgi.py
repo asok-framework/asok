@@ -651,7 +651,107 @@ class WSGIMixin:
             if os.path.isfile(p):
                 request.scoped_assets[ext] = p
 
+    _STATIC_EXTENSIONS = (
+        ".css",
+        ".js",
+        ".map",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".eot",
+        ".json",
+        ".xml",
+        ".webp",
+        ".avif",
+        ".mp4",
+        ".webm",
+        ".pdf",
+        ".txt",
+        ".zip",
+        ".tar",
+        ".gz",
+    )
+
+    _PROTECTED_SPA_SEGMENTS = frozenset(
+        ["api", "admin", "static", "assets", "css", "js", "images", "uploads"]
+    )
+
+    @staticmethod
+    def _has_malformed_traversal(clean_path: str) -> bool:
+        return "\x00" in clean_path or ".." in clean_path or "\\" in clean_path
+
+    @staticmethod
+    def _first_path_segment(clean_path: str) -> str:
+        stripped = clean_path.strip("/")
+        return stripped.split("/", 1)[0].lower() if stripped else ""
+
+    @staticmethod
+    def _is_protected_spa_path(clean_path: str) -> bool:
+        if WSGIMixin._has_malformed_traversal(clean_path):
+            return True
+        seg = WSGIMixin._first_path_segment(clean_path)
+        if not seg:
+            return False
+        return seg.startswith(".") or seg in WSGIMixin._PROTECTED_SPA_SEGMENTS
+
+    @staticmethod
+    def _is_static_asset_path(clean_path: str) -> bool:
+        return any(
+            clean_path.lower().endswith(ext) for ext in WSGIMixin._STATIC_EXTENSIONS
+        )
+
+    @staticmethod
+    def _is_spa_fallback_request(
+        config: dict[str, Any], method: str, path: str
+    ) -> bool:
+        if not config.get("ENABLE_SPA_FALLBACK") or method not in ("GET", "HEAD"):
+            return False
+        clean = path.split("?")[0].rstrip("/") or "/"
+        if WSGIMixin._is_protected_spa_path(clean):
+            return False
+        return not WSGIMixin._is_static_asset_path(clean)
+
+    def _dispatch_spa_fallback(self, request: Request, fallback_file: str) -> Any:
+        request._current_page_file = fallback_file
+        self._assign_page_metadata(request, fallback_file)
+        try:
+            return self._run_dispatch(request, fallback_file)
+        except RedirectException as redir:
+            raise self._build_final_redirect(request, request.environ, redir)
+        except AbortException as abort:
+            return self._abort_to_error_page(request, abort)
+        except Exception as e:
+            return self._handle_dispatch_exception(request, e)
+
+    @staticmethod
+    def _existing_file_or_none(filepath: Optional[str]) -> Optional[str]:
+        return filepath if (filepath and os.path.isfile(filepath)) else None
+
+    def _resolve_string_fallback(self, cfg: str, request: Request) -> Optional[str]:
+        parts = [p for p in cfg.strip().lstrip("/").split("/") if p]
+        file_path, _ = self._resolve_route(parts, request=request)
+        return self._existing_file_or_none(file_path)
+
+    def _resolve_spa_fallback_file(self, request: Request) -> Optional[str]:
+        cfg = self.config.get("ENABLE_SPA_FALLBACK")
+        if isinstance(cfg, str) and cfg.strip():
+            fallback = self._resolve_string_fallback(cfg, request)
+            if fallback:
+                return fallback
+        file_root, _ = self._resolve_route([], request=request)
+        return self._existing_file_or_none(file_root)
+
     def _not_found_response(self, request: Request) -> Any:
+        if self._is_spa_fallback_request(self.config, request.method, request.path):
+            fallback_file = self._resolve_spa_fallback_file(request)
+            if fallback_file:
+                return self._dispatch_spa_fallback(request, fallback_file)
         body = self._render_error_page(request, 404)
         if inspect.isgenerator(body):
             return body

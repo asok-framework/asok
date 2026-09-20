@@ -1,7 +1,7 @@
 [project]
 name = "asok"
-version = "0.6.0"
-description = "A minimalist Python web framework with minimal external dependencies."
+version = "0.7.0"
+description = "A batteries-included Python web framework with zero runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

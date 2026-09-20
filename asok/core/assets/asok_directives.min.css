@@ -1,1 +1,1 @@
-.asok-copied:not([data-copied]):not([asok-copied-text]):after{content:" \2713";opacity:.9}
+.asok-copied:not([data-copied]):not([asok-copied-text]):after{content:" \2713";opacity:.9}[asok-link],[data-asok-link],[data-link]{cursor:pointer}

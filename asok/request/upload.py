@@ -213,15 +213,15 @@ class UploadedFile:
 
     def _detect_mime(self) -> tuple[str, list]:
         """Detect MIME type from content, returning (mime, extensions)."""
-        mime, exts = self._detect_riff_mime()
-        if mime:
-            return mime, exts
-        mime, exts = self._detect_ftyp_mime()
-        if mime:
-            return mime, exts
-        mime, exts = self._detect_generic_mime()
-        if mime:
-            return mime, exts
+        detectors = (
+            self._detect_riff_mime,
+            self._detect_ftyp_mime,
+            self._detect_generic_mime,
+        )
+        for detector in detectors:
+            mime, exts = detector()
+            if mime:
+                return mime, exts or []
         all_mimes = ", ".join({m for m, _ in self._MAGIC_BYTES.values()})
         raise ValueError(
             f"Unknown or unsupported file type. Supported types: {all_mimes}"

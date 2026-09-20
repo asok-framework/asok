@@ -68,10 +68,18 @@
     if (node.querySelectorAll) node.querySelectorAll('*').forEach(release);
   }
 
-  // Retrieve the CSRF token from page meta tag
+  // Retrieve the CSRF token from meta tag, inputs, cookies, or Asok state
   function getCsrfToken() {
+    // Prefer the `asok_csrf` cookie: the server validates against it (double
+    // submit), so it is the source of truth. A baked <meta>/<input> can be
+    // stale on cached/SPA-fallback pages and cause spurious CSRF failures.
+    const cookieMatch = document.cookie.match(/(?:^|; )(?:asok_csrf|csrf_token)=([^;]*)/);
+    if (cookieMatch) return decodeURIComponent(cookieMatch[1]);
     const meta = document.querySelector('meta[name=csrf-token]');
-    return meta ? meta.content : '';
+    if (meta && meta.content) return meta.content;
+    const input = document.querySelector('input[name=csrf_token]');
+    if (input && input.value) return input.value;
+    return (window.Asok && window.Asok.csrfToken) ? window.Asok.csrfToken : '';
   }
 
   // Find the target element by selector or block comment markers

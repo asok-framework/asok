@@ -43,242 +43,254 @@
   backface-visibility: hidden;
   perspective: 1000px;
   transform-style: preserve-3d;
+  transition-duration: 200ms;
 }
 
+/* Fade */
 .asok-fade-out {
   opacity: 1;
 }
-
 .asok-fade-out.is-leaving {
   opacity: 0;
-  transition: opacity 300ms ease-out;
+  transition-property: opacity;
+  transition-timing-function: ease-out;
 }
 
 .asok-fade-in {
   opacity: 0;
 }
-
 .asok-fade-in.is-entering {
   opacity: 1;
-  transition: opacity 300ms ease-out;
+  transition-property: opacity;
+  transition-timing-function: ease-out;
 }
 
+/* Slide (default) */
 .asok-slide-out {
   transform: translateX(0);
   opacity: 1;
 }
-
 .asok-slide-out.is-leaving {
   transform: translateX(-20px);
   opacity: 0;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
 .asok-slide-in {
   transform: translateX(20px);
   opacity: 0;
 }
-
 .asok-slide-in.is-entering {
   transform: translateX(0);
   opacity: 1;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
+/* Scale */
 .asok-scale-out {
   transform: scale(1);
   opacity: 1;
 }
-
 .asok-scale-out.is-leaving {
   transform: scale(0.95);
   opacity: 0;
-  transition: all 250ms var(--ease-out-quart);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-quart);
 }
 
 .asok-scale-in {
   transform: scale(0.95);
   opacity: 0;
 }
-
 .asok-scale-in.is-entering {
   transform: scale(1);
   opacity: 1;
-  transition: all 300ms var(--ease-out-quart);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-quart);
 }
 
+/* Fly */
 .asok-fly-out {
   transform: translateY(0);
   opacity: 1;
 }
-
 .asok-fly-out.is-leaving {
   transform: translateY(-20px);
   opacity: 0;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
 .asok-fly-in {
   transform: translateY(20px);
   opacity: 0;
 }
-
 .asok-fly-in.is-entering {
   transform: translateY(0);
   opacity: 1;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
+/* Blur */
 .asok-blur-out {
   filter: blur(0px);
   opacity: 1;
 }
-
 .asok-blur-out.is-leaving {
   filter: blur(5px);
   opacity: 0;
-  transition: all 200ms ease-out;
+  transition-property: filter, opacity;
+  transition-timing-function: ease-out;
 }
 
 .asok-blur-in {
   filter: blur(5px);
   opacity: 0;
 }
-
 .asok-blur-in.is-entering {
   filter: blur(0px);
   opacity: 1;
-  transition: all 300ms ease-out;
+  transition-property: filter, opacity;
+  transition-timing-function: ease-out;
 }
 
+/* Bounce */
 .asok-bounce-out {
   transform: scale(1);
   opacity: 1;
 }
-
 .asok-bounce-out.is-leaving {
   transform: scale(0.9);
   opacity: 0;
-  transition: all 300ms ease-in;
+  transition-property: transform, opacity;
+  transition-timing-function: ease-in;
 }
 
 .asok-bounce-in {
   transform: scale(0.9);
   opacity: 0;
 }
-
 .asok-bounce-in.is-entering {
   transform: scale(1);
   opacity: 1;
-  transition: all 400ms var(--ease-in-out-back);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-in-out-back);
 }
 
+/* Page */
 .asok-page-out {
   opacity: 1;
   transform: scale(1);
 }
-
 .asok-page-out.is-leaving {
   opacity: 0;
   transform: scale(0.98);
-  transition: all 250ms var(--ease-out-quart);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-quart);
 }
 
 .asok-page-in {
   opacity: 0;
   transform: scale(0.98);
 }
-
 .asok-page-in.is-entering {
   opacity: 1;
   transform: scale(1);
-  transition: all 300ms var(--ease-out-quart);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-quart);
 }
 
+/* Slide Left */
 .asok-slide-left-out {
   transform: translateX(0);
   opacity: 1;
 }
-
 .asok-slide-left-out.is-leaving {
-  transform: translateX(-20px);
+  transform: translateX(-30px);
   opacity: 0;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
 .asok-slide-left-in {
-  transform: translateX(-20px);
+  transform: translateX(30px);
   opacity: 0;
 }
-
 .asok-slide-left-in.is-entering {
   transform: translateX(0);
   opacity: 1;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
+/* Slide Right */
 .asok-slide-right-out {
   transform: translateX(0);
   opacity: 1;
 }
-
 .asok-slide-right-out.is-leaving {
-  transform: translateX(20px);
+  transform: translateX(30px);
   opacity: 0;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
 .asok-slide-right-in {
-  transform: translateX(20px);
+  transform: translateX(-30px);
   opacity: 0;
 }
-
 .asok-slide-right-in.is-entering {
   transform: translateX(0);
   opacity: 1;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
+/* Slide Up */
 .asok-slide-up-out {
   transform: translateY(0);
   opacity: 1;
 }
-
 .asok-slide-up-out.is-leaving {
-  transform: translateY(-20px);
+  transform: translateY(-30px);
   opacity: 0;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
 .asok-slide-up-in {
-  transform: translateY(-20px);
+  transform: translateY(30px);
   opacity: 0;
 }
-
 .asok-slide-up-in.is-entering {
-  transform: translateY(0);
+  transform: translateX(0) translateY(0);
   opacity: 1;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
+/* Slide Down */
 .asok-slide-down-out {
   transform: translateY(0);
   opacity: 1;
 }
-
 .asok-slide-down-out.is-leaving {
-  transform: translateY(20px);
+  transform: translateY(30px);
   opacity: 0;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
 
 .asok-slide-down-in {
-  transform: translateY(20px);
+  transform: translateY(-30px);
   opacity: 0;
 }
-
 .asok-slide-down-in.is-entering {
   transform: translateY(0);
   opacity: 1;
-  transition: all 300ms var(--ease-out-expo);
+  transition-property: transform, opacity;
+  transition-timing-function: var(--ease-out-expo);
 }
