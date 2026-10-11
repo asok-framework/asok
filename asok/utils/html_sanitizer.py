@@ -379,3 +379,33 @@ def _is_safe_url(url: str, allow_data_images: bool = False) -> bool:
         return False
 
     return True
+
+
+def sanitize_html_strict(html: str) -> str:
+    """DOM-based HTML sanitizer for untrusted public user-generated content.
+
+    SECURITY: Hardened against mutation XSS (mXSS). Uses the `nh3` Rust
+    Ammonia engine when available to guarantee browser-compliant DOM parsing
+    and element whitelisting. Falls back to regex-based `sanitize_html()`
+    with a security warning if `nh3` is not installed.
+    """
+    if not html:
+        return ""
+    try:
+        import nh3
+
+        return nh3.clean(
+            html,
+            tags=ALLOWED_TAGS,
+            attributes=ALLOWED_ATTRIBUTES,
+            url_schemes={"http", "https", "mailto"},
+        )
+    except ImportError:
+        import logging
+
+        logging.getLogger("asok.security").warning(
+            "nh3 is not installed; falling back to regex-based sanitize_html(). "
+            'Install nh3 (`pip install "asok[security]"` or `pip install "asok[sanitize]"`) for hardened DOM-based mXSS protection.',
+            extra={"event": "html_sanitizer_fallback", "dependency": "nh3"},
+        )
+        return sanitize_html(html)

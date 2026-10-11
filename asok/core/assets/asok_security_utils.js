@@ -18,8 +18,11 @@
   ]);
 
   // Attributes whose value is a URL and must pass isSafeUrl().
+  // Note: 'formaction' is intentionally absent — it is blocked outright by
+  // isSafeAttribute() (listed in dangerousAttrs), so URL-validating it here
+  // would be dead code and create a misleading impression of permissiveness.
   const URL_ATTRS = new Set([
-    'href', 'src', 'srcset', 'action', 'formaction', 'poster', 'background',
+    'href', 'src', 'srcset', 'action', 'poster', 'background',
     'cite', 'longdesc', 'xlink:href'
   ]);
 
@@ -106,19 +109,28 @@
         return false;
       }
 
-      // SECURITY: decode percent-encoding and strip control chars before checks
-      // (defeats e.g. j%61vascript: and embedded newline/tab obfuscation).
-      let cleanUrl;
-      try {
-        cleanUrl = decodeURIComponent(url).replace(/[\x00-\x1F\x7F]/g, '').trim();
-      } catch (e) {
-        cleanUrl = url.replace(/[\x00-\x1F\x7F]/g, '').trim();
+      // SECURITY: decode percent-encoding and strip control chars before checks.
+      // Iteratively decode up to 3 times to defeat nested encoding (e.g. %256a%2561vascript:)
+      let cleanUrl = url;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const decoded = decodeURIComponent(cleanUrl);
+          if (decoded === cleanUrl) break;
+          cleanUrl = decoded;
+        } catch (e) {
+          break;
+        }
       }
+      cleanUrl = cleanUrl.replace(/[\x00-\x1F\x7F]/g, '').trim();
 
-      // Reject protocol-relative URLs ("//host/…"): they inherit the page scheme
-      // but point at an arbitrary (possibly external) origin — an open-redirect
-      // vector when bound to href/src.
-      if (cleanUrl.startsWith('//')) {
+      // Reject protocol-relative URLs ("//host/…", "\\host/...", "/\host/...", "\/host/..."):
+      // they point at an arbitrary (possibly external) origin — an open-redirect vector.
+      if (
+        cleanUrl.startsWith('//') ||
+        cleanUrl.startsWith('\\\\') ||
+        cleanUrl.startsWith('/\\') ||
+        cleanUrl.startsWith('\\/')
+      ) {
         console.warn('[Asok Security] Blocked protocol-relative URL:', url);
         return false;
       }
@@ -204,7 +216,7 @@
      * @returns {boolean} - True if message structure is valid
      */
     validateWsMessage: function (data) {
-      if (!data || typeof data !== 'object') {
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
         return false;
       }
 
@@ -221,10 +233,39 @@
       }
 
       // Validate component ID format if present
-      if (data.cid) {
+      if (data.cid !== undefined && data.cid !== null) {
         if (typeof data.cid !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(data.cid)) {
           console.warn('[Asok Security] Invalid component ID format:', data.cid);
           return false;
+        }
+      }
+
+      // Specific validation for render operation
+      if (data.op === 'render') {
+        if (!data.cid || typeof data.cid !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(data.cid)) {
+          console.warn('[Asok Security] Missing or invalid component ID in render operation');
+          return false;
+        }
+        if (typeof data.html !== 'string') {
+          console.warn('[Asok Security] Invalid HTML type in render operation');
+          return false;
+        }
+      }
+
+      // Validate registry if present
+      if (data.registry !== undefined && data.registry !== null) {
+        if (!data.registry || typeof data.registry !== 'object' || Array.isArray(data.registry)) {
+          console.warn('[Asok Security] Invalid registry format');
+          return false;
+        }
+        for (const k in data.registry) {
+          if (k === '__proto__' || k === 'constructor' || k === 'prototype') {
+            console.warn('[Asok Security] Prototype pollution attempt in registry');
+            return false;
+          }
+          if (typeof data.registry[k] !== 'string') {
+            return false;
+          }
         }
       }
 
@@ -238,15 +279,20 @@
     },
 
     /**
-     * Safe JSON parsing with error handling
-     * SECURITY: Prevents DoS via malformed JSON
+     * Safe JSON parsing with error handling and prototype pollution protection
+     * SECURITY: Prevents DoS via malformed JSON and strips prototype poisoning keys
      *
      * @param {string} jsonString - JSON string to parse
      * @returns {object|null} - Parsed object or null if invalid
      */
     safeJsonParse: function (jsonString) {
       try {
-        return JSON.parse(jsonString);
+        return JSON.parse(jsonString, function (key, value) {
+          if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            return undefined;
+          }
+          return value;
+        });
       } catch (error) {
         console.error('[Asok Security] JSON parse error:', error.message);
         return null;

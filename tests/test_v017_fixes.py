@@ -272,7 +272,7 @@ def test_media_upload_value_error_handling(tmp_path):
 
 def test_wsgi_uncaught_exception_handling():
     app = Asok()
-    app.config["SECRET_KEY"] = "test-secret"
+    app.config["SECRET_KEY"] = "test-secret-at-least-32-chars-long"
     app.config["DATABASE"] = ":memory:"
     app.config["DEBUG"] = False
 

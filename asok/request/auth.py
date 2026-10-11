@@ -76,7 +76,15 @@ class AuthMixin:
     def require_role(self: Any, *roles: str, redirect_url: str = "/") -> None:
         """Redirect if the user doesn't have the required roles."""
         if not self.has_role(*roles):
-            raise RedirectException(redirect_url)
+            from asok.utils.security import is_safe_url
+
+            allowed_host = getattr(self, "host", None) or self.headers.get("Host")
+            safe = (
+                redirect_url
+                if is_safe_url(redirect_url, allowed_host=allowed_host)
+                else "/"
+            )
+            raise RedirectException(safe)
 
     def logout(self: Any) -> None:
         """Clear user session and logout.
@@ -147,7 +155,10 @@ class AuthMixin:
         model_name = self._get_auth_model_name()
         user_model = MODELS_REGISTRY.get(model_name)
         if not user_model:
-            return None
+            raise ValueError(
+                f"Authentication model '{model_name}' not found. "
+                f"Make sure your {model_name} model is imported and registered in MODELS_REGISTRY."
+            )
 
         password = credentials.pop(password_field, None)
         if self._are_credentials_missing(password, credentials):
@@ -240,14 +251,33 @@ class AuthMixin:
             user = user_model.find(id=uid)
             if not user:
                 _logger.warning(
-                    "User ID %d found in session but user doesn't exist (deleted?)", uid
+                    "User ID %d found in session but user doesn't exist (deleted?)",
+                    uid,
+                    extra={"event": "user_not_found_in_db", "user_id": uid},
                 )
                 return None
             return user
         except (ValueError, TypeError) as e:
-            _logger.warning("Invalid user ID in session: %s (error: %s)", user_id, e)
+            _logger.warning(
+                "Invalid user ID in session: %s (error: %s)",
+                user_id,
+                e,
+                extra={
+                    "event": "invalid_user_id_in_session",
+                    "raw_user_id": str(user_id),
+                    "error": str(e),
+                },
+            )
         except Exception as e:
-            _logger.error("Unexpected error loading user from session: %s", e)
+            _logger.error(
+                "Unexpected error loading user from session: %s",
+                e,
+                extra={
+                    "event": "load_user_error",
+                    "raw_user_id": str(user_id),
+                    "error": str(e),
+                },
+            )
         return None
 
     def _get_auth_model_name(self: Any) -> str:

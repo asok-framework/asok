@@ -185,6 +185,20 @@ def _serve_static_asset(request: Request, path: str) -> Optional[bytes]:
         return f.read()
 
 
+def _is_docs_access_denied(app: Asok, request: Request) -> bool:
+    auth_hook = app.config.get("DOCS_AUTHORIZE", app.config.get("OPENAPI_AUTHORIZE"))
+    if auth_hook is not None and not auth_hook(request):
+        return True
+    return False
+
+
+def _deny_docs_access(path: str, spec_path: str, request: Request) -> Any:
+    if path == spec_path or getattr(request, "is_json", False):
+        request.status = "403 Forbidden"
+        return request.json({"error": "Unauthorized"})
+    request.abort_403("Access to API documentation is restricted.")
+
+
 def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
     """Handle requests to documentation endpoints (/docs and /openapi.json)."""
     path = request.path
@@ -193,11 +207,9 @@ def handle_docs_request(app: Asok, request: Request) -> Optional[Any]:
 
     spec = _should_serve_docs(app, path, spec_path, docs_path)
     if spec is not None:
+        if _is_docs_access_denied(app, request):
+            return _deny_docs_access(path, spec_path, request)
         if path == spec_path:
-            auth_hook = app.config.get("OPENAPI_AUTHORIZE")
-            if auth_hook is not None and not auth_hook(request):
-                request.status = "403 Forbidden"
-                return request.json({"error": "Unauthorized"})
             return request.json(spec)
         return _render_docs_html(app, request, spec)
 

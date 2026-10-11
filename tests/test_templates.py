@@ -570,3 +570,241 @@ outer_index:{{ loop.index }}
 
     assert "outer_index:1" in res
     assert "outer_index:2" in res
+
+
+def test_render_empty_template_string():
+    assert render_template_string("", {}) == ""
+    assert render_template_string("   \n\t  ", {}) == "   \n\t  "
+    assert render_template_string("{# just a comment #}", {}) == ""
+
+
+def test_render_empty_template_files(tmp_path):
+    from asok.core import Asok
+    from asok.request import Request
+
+    empty_html = tmp_path / "page.html"
+    empty_html.write_text("")
+
+    empty_asok = tmp_path / "page.asok"
+    empty_asok.write_text("")
+
+    app = Asok()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+    req = Request(environ)
+
+    res_html = req.html(str(empty_html))
+    assert res_html == ""
+
+    res_asok = req.html(str(empty_asok))
+    assert res_asok == ""
+
+
+def test_missing_attribute_strict_mode_raises_error():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    class User:
+        first_name = "Alice"
+
+    tpl = "Hello {{ user.firt_name }}!"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, user=User(), STRICT_VARIABLES=True)
+    assert "Undefined attribute or key 'User.firt_name'" in str(exc_info.value)
+
+
+def test_missing_dict_key_strict_mode_raises_error():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = "Hello {{ user.firt_name }}!"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, user={"first_name": "Alice"}, STRICT_VARIABLES=True)
+    assert "Undefined attribute or key 'dict.firt_name'" in str(exc_info.value)
+
+
+def test_missing_attribute_non_strict_returns_empty():
+    class User:
+        first_name = "Alice"
+
+    assert render("Hello {{ user.firt_name }}!", user=User()) == "Hello !"
+
+
+def test_missing_attribute_with_default_and_defined_in_strict_mode():
+    class User:
+        first_name = "Alice"
+
+    # Default filter handles undefined attribute gracefully even in strict mode
+    res = render(
+        "Hello {{ user.firt_name | default('Guest') }}!",
+        user=User(),
+        STRICT_VARIABLES=True,
+    )
+    assert res == "Hello Guest!"
+
+    # Defined test handles undefined attribute gracefully even in strict mode
+    res2 = render(
+        "{% if user.firt_name is defined %}Yes{% else %}No{% endif %}",
+        user=User(),
+        STRICT_VARIABLES=True,
+    )
+    assert res2 == "No"
+
+
+def test_app_request_html_catches_attribute_typo(tmp_path):
+    import pytest
+
+    from asok.core import Asok
+    from asok.exceptions import TemplateError
+    from asok.request import Request
+
+    class User:
+        first_name = "Bob"
+
+    tpl_file = tmp_path / "page.html"
+    tpl_file.write_text(
+        "<ul>{% for u in users %}<li>{{ u.firt_name }}</li>{% endfor %}</ul>"
+    )
+
+    app = Asok()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "asok.app": app,
+    }
+    req = Request(environ)
+
+    with pytest.raises(TemplateError) as exc_info:
+        req.html(str(tpl_file), users=[User()])
+    assert "User.firt_name" in str(exc_info.value)
+
+
+def test_undefined_iteration_strict_mode_raises():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    class User:
+        pass
+
+    tpl = "{% for item in user.missing_list %}<li>{{ item }}</li>{% endfor %}"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, user=User(), STRICT_VARIABLES=True)
+    assert "Undefined attribute or key 'User.missing_list'" in str(exc_info.value)
+
+
+def test_undefined_iteration_non_strict_empty():
+    class User:
+        pass
+
+    tpl = "{% for item in user.missing_list %}<li>{{ item }}</li>{% endfor %}"
+    assert render(tpl, user=User()) == ""
+
+
+def test_undefined_call_strict_mode_raises():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    class User:
+        pass
+
+    tpl = "{% set res = user.missing_func() %}{{ res }}"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, user=User(), STRICT_VARIABLES=True)
+    assert "Undefined attribute or key 'User.missing_func'" in str(exc_info.value)
+
+
+def test_undefined_length_strict_mode_raises():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    class User:
+        pass
+
+    tpl = "{{ user.missing_items | length }}"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, user=User(), STRICT_VARIABLES=True)
+    assert "Undefined attribute or key 'User.missing_items'" in str(exc_info.value)
+
+
+def test_unknown_filter_raises_clear_error():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = "{{ name | uper }}"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, name="Alice")
+    assert "Unknown template filter 'uper'" in str(exc_info.value)
+    assert "Available filters:" in str(exc_info.value)
+
+
+def test_unknown_test_raises_clear_error():
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = "{% if num is evn %}Even{% endif %}"
+    with pytest.raises(TemplateError) as exc_info:
+        render(tpl, num=4)
+    assert "Unknown template test 'evn'" in str(exc_info.value)
+    assert "Available tests:" in str(exc_info.value)
+
+
+def test_missing_include_raises_clear_error(tmp_path):
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = "{% include 'non_existent_partial.html' %}"
+    with pytest.raises(TemplateError) as exc_info:
+        render_template_string(tpl, {}, root_dir=str(tmp_path))
+    assert "Template include error" in str(exc_info.value)
+    assert "non_existent_partial.html" in str(exc_info.value)
+
+
+def test_missing_extends_raises_clear_error(tmp_path):
+    import pytest
+
+    from asok.exceptions import TemplateError
+
+    tpl = "{% extends 'non_existent_base.html' %}"
+    with pytest.raises(TemplateError) as exc_info:
+        render_template_string(tpl, {}, root_dir=str(tmp_path))
+    assert "Template inheritance error" in str(exc_info.value)
+    assert "non_existent_base.html" in str(exc_info.value)
+
+
+def test_component_template_typo_raises_error(tmp_path, monkeypatch):
+    import pytest
+
+    from asok.component import Component
+    from asok.exceptions import TemplateError
+
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-1234567890123456")
+
+    tpl_file = tmp_path / "counter.html"
+    tpl_file.write_text("<div><button><span>{{ coun }}</span></button></div>")
+
+    class Counter(Component):
+        count: int = 42
+
+        def _find_dir_path(self):
+            return str(tmp_path)
+
+        def render(self):
+            return self.html("counter.html")
+
+    counter = Counter()
+    with pytest.raises(TemplateError) as exc_info:
+        str(counter)
+
+    assert "coun" in str(exc_info.value)
+    assert "counter.html" in str(exc_info.value)

@@ -14,6 +14,7 @@ import logging
 import os
 import secrets
 import sys
+import warnings
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -64,7 +65,7 @@ class Asok(
         self.root_dir: str = os.path.abspath(root_dir or os.getcwd())
         import asok
 
-        self.version = getattr(asok, "__version__", "0.7.0")
+        self.version = getattr(asok, "__version__", "0.8.0")
         self.dirs: dict[str, str] = {
             "LOCALES": "src/locales",
             "PAGES": "src/pages",
@@ -92,14 +93,27 @@ class Asok(
             "SESSION_BACKEND": "memory",
             "SESSION_PATH": ".asok/sessions",
             "SESSION_TTL": 86400,
+            "SESSION_SAMESITE": "Lax",
+            "TOTP_ENCRYPTION_KEY": None,
             "MAX_CONTENT_LENGTH": 10 * 1024 * 1024,  # 10 MB
             "HTML_MINIFY": None,  # Follows !DEBUG if None
             "TRUSTED_PROXIES": None,  # Set to list of IPs or "*" to trust X-Forwarded-For
             "BG_WORKERS": 10,  # Max background threads
             "GRAPHQL_DISABLE_INTROSPECTION": None,
+            "GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES": True,
+            "GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS": False,
             "STRICT_STATIC_TEMPLATES": False,
             "STRICT_VARIABLES": True,
             "ENABLE_SPA_FALLBACK": True,
+            "HEALTHCHECK_ENABLED": True,
+            "METRICS_ENABLED": True,
+            "METRICS_PATH": "/metrics",
+            "SLOW_QUERY_THRESHOLD_MS": 100,
+            "WS_ADAPTER": "memory",
+            "WS_REDIS_URL": "redis://localhost:6379/0",
+            "LOG_FORMAT": "text",
+            "SECURITY_LOG_FORMAT": None,
+            "SECURITY_LOG_FILE": None,
         }
 
         # Lifecycle hooks
@@ -183,7 +197,6 @@ class Asok(
     def setup(self) -> None:
         """Configure the application environment, load models, and prepare internal states."""
         self._setup_python_path()
-        self._setup_logger()
         self._ensure_package_dirs(
             self.dirs["MODELS"],
             self.dirs["MIDDLEWARES"],
@@ -195,6 +208,7 @@ class Asok(
         self._setup_toolbar_flag()
         self._setup_secret_key()
         self._apply_env_overrides()
+        self._setup_logger()
         self._load_middlewares()
         self._load_models()
         self._load_components()
@@ -209,27 +223,83 @@ class Asok(
         if src_path not in sys.path:
             sys.path.insert(0, src_path)
 
+    def _is_security_json_enabled(self) -> bool:
+        sec_fmt = self.config.get("SECURITY_LOG_FORMAT") or os.environ.get(
+            "ASOK_SECURITY_LOG_FORMAT"
+        )
+        if sec_fmt is not None:
+            return sec_fmt.lower() == "json"
+        app_fmt = (
+            self.config.get("LOG_FORMAT")
+            or os.environ.get("ASOK_LOG_FORMAT")
+            or os.environ.get("LOG_FORMAT", "")
+        )
+        return app_fmt.lower() == "json"
+
+    def _maybe_configure_security_logger(self) -> None:
+        from ..logger import configure_security_logger
+
+        sec_file = self.config.get("SECURITY_LOG_FILE") or os.environ.get(
+            "ASOK_SECURITY_LOG_FILE"
+        )
+        is_json = self._is_security_json_enabled()
+        if is_json or sec_file:
+            configure_security_logger(json_format=is_json, log_file=sec_file)
+
     def _setup_logger(self) -> None:
-        # Re-configure Logger after .env loading
+        # Re-configure Logger after .env and config loading
         from ..logger import get_logger
 
-        self.logger = get_logger("asok", config=self.config)
+        self._maybe_configure_security_logger()
+        self.logger = get_logger("asok", config=self.config, reconfigure=True)
 
     def _load_env_file(self) -> None:
         # Load .env if exists to populate os.environ early
         env_path = os.path.join(self.root_dir, ".env")
         if not os.path.exists(env_path):
             return
+        override = os.environ.get("ASOK_ENV_OVERRIDE", "").lower() in ("true", "1")
         with open(env_path) as f:
             for raw in f:
-                self._apply_env_line(raw.strip())
+                self._apply_env_line(raw.strip(), override=override)
 
     @staticmethod
-    def _apply_env_line(line: str) -> None:
+    def _strip_quotes(val: str) -> str:
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+            return val[1:-1]
+        return val
+
+    @classmethod
+    def _is_env_override_active(cls, override: bool) -> bool:
+        return override or os.environ.get("ASOK_ENV_OVERRIDE", "").lower() in (
+            "true",
+            "1",
+        )
+
+    @classmethod
+    def _apply_env_line(cls, line: str, override: bool = False) -> None:
         if not line or line.startswith("#") or "=" not in line:
             return
         k, v = line.split("=", 1)
-        os.environ[k.strip()] = v.strip()
+        cls._set_env_key(
+            k.strip(),
+            cls._strip_quotes(v.strip()),
+            cls._is_env_override_active(override),
+        )
+
+    @staticmethod
+    def _set_env_key(key: str, val: str, should_override: bool) -> None:
+        if should_override:
+            os.environ[key] = val
+            return
+        if key in os.environ and os.environ[key] != val:
+            msg = (
+                f"Environment variable '{key}' already set in environment; skipping .env value. "
+                "Set ASOK_ENV_OVERRIDE=true to override."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
+            logger.warning(msg)
+        os.environ.setdefault(key, val)
 
     @staticmethod
     def _bool_env(value: str) -> Optional[bool]:
@@ -324,6 +394,14 @@ class Asok(
             if hasattr(mod, "handle"):
                 self.middleware_handlers.append(mod.handle)
         # Pre-compute once; avoids per-request inspect.iscoroutinefunction() scans.
+        self._has_async_middleware = any(
+            inspect.iscoroutinefunction(mw) for mw in self.middleware_handlers
+        )
+        self._middleware_handlers_reversed = list(reversed(self.middleware_handlers))
+
+    def use(self, middleware: Callable) -> None:
+        """Register a custom middleware handler programmatically."""
+        self.middleware_handlers.append(middleware)
         self._has_async_middleware = any(
             inspect.iscoroutinefunction(mw) for mw in self.middleware_handlers
         )

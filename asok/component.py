@@ -236,9 +236,17 @@ class Component(metaclass=ComponentMeta):
         try:
             file_size = os.path.getsize(path)
             if file_size > 1_000_000:
-                return "<!-- Template file too large -->"
-        except OSError:
-            return "<!-- Error reading template -->"
+                from asok.exceptions import TemplateError
+
+                raise TemplateError(
+                    f"Component template file '{path}' too large (> 1MB)"
+                )
+        except OSError as e:
+            from asok.exceptions import TemplateError
+
+            raise TemplateError(
+                f"Error reading component template '{path}': {e}"
+            ) from e
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
@@ -247,10 +255,15 @@ class Component(metaclass=ComponentMeta):
 
         SECURITY: File size limits prevent DoS via extremely large templates.
         """
+        self._template_name = name
         dir_path = self._find_dir_path()
         path = self._resolve_template_path(dir_path, name)
         if not path:
-            return f"<!-- Template {name} not found in {dir_path} -->"
+            from asok.exceptions import TemplateError
+
+            raise TemplateError(
+                f"Component template '{name}' not found in '{dir_path}'"
+            )
         return self._read_template_file(path)
 
     def render(self) -> str:
@@ -326,8 +339,17 @@ class Component(metaclass=ComponentMeta):
         ctx = self._get_state()
         ctx["session"] = self.session
         ctx["slot"] = getattr(self, "_slot", None)
+        ctx["this"] = self
+        req = getattr(self, "_request", None) or getattr(self, "request", None)
+        if req is not None:
+            ctx["request"] = req
+        ctx.setdefault("STRICT_VARIABLES", True)
 
-        rendered_html = render_template_string(self.render(), ctx)
+        content = self.render()
+        tpl_name = (
+            getattr(self, "_template_name", None) or f"{self.__class__.__name__}.html"
+        )
+        rendered_html = render_template_string(content, ctx, template_name=tpl_name)
         state_str = self._sign_state(secret)
 
         client_attr = _build_client_attr(getattr(self, "_client", None))

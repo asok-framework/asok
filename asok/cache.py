@@ -388,9 +388,22 @@ def cache_page(
 
             full_path = f"{path}?{qs}" if qs else path
             cache_key = f"{key_prefix}{full_path}"
+            meta_key = f"_meta_{cache_key}"
 
             cached = cache.get(cache_key)
             if cached is not None:
+                meta = cache.get(meta_key)
+                if isinstance(meta, dict):
+                    if "content_type" in meta:
+                        request.content_type = meta["content_type"]
+                    if "status" in meta:
+                        request.status = meta["status"]
+                    if "status_code" in meta and hasattr(request, "status_code"):
+                        request.status_code(meta["status_code"])
+                    if "response_headers" in meta:
+                        for h, v in meta["response_headers"]:
+                            if (h, v) not in request.response_headers:
+                                request.response_headers.append((h, v))
                 token = getattr(request, "csrf_token_value", None)
                 if isinstance(cached, str) and token:
                     return cached.replace("__ASOK_CSRF_TOKEN_PLACEHOLDER__", token)
@@ -410,6 +423,15 @@ def cache_page(
                 else:
                     cached_response = response
                 cache.set(cache_key, cached_response, ttl=ttl)
+                meta_data = {
+                    "content_type": getattr(
+                        request, "content_type", "text/html; charset=utf-8"
+                    ),
+                    "status": getattr(request, "status", "200 OK"),
+                    "status_code": getattr(request, "_status_code", 200),
+                    "response_headers": list(getattr(request, "response_headers", [])),
+                }
+                cache.set(meta_key, meta_data, ttl=ttl)
 
             return response
 

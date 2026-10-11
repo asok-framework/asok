@@ -25,18 +25,39 @@ def on_live_message(server: Any, conn: Any, text: str) -> None:
 
     SECURITY: payload size capped to prevent DoS via giant JSON.
     """
+    cid = None
     try:
         data = _decode_message(text)
         if data is None:
             return
         op, cid = _validate_envelope(data)
-        if op is None:
-            return
-        handler = _OP_HANDLERS.get(op)
-        if handler is not None:
-            handler(server, conn, data, cid)
+        if op is not None:
+            if op not in _OP_HANDLERS:
+                raise ValueError(f"Unknown live operation: '{op}'")
+            _OP_HANDLERS[op](server, conn, data, cid)
     except Exception as e:
-        logger.error(f"Error handling live message: {e}", exc_info=True)
+        _notify_live_error(conn, cid, e)
+
+
+def _format_live_error_message(err: Exception, is_debug: bool) -> str:
+    if is_debug:
+        return str(err)
+    if isinstance(err, (PermissionError, AttributeError)):
+        return "Action not permitted or method not found"
+    if isinstance(err, (KeyError, ValueError)):
+        return "Invalid component request or component not found"
+    return str(err)
+
+
+def _notify_live_error(conn: Any, cid: Optional[str], err: Exception) -> None:
+    logger.error(f"Error handling live message: {err}", exc_info=True)
+    if hasattr(conn, "send_json"):
+        is_debug = (
+            os.environ.get("DEBUG", "").lower() in ("true", "1")
+            or os.environ.get("ASOK_ENV") == "development"
+        )
+        msg = _format_live_error_message(err, is_debug)
+        conn.send_json({"op": "error", "cid": cid, "message": msg})
 
 
 # ── Envelope validation ────────────────────────────────────────────
@@ -238,7 +259,10 @@ def _handle_join(server, conn, data, cid) -> None:
         return
     cls = COMPONENTS_REGISTRY.get(comp_name)
     if not cls:
-        return
+        raise ValueError(
+            f"Component '{comp_name}' not found in COMPONENTS_REGISTRY. "
+            f"Make sure the Component class is defined and imported."
+        )
     # SECURITY: cap live components per connection to bound memory.
     if len(conn._live_comps) >= 100:
         logger.warning(
@@ -277,7 +301,9 @@ def _validate_join_state(state_signed) -> bool:
 def _handle_call_or_sync(server, conn, data, cid) -> None:
     op = data["op"]
     if not _has_live_component(conn, cid):
-        return
+        raise KeyError(
+            f"Live component '{cid}' not found on this connection. Did the component join?"
+        )
     cls, state_signed = conn._live_comps[cid]
     req = _build_pseudo_request(server, conn)
 
@@ -286,7 +312,9 @@ def _handle_call_or_sync(server, conn, data, cid) -> None:
     with request_context(req):
         comp = _restore_component_instance(cls, state_signed, server.secret_key, cid)
         if not comp:
-            return
+            raise ValueError(
+                f"Failed to restore component '{cls.__name__}' (cid='{cid}') from signed state."
+            )
         if conn.session:
             comp._session = conn.session
         _apply_call_or_sync(op, comp, data)
@@ -317,7 +345,7 @@ def _build_pseudo_request(server, conn):
         "HTTP_HOST": conn.headers.get("host", "localhost"),
         "QUERY_STRING": "",
         "wsgi.input": None,
-        "asok.app": server.app,
+        "asok.app": getattr(server, "app", server),
         "asok.secret_key": server.secret_key,
     }
     for k, v in conn.headers.items():
@@ -355,19 +383,26 @@ def _apply_call(comp, data) -> None:
         _invoke_method(method, val)
 
 
-def _resolve_exposed_method(comp, method_name):
+def _validate_call_method_name(method_name) -> bool:
     if not _is_valid_member_name(method_name, "method name"):
-        return None
+        return False
     if not method_name or method_name.startswith("_"):
+        raise ValueError(f"Invalid private method name '{method_name}'")
+    return True
+
+
+def _resolve_exposed_method(comp, method_name):
+    if not _validate_call_method_name(method_name):
         return None
-    method = getattr(comp, method_name, None)
-    if not _is_exposed_method(method):
-        logger.warning(
-            "Attempted to call unexposed method '%s' on component '%s'",
-            method_name,
-            comp.__class__.__name__,
+    if not hasattr(comp, method_name):
+        raise AttributeError(
+            f"Component '{comp.__class__.__name__}' has no method '{method_name}'"
         )
-        return None
+    method = getattr(comp, method_name)
+    if not _is_exposed_method(method):
+        raise PermissionError(
+            f"Method '{method_name}' on component '{comp.__class__.__name__}' is not decorated with @exposed"
+        )
     return method
 
 
@@ -394,21 +429,21 @@ def _apply_sync(comp, data) -> None:
 def _is_syncable_prop(comp, prop) -> bool:
     if not _prop_passes_basic_checks(comp, prop):
         return False
-    # SECURITY: opt-in bindable allow-list — refuse to mutate anything unlisted.
-    if prop not in getattr(comp.__class__, "_bindable", []):
-        logger.warning(
-            "Blocked sync of non-bindable prop '%s' on '%s' (not in whitelist)",
-            prop,
-            comp.__class__.__name__,
+    if not hasattr(comp, prop):
+        raise AttributeError(
+            f"Component '{comp.__class__.__name__}' has no property '{prop}'"
         )
-        return False
+    if prop not in getattr(comp.__class__, "_bindable", []):
+        raise PermissionError(
+            f"Property '{prop}' on '{comp.__class__.__name__}' is not in _bindable list"
+        )
     return True
 
 
 def _prop_passes_basic_checks(comp, prop) -> bool:
     if not _is_valid_member_name(prop, "property name"):
         return False
-    return bool(prop) and not prop.startswith("_") and hasattr(comp, prop)
+    return bool(prop) and not prop.startswith("_")
 
 
 def _is_valid_member_name(name, label: str) -> bool:
@@ -477,7 +512,7 @@ def _make_registry_js_entry(expr: str) -> str:
     body = _expression_to_js_body(expr)
     body = minify_js(body)
     return (
-        "function($, $store, $el, $event, $refs, $nextTick) "
+        "function($, $store, $el, $event, $refs, $nextTick, $route, $fetch) "
         f"{{ with($||{{}}) {{ {body} }} }}"
     )
 

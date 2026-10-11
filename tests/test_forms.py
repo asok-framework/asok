@@ -240,3 +240,49 @@ class TestHtmlRendering:
         form, _ = make_form({"name": Form.text("Name")}, {"name": "Alice"})
         assert isinstance(form.data, dict)
         assert form.data["name"] == "Alice"
+
+    def test_declarative_form_class_and_ergonomics(self):
+        class UserRegistrationForm(Form):
+            username = Form.text("Username", "required|min:3")
+            email = Form.email("Email", "required|email")
+
+        # Class instantiation without args (template mode)
+        form = UserRegistrationForm()
+        assert len(form) == 2
+        assert "username" in form
+        assert "email" in form
+        assert form["username"].name == "username"
+        fields = [f.name for f in form]
+        assert fields == ["username", "email"]
+
+        # Rendering
+        html = form.render(submit="Register")
+        assert 'name="username"' in html
+        assert 'name="email"' in html
+        assert "Register" in html
+        assert str(form) == form.render()
+
+        # Submit valid POST
+        req = make_request({"username": "alice", "email": "alice@example.com"})
+        bound_form = UserRegistrationForm(req)
+        assert bound_form.is_valid(csrf=False)
+        assert not bound_form.has_errors
+        assert bound_form.data["username"] == "alice"
+
+        # Submit invalid POST
+        bad_req = make_request({"username": "al", "email": "not-an-email"})
+        bad_form = UserRegistrationForm(bad_req)
+        assert not bad_form.is_valid(csrf=False)
+        assert bad_form.has_errors
+        assert bad_form.has_error("username")
+        assert bad_form.has_error("email")
+        assert len(bad_form.error("email")) > 0
+
+    def test_request_validate_and_old_helper(self):
+        req = make_request({"title": "Hello World", "email": "valid@example.com"})
+        validated = req.validate(
+            {"title": "required|min:3", "email": "required|email"}, csrf=False
+        )
+        assert validated["title"] == "Hello World"
+        assert req.old("title") == "Hello World"
+        assert req.old("non_existent", "default_val") == "default_val"

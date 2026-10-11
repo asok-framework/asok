@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from typing import Any, Generic, Optional, TypeVar, Union
@@ -9,6 +10,8 @@ from .exceptions import _UNSET
 from .list import ModelList
 from .model import Model
 from .utils import MODELS_REGISTRY, interpolate_sql
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound="Model")
 
@@ -515,17 +518,39 @@ class Query(Generic[T]):
         self._order = f"{col} {direction}"
         return self
 
-    def latest(self, column: str = "created_at") -> Query[T]:
-        """Order by the given column descending (default: created_at)."""
+    def _resolve_order_column(self, column: str, fallback_to_id: bool = False) -> str:
+        if column == "created_at" and not self.model._valid_column(column):
+            return "id"
         if not self.model._valid_column(column):
-            column = "id"
-        return self.order_by(f"-{column}")
+            if fallback_to_id:
+                logger.warning(
+                    "Invalid order column '%s' on '%s', falling back to 'id'",
+                    column,
+                    self.model.__name__,
+                )
+                return "id"
+            raise ValueError(f"Invalid column: {column}")
+        return column
 
-    def oldest(self, column: str = "created_at") -> Query[T]:
-        """Order by the given column ascending (default: created_at)."""
-        if not self.model._valid_column(column):
-            column = "id"
-        return self.order_by(column)
+    def latest(
+        self, column: str = "created_at", fallback_to_id: bool = False
+    ) -> Query[T]:
+        """Order by the given column descending (default: created_at).
+
+        Falls back to 'id' if 'created_at' is absent or if fallback_to_id=True.
+        """
+        target = self._resolve_order_column(column, fallback_to_id=fallback_to_id)
+        return self.order_by(f"-{target}")
+
+    def oldest(
+        self, column: str = "created_at", fallback_to_id: bool = False
+    ) -> Query[T]:
+        """Order by the given column ascending (default: created_at).
+
+        Falls back to 'id' if 'created_at' is absent or if fallback_to_id=True.
+        """
+        target = self._resolve_order_column(column, fallback_to_id=fallback_to_id)
+        return self.order_by(target)
 
     def limit(self, n: int) -> Query[T]:
         """Limit the number of records returned."""

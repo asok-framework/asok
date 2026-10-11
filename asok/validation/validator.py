@@ -52,11 +52,24 @@ class Validator:
         return len(self.errors) == 0
 
     def _apply_rule(self, field: str, r: str, messages: dict) -> None:
+        if not r.strip():
+            return
         name, arg = self._parse_rule(r)
         if dispatch_rule(self, field, name, arg, messages):
             return
         if name in _CUSTOM_RULES:
             self._apply_custom_rule(field, name, arg, messages)
+            return
+        available = sorted(self._available_rules())
+        raise ValueError(
+            f"Unknown validation rule '{name}'. Available rules: {', '.join(available)}"
+        )
+
+    @staticmethod
+    def _available_rules() -> list[str]:
+        from ._rule_dispatch import _HANDLERS
+
+        return list(_HANDLERS.keys()) + list(_CUSTOM_RULES.keys())
 
     @staticmethod
     def _parse_rule(r: str) -> tuple[str, Optional[str]]:

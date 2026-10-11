@@ -129,13 +129,9 @@ class PostgresEngine(BaseEngine):
                     return cur.fetchall()
                 return cur.rowcount
         finally:
-            if req:
-                if not hasattr(req, "_asok_sql_log"):
-                    req._asok_sql_log = []
-                duration = (time.time() - start) * 1000
-                req._asok_sql_log.append(
-                    {"sql": sql, "params": args or (), "duration": duration}
-                )
+            from ..proxy import log_and_record_query
+
+            log_and_record_query("postgres", req, sql, args, start)
 
     def quote_identifier(self, name: str) -> str:
         clean = name.strip("\"'`").replace('"', '""')

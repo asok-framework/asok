@@ -153,6 +153,15 @@ class RateLimit:
             self.max_requests,
             self.window,
             remaining,
+            extra={
+                "event": "rate_limit_exceeded",
+                "method": request.method,
+                "path": request.path,
+                "ip": request.ip,
+                "limit": self.max_requests,
+                "window": self.window,
+                "retry_after": remaining,
+            },
         )
 
         raise RateLimitExceeded(

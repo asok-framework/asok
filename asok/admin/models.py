@@ -45,10 +45,10 @@ class User(Model):
         messages={"password_strength": "Password must be 8+ characters with uppercase, number, and special char."}
     )
     name = Field.String()
-    is_admin = Field.Boolean(default=False)
-    totp_secret = Field.String(nullable=True, hidden=True)
-    totp_enabled = Field.Boolean(default=False)
-    backup_codes = Field.String(nullable=True, hidden=True)  # JSON array of hashed codes
+    is_admin = Field.Boolean(default=False, protected=True)
+    totp_secret = Field.String(nullable=True, hidden=True, protected=True)
+    totp_enabled = Field.Boolean(default=False, protected=True)
+    backup_codes = Field.String(nullable=True, hidden=True, protected=True)  # JSON array of hashed codes
     created_at = Field.CreatedAt()
 
     class Admin(ModelAdmin):

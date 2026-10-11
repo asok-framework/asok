@@ -83,3 +83,22 @@ class SmartStreamer:
             logger.error(f"Streamer Error: {e}\n{traceback.format_exc()}")
         finally:
             self._save_session()
+
+
+def send_early_hints(start_response: Callable, links: list[str]) -> bool:
+    """Send HTTP 103 Early Hints headers if supported by the WSGI server."""
+    if not links:
+        return False
+    try:
+        link_headers = [("Link", link) for link in links]
+        start_response("103 Early Hints", link_headers)
+        return True
+    except Exception:
+        return False
+
+
+def build_preload_link(url: str, as_type: str = "script") -> str:
+    """Format a Link header value for resource preloading."""
+    clean_url = str(url).replace("\r", "").replace("\n", "").replace(">", "%3E")
+    clean_type = str(as_type).replace("\r", "").replace("\n", "").replace('"', "")
+    return f"<{clean_url}>; rel=preload; as={clean_type}"

@@ -50,7 +50,9 @@
     if (!match) return null;
     const params = {};
     keys.forEach((key, idx) => {
-      params[key] = decodeURIComponent(match[idx + 1]);
+      if (key !== '__proto__' && key !== 'constructor' && key !== 'prototype') {
+        params[key] = decodeURIComponent(match[idx + 1]);
+      }
     });
     return params;
   };
@@ -267,11 +269,18 @@
     }
 
     if (el.tagName.toLowerCase() === 'template') {
+      const currentRoutePath = window.location.pathname;
       let renderId = el._asokRenderedId;
       let renderedView = renderId ? container.querySelector(`[data-asok-route-view="${renderId}"]`) : null;
+      if (renderedView && el._asokRenderedPath && el._asokRenderedPath !== currentRoutePath) {
+        renderedView.remove();
+        renderedView = null;
+        renderId = null;
+      }
       if (!renderedView) {
         renderId = 'view-' + Math.random().toString(36).substring(2, 9);
         el._asokRenderedId = renderId;
+        el._asokRenderedPath = currentRoutePath;
         const clone = el.content.cloneNode(true);
         const embeddedTitle = clone.querySelector('title');
         if (embeddedTitle && embeddedTitle.textContent) {
@@ -353,6 +362,14 @@
         if (renderedView) {
           if (trans) beginLeavePositioning(renderedView, container);
           applyLeaveTransition(renderedView, trans, () => {
+            renderedView.querySelectorAll('[data-asok-component]').forEach(comp => {
+              delete comp.__asokWsReady;
+              delete comp.__asokIniting;
+              const cid = comp.id ? comp.id.replace('asok-', '') : null;
+              if (cid && window.Asok && typeof window.Asok.leaveComponent === 'function') {
+                window.Asok.leaveComponent(cid);
+              }
+            });
             if (window.AsokDirectives && typeof window.AsokDirectives.cleanupOld === 'function') {
               window.AsokDirectives.cleanupOld(renderedView);
             }
@@ -370,6 +387,22 @@
     }
   };
 
+  const isSafeNavUrl = (url) => {
+    if (!url || typeof url !== 'string') return false;
+    const sec = window['Asok_Security'.replace('_', '')];
+    if (sec && typeof sec.isSafeUrl === 'function') {
+      return sec.isSafeUrl(url);
+    }
+    let clean = url.replace(/[\x00-\x1F\x7F]/g, '').trim();
+    try { clean = decodeURIComponent(clean); } catch (_) {}
+    clean = clean.toLowerCase();
+    if (clean.startsWith('javascript:') || clean.startsWith('data:') || clean.startsWith('vbscript:')) {
+      return false;
+    }
+    if (clean.startsWith('//') || clean.startsWith('\\\\') || clean.startsWith('/\\') || clean.startsWith('\\/')) return false;
+    return true;
+  };
+
   // Update active CSS classes on link elements & auto-populate href on <a> for a11y/SEO
   const updateActiveLinks = (currentPath) => {
     const links = document.querySelectorAll('[asok-link], [data-asok-link], [data-link]');
@@ -379,7 +412,9 @@
       if (!href) return;
 
       if (link.tagName.toLowerCase() === 'a' && !link.hasAttribute('href')) {
-        link.setAttribute('href', href);
+        if (isSafeNavUrl(href)) {
+          link.setAttribute('href', href);
+        }
       }
 
       const activeAttr = link.getAttribute('asok-active-class') || link.getAttribute('data-asok-active-class') || 'active';
@@ -398,6 +433,10 @@
   // Programmatic navigation
   const navigate = (to, replace = false) => {
     if (!to) return;
+    if (!isSafeNavUrl(to)) {
+      console.warn('[AsokRouter] Blocked unsafe navigation URL:', to);
+      return;
+    }
     if (replace) {
       window.history.replaceState(null, '', to);
     } else {

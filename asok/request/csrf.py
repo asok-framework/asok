@@ -12,6 +12,10 @@ from asok.templates import SafeString
 class CsrfMixin:
     """Mixin for CSRF validation and cryptographic signing on Request."""
 
+    def csrf_token(self: Any) -> str:
+        """Return the raw CSRF token string for this request."""
+        return str(self.csrf_token_value or "")
+
     def csrf_input(self: Any) -> SafeString:
         """Return a hidden input field containing the CSRF token."""
         import html
@@ -49,6 +53,18 @@ class CsrfMixin:
         origin_port = self._effective_port_val(parsed_origin)
         req_port = self._effective_port_val(parsed_req)
         if origin_port != req_port:
+            import logging
+
+            logging.getLogger("asok.security").warning(
+                "CSRF Port mismatch: expected %d, got %d",
+                req_port,
+                origin_port,
+                extra={
+                    "event": "csrf_port_mismatch",
+                    "expected_port": req_port,
+                    "origin_port": origin_port,
+                },
+            )
             raise SecurityError(
                 f"CSRF Port mismatch: expected {req_port}, got {origin_port}"
             )
@@ -62,7 +78,14 @@ class CsrfMixin:
             request_host = self.environ.get("HTTP_HOST", "localhost")
             parsed_req = urlparse(f"{self.scheme}://{request_host}")
             return parsed_origin, parsed_req
-        except Exception:
+        except Exception as e:
+            import logging
+
+            logging.getLogger("asok.security").warning(
+                "Invalid Origin or Referer format in CSRF check: %s",
+                e,
+                extra={"event": "csrf_invalid_origin_header", "error": str(e)},
+            )
             raise SecurityError("Invalid Origin or Referer format")
 
     def _get_csrf_header_token(self: Any) -> Optional[str]:
@@ -96,6 +119,17 @@ class CsrfMixin:
     def _verify_token_match(self: Any, token: Optional[str]) -> None:
         expected = str(self.csrf_token_value or "")
         if not token or not hmac.compare_digest(str(token), expected):
+            import logging
+
+            logging.getLogger("asok.security").warning(
+                "CSRF validation failed",
+                extra={
+                    "event": "csrf_validation_failed",
+                    "path": getattr(self, "path", ""),
+                    "method": getattr(self, "method", ""),
+                    "ip": getattr(self, "ip", ""),
+                },
+            )
             raise SecurityError("CSRF validation failed")
 
     def _is_csrf_bypassed(self: Any) -> bool:
@@ -129,10 +163,17 @@ class CsrfMixin:
             return app_ref._sign(value)
         # Fallback for tests that build Request without a full app context
         import os as _os
+        import warnings as _warnings
 
         key = _os.environ.get("SECRET_KEY", "").encode()
         if not key:
             raise RuntimeError("SECRET_KEY is not configured")
+        if len(key) < 32 and not _os.environ.get("DEBUG"):
+            _warnings.warn(
+                "SECRET_KEY is shorter than 32 bytes. Use a strong, random key in production.",
+                UserWarning,
+                stacklevel=2,
+            )
         return (
             f"{value}.{hmac.new(key, str(value).encode(), hashlib.sha256).hexdigest()}"
         )

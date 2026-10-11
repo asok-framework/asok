@@ -5,10 +5,13 @@ import os
 from .auth import AuthViewsMixin
 from .crud import CRUDViewsMixin
 from .helpers import HelperViewsMixin
+from .jobs import JobsViewsMixin
 from .media import MediaViewsMixin
 
 _PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class ViewsMixin(HelperViewsMixin, AuthViewsMixin, CRUDViewsMixin, MediaViewsMixin):
+class ViewsMixin(
+    HelperViewsMixin, AuthViewsMixin, CRUDViewsMixin, MediaViewsMixin, JobsViewsMixin
+):
     pass

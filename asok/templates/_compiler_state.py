@@ -22,7 +22,7 @@ class CompilerState:
         self.is_debug = is_debug
         self.code: list[str] = [
             "def __run_template(context, __filters, __tests, _get, _res, _debug):",
-            "    pass",
+            "    if False: yield ''",
         ]
         self.indent = 4
         self.local_scope_stack: list[set[str]] = [set(_INITIAL_SCOPE)]

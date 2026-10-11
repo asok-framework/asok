@@ -22,6 +22,16 @@ class AbortException(AsokException):
         super().__init__(message or f"HTTP {status}")
 
 
+def redirect(url: str, status: int = 302) -> None:
+    """Abort request execution and redirect to the specified URL."""
+    raise RedirectException(url, status=status)
+
+
+def abort(status: int = 404, message: str | None = None) -> None:
+    """Abort request execution with an HTTP error code (e.g. 404, 403, 500)."""
+    raise AbortException(status, message=message)
+
+
 # --- Semantic HTTP Exceptions ---
 
 

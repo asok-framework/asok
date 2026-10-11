@@ -1,7 +1,8 @@
 /*
- * ASOK DEBUG SUITE CSS
+ * ASOK DEVELOPER TOOLBAR CSS
+ * Design System: Modern Glassmorphism & Refined Dark Suite
  * @author: Asok Framework Team
- * @version: 0.7.0
+ * @version: 1.0.0
  */
 
 #asok-debug-suite *,
@@ -14,148 +15,181 @@
 
 /* ── Design Tokens ── */
 #asok-debug-suite {
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'JetBrains Mono', monospace;
   --font-heading: 'Outfit', var(--font-sans);
 
+  --r-xs: 4px;
   --r-sm: 6px;
-  --r: 8px;
-  --r-lg: 14px;
+  --r: 10px;
+  --r-lg: 16px;
+  --r-full: 9999px;
 
-  --trans: 0.2s ease;
-  --trans-spring: 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --trans-fast: 0.15s ease;
+  --trans: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  --trans-spring: 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
-  /* Colors */
-  --bg: #030712;
-  --surface: #111827;
-  --surface-2: #1f2937;
-  --surface-hover: #1f2937;
+  /* Surfaces & Backgrounds */
+  --bg: rgba(9, 13, 20, 0.94);
+  --surface: rgba(17, 24, 39, 0.85);
+  --surface-2: rgba(30, 41, 59, 0.65);
+  --surface-hover: rgba(255, 255, 255, 0.04);
+  --code-bg: rgba(6, 9, 15, 0.85);
+
+  /* Borders & Dividers */
   --border: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.15);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --border-active: rgba(129, 140, 248, 0.4);
 
-  --fg: #ffffff;
-  --fg-2: #e5e7eb;
-  --fg-3: #9ca3af;
+  /* Typography Colors */
+  --fg: #f8fafc;
+  --fg-2: #cbd5e1;
+  --fg-3: #94a3b8;
+  --fg-muted: #64748b;
 
-  --brand: #f9fafb;
-  --brand-pale: #1f2937;
+  /* Brand Accents */
+  --accent: #818cf8;
+  --accent-secondary: #c084fc;
+  --accent-warm: #fb923c;
+  --brand-gradient: linear-gradient(135deg, #818cf8 0%, #c084fc 50%, #fb923c 100%);
+  --brand-pale: rgba(129, 140, 248, 0.12);
 
-  /* Status */
-  --danger: #dc2626;
-  --danger-pale: #450a0a;
+  /* Semantic Status */
+  --danger: #ef4444;
+  --danger-pale: rgba(239, 68, 68, 0.14);
   --danger-fg: #fca5a5;
-  --success: #059669;
-  --success-pale: #022c22;
-  --success-fg: #6ee7b7;
-  --warn: #d97706;
-  --warn-pale: #451a03;
-  --warn-fg: #fcd34d;
-  --info: #2563eb;
-  --info-pale: #1e3a8a;
-  --info-fg: #93c5fd;
+  --danger-border: rgba(239, 68, 68, 0.3);
 
-  --shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --success: #10b981;
+  --success-pale: rgba(16, 185, 129, 0.14);
+  --success-fg: #6ee7b7;
+  --success-border: rgba(16, 185, 129, 0.3);
+
+  --warn: #f59e0b;
+  --warn-pale: rgba(245, 158, 11, 0.14);
+  --warn-fg: #fde68a;
+  --warn-border: rgba(245, 158, 11, 0.3);
+
+  --info: #3b82f6;
+  --info-pale: rgba(59, 130, 246, 0.14);
+  --info-fg: #93c5fd;
+  --info-border: rgba(59, 130, 246, 0.3);
+
+  /* Elevation Shadows */
+  --shadow-suite: 0 24px 60px -12px rgba(0, 0, 0, 0.75),
+                  0 0 0 1px rgba(255, 255, 255, 0.1),
+                  0 0 40px -10px rgba(129, 140, 248, 0.15);
+  --shadow-trigger: 0 10px 25px rgba(0, 0, 0, 0.35),
+                    0 0 0 1px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(129, 140, 248, 0.35);
 }
 
-/* ── Floating Trigger ── */
+/* ── Floating Trigger Button ── */
 #asok-debug-trigger {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  width: 40px;
-  height: 40px;
-  padding: 6px;
-  background: var(--surface);
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  outline: 1px solid rgba(0, 0, 0, 0.25);
+  width: 44px;
+  height: 44px;
+  padding: 8px;
+  background: var(--surface, rgba(17, 24, 39, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   z-index: 999998;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2),
-    0 0 0 1px rgba(0, 0, 0, 0.1),
-    0 0 15px rgba(129, 140, 248, 0.4);
-  transition: all var(--trans-spring);
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35),
+              0 0 0 1px rgba(255, 255, 255, 0.15),
+              0 0 20px rgba(129, 140, 248, 0.35);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  transition: transform var(--trans-spring), box-shadow var(--trans-fast), border-color var(--trans-fast);
 }
 
 #asok-debug-trigger:hover {
   transform: scale(1.1) translateY(-2px);
-  border-color: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(255, 255, 255, 0.2),
-    0 0 25px rgba(129, 140, 248, 0.6);
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(255, 255, 255, 0.3),
+              0 0 28px rgba(129, 140, 248, 0.6);
+}
+
+#asok-debug-trigger:active {
+  transform: scale(0.96) translateY(0);
 }
 
 #asok-debug-trigger svg {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
+  display: block;
 }
 
-/* ── Debug Suite Panel ── */
+/* ── Debug Suite Modal Window ── */
 #asok-debug-suite {
   position: fixed;
-  bottom: 88px;
+  bottom: 84px;
   right: 24px;
-  width: 900px;
-  padding: 20px;
+  width: 960px;
   max-width: calc(100vw - 48px);
-  height: 560px;
-  max-height: calc(100vh - 120px);
+  height: 580px;
+  max-height: calc(100vh - 110px);
+  padding: 0;
   background: var(--bg);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-suite);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
   display: none;
   flex-direction: column;
   overflow: hidden;
   z-index: 999997;
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   line-height: 1.5;
-  animation: asokIn 0.25s ease forwards;
+  animation: asokSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 #asok-debug-suite.asok-open {
   display: flex;
 }
 
-@keyframes asokIn {
+@keyframes asokSlideIn {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.98);
+    transform: translateY(16px) scale(0.985);
   }
-
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
 }
 
-/* ── Nav Header ── */
+/* ── Top Navigation Bar ── */
 .asok-debug-nav {
   display: flex;
   align-items: center;
-  height: 52px;
-  padding: 0 16px;
+  height: 48px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  gap: 20px;
-  background: var(--surface);
+  gap: 6px;
+  background: rgba(17, 24, 39, 0.6);
+  user-select: none;
 }
 
 .asok-debug-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px 0 4px;
+  gap: 10px;
+  padding: 0 14px 0 4px;
   border-right: 1px solid var(--border);
-  margin-right: 8px;
+  margin-right: 4px;
   flex-shrink: 0;
 }
 
@@ -163,74 +197,80 @@
   font-family: var(--font-heading);
   font-size: 13px;
   font-weight: 800;
-  letter-spacing: 0.05em;
-  background: linear-gradient(135deg, #818cf8, #fb923c);
+  letter-spacing: 0.08em;
+  background: var(--brand-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .asok-debug-brand svg {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
 /* Nav Tabs */
 .asok-nav-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: var(--r);
-  color: var(--fg-2);
-  font-size: 14px;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: var(--r-sm);
+  color: var(--fg-3);
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--trans);
+  transition: all var(--trans-fast);
   white-space: nowrap;
   position: relative;
 }
 
 .asok-nav-item:hover {
-  background: var(--surface-2);
+  background: var(--surface-hover);
   color: var(--fg);
 }
 
 .asok-nav-item.active {
   background: var(--brand-pale);
-  color: #818cf8;
+  color: #a5b4fc;
   font-weight: 600;
 }
 
-.asok-nav-item.active::before {
+.asok-nav-item.active::after {
   content: '';
   position: absolute;
-  bottom: -1px;
-  left: 12px;
-  right: 12px;
+  bottom: -9px;
+  left: 10px;
+  right: 10px;
   height: 2px;
-  background: linear-gradient(90deg, #818cf8, #fb923c);
+  background: var(--brand-gradient);
   border-radius: 2px 2px 0 0;
 }
 
-/* Badge */
+/* Nav Badges */
 .asok-nav-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 18px;
   height: 18px;
-  padding: 0 8px;
-  background: var(--surface-2);
-  color: var(--fg-2);
-  border-radius: 999px;
-  font-size: 11px;
+  padding: 0 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--fg-3);
+  border-radius: var(--r-full);
+  font-size: 10.5px;
   font-weight: 700;
+  font-family: var(--font-mono);
+  transition: all var(--trans-fast);
+}
+
+.asok-nav-item:hover .asok-nav-badge {
+  color: var(--fg-2);
 }
 
 .asok-nav-item.active .asok-nav-badge {
-  background: rgba(129, 140, 248, 0.2);
-  color: #818cf8;
+  background: rgba(129, 140, 248, 0.25);
+  color: #c7d2fe;
 }
 
 .asok-nav-spacer {
@@ -238,22 +278,23 @@
 }
 
 .asok-nav-version {
-  font-size: 10px;
-  color: var(--fg-3);
-  padding: 0 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  padding: 0 8px;
 }
 
 .asok-close-btn {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--fg-3);
   cursor: pointer;
   flex-shrink: 0;
-  transition: all var(--trans);
+  transition: all var(--trans-fast);
 }
 
 .asok-close-btn:hover {
@@ -261,11 +302,12 @@
   color: var(--danger-fg);
 }
 
-/* ── Body & Tabs ── */
+/* ── Panel Body & Tabs Layout ── */
 .asok-debug-body {
   flex: 1;
   overflow: hidden;
   position: relative;
+  background: transparent;
 }
 
 .asok-debug-tab {
@@ -279,11 +321,13 @@
 }
 
 .asok-tab-inner {
-  padding: 20px;
+  padding: 20px 24px;
 }
 
+/* Scrollbars */
 .asok-debug-tab::-webkit-scrollbar {
-  width: 4px;
+  width: 6px;
+  height: 6px;
 }
 
 .asok-debug-tab::-webkit-scrollbar-track {
@@ -291,37 +335,61 @@
 }
 
 .asok-debug-tab::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: var(--r-full);
 }
 
-/* ── SQL Table ── */
-.asok-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
+.asok-debug-tab::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
 }
 
-.asok-data-table th {
-  padding: 12px 20px;
-  font-size: 10px;
+/* ── Section Headers ── */
+.asok-section-header {
+  font-size: 11px;
   font-weight: 700;
   color: var(--fg-3);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Data Tables (SQL & SPA Logs) ── */
+.asok-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12.5px;
+}
+
+.asok-data-table th {
+  padding: 10px 18px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: rgba(17, 24, 39, 0.85);
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .asok-data-table td {
-  padding: 14px 20px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   color: var(--fg-2);
-  font-size: 13px;
-  vertical-align: top;
+  vertical-align: middle;
+  line-height: 1.5;
+}
+
+.asok-data-table tbody tr {
+  transition: background var(--trans-fast);
 }
 
 .asok-data-table tbody tr:hover td {
@@ -334,81 +402,94 @@
   font-size: 12px;
   color: var(--fg);
   line-height: 1.5;
+  word-break: break-all;
 }
 
 .asok-query-params {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--fg-3);
-  margin-top: 4px;
+  color: var(--fg-muted);
+  margin-top: 3px;
 }
 
+/* Query Timing Badges */
 .asok-time-fast {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
+  padding: 2px 7px;
+  border-radius: var(--r-full);
   background: var(--success-pale);
   color: var(--success-fg);
+  border: 1px solid var(--success-border);
   font-weight: 600;
   font-size: 11px;
+  font-family: var(--font-mono);
 }
 
 .asok-time-warn {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
+  padding: 2px 7px;
+  border-radius: var(--r-full);
   background: var(--warn-pale);
   color: var(--warn-fg);
+  border: 1px solid var(--warn-border);
   font-weight: 600;
   font-size: 11px;
+  font-family: var(--font-mono);
 }
 
 .asok-time-slow {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
+  padding: 2px 7px;
+  border-radius: var(--r-full);
   background: var(--danger-pale);
   color: var(--danger-fg);
+  border: 1px solid var(--danger-border);
   font-weight: 600;
   font-size: 11px;
+  font-family: var(--font-mono);
 }
 
-/* Banners */
+/* Event Banners */
 .asok-redir-banner td {
   background: var(--warn-pale) !important;
   color: var(--warn-fg) !important;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
-  padding: 8px 20px !important;
+  padding: 8px 18px !important;
+  border-bottom: 1px solid var(--warn-border);
 }
 
 .asok-ajax-banner td {
-  background: var(--success-pale) !important;
-  color: var(--success-fg) !important;
-  font-size: 11px;
+  background: var(--info-pale) !important;
+  color: var(--info-fg) !important;
+  font-size: 11.5px;
   font-weight: 600;
-  padding: 8px 20px !important;
+  padding: 8px 18px !important;
+  border-bottom: 1px solid var(--info-border);
 }
 
-/* Method badge */
+/* HTTP Method Badge */
 .asok-method-badge {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
   font-size: 11px;
   font-weight: 700;
   font-family: var(--font-mono);
-  background: rgba(121, 192, 255, 0.15);
-  color: var(--info-fg);
+  background: rgba(129, 140, 248, 0.18);
+  color: #a5b4fc;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  letter-spacing: 0.04em;
 }
 
-/* Code blocks */
+/* ── Code / JSON Blocks ── */
 .asok-code-block {
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.6;
-  color: var(--fg-2);
-  background: var(--surface);
+  color: #e2e8f0;
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: var(--r);
   padding: 14px 16px;
@@ -417,110 +498,233 @@
   overflow-x: auto;
 }
 
-/* Section headers */
-.asok-section-header {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--fg-3);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 12px;
-}
-
-/* Request meta */
+/* ── Request Meta Banner ── */
 .asok-request-meta {
   display: flex;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: rgba(17, 24, 39, 0.5);
 }
 
 .asok-request-meta-item {
-  padding: 16px 24px;
+  padding: 14px 20px;
   border-right: 1px solid var(--border);
 }
 
 .asok-meta-label {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
-  color: var(--fg-3);
+  color: var(--fg-muted);
   text-transform: uppercase;
+  letter-spacing: 0.06em;
   margin-bottom: 4px;
 }
 
 .asok-meta-value {
   font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--fg);
 }
 
-/* Reactive cards */
+/* Previous Request (Redirect info block) */
+.asok-redir-block {
+  margin-top: 16px;
+  background: var(--surface);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.asok-redir-block-header {
+  padding: 8px 14px;
+  background: var(--warn-pale);
+  color: var(--warn-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+
+/* ── Reactive Cards (States, Components, Directives) ── */
 .asok-reactive-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
   overflow: hidden;
   margin-bottom: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transition: border-color var(--trans-fast);
+}
+
+.asok-reactive-card:hover {
+  border-color: var(--border-hover);
 }
 
 .asok-reactive-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: 10px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: rgba(30, 41, 59, 0.4);
 }
 
 .asok-reactive-name {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--fg);
 }
 
 .asok-reactive-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 6px var(--success);
-  animation: asoKPulse 2s infinite;
+  box-shadow: 0 0 8px var(--success);
+  animation: asokPulse 2.2s infinite ease-in-out;
 }
 
-@keyframes asoKPulse {
-
-  0%,
-  100% {
+@keyframes asokPulse {
+  0%, 100% {
     opacity: 1;
+    transform: scale(1);
   }
-
   50% {
-    opacity: 0.4;
+    opacity: 0.45;
+    transform: scale(0.85);
   }
 }
 
 .asok-reactive-body {
-  margin: 20px 0;
   padding: 12px 14px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--fg-2);
   white-space: pre-wrap;
   word-break: break-all;
+  background: var(--code-bg);
 }
 
-/* Empty state */
+/* ── Router & SPA Specific Elements ── */
+.asok-router-server-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.asok-router-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+/* SPA Action Button */
+.asok-btn-clear {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--fg-3);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all var(--trans-fast);
+}
+
+.asok-btn-clear:hover {
+  background: var(--danger-pale);
+  color: var(--danger-fg);
+  border-color: var(--danger-border);
+}
+
+/* SPA Badges & Pills */
+.asok-spa-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  border-radius: var(--r-full);
+  letter-spacing: 0.05em;
+  font-family: var(--font-mono);
+}
+
+.asok-badge-route {
+  background: rgba(129, 140, 248, 0.18);
+  color: #c7d2fe;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+}
+
+.asok-badge-swap {
+  background: var(--success-pale);
+  color: var(--success-fg);
+  border: 1px solid var(--success-border);
+}
+
+.asok-badge-error {
+  background: var(--danger-pale);
+  color: var(--danger-fg);
+  border: 1px solid var(--danger-border);
+}
+
+.asok-badge-ws {
+  background: rgba(192, 132, 252, 0.18);
+  color: #e9d5ff;
+  border: 1px solid rgba(192, 132, 252, 0.35);
+}
+
+.asok-badge-neutral {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg-2);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.asok-route-badge-active {
+  display: inline-flex;
+  align-items: center;
+  background: var(--success-pale);
+  color: var(--success-fg);
+  border: 1px solid var(--success-border);
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.asok-route-badge-inactive {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fg-muted);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* ── Empty State ── */
 .asok-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
-  padding: 40px 0;
-  color: var(--fg-3);
-  gap: 8px;
+  padding: 36px 0;
+  color: var(--fg-muted);
+  gap: 10px;
 }
 
 .asok-empty svg {
-  opacity: 0.3;
+  opacity: 0.35;
+}
+
+.asok-empty-text {
+  font-size: 12.5px;
 }

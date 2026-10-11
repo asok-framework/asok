@@ -24,6 +24,8 @@ _DEFAULT_MESSAGES = {
     "between": "Must be between {min} and {max}.",
     "alpha": "Only letters allowed.",
     "alpha_num": "Only letters and numbers allowed.",
+    "alphanumeric": "Only letters and numbers allowed.",
+    "integer": "Must be an integer.",
     "required_if": "This field is required.",
     "required_with": "This field is required.",
     "json": "Invalid JSON format.",

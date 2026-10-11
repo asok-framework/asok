@@ -262,9 +262,20 @@ def _load_wsgi_and_setup_logging(wsgi_path: str) -> Any:
         sys.exit(1)
 
 
+def _should_purge_module(name: str) -> bool:
+    return name in ("wsgi", "asok") or name.startswith("asok.")
+
+
+def _purge_cached_modules() -> None:
+    for mod in list(sys.modules):
+        if _should_purge_module(mod):
+            sys.modules.pop(mod, None)
+
+
 def _run_server_child(wsgi_path: str, port: int) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     os.environ["ASOK_PORT"] = str(port)
+    _purge_cached_modules()
     app = _load_wsgi_and_setup_logging(wsgi_path)
     if hasattr(app, "startup"):
         try:

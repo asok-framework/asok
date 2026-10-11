@@ -363,6 +363,8 @@ pip install "asok[postgres]"        # PostgreSQL
 pip install "asok[mysql]"           # MySQL
 pip install "asok[redis]"           # Redis (caching, sessions, background tasks)
 pip install "asok[async]"           # ASGI / async support
+pip install "asok[security]"        # Cryptography & DOM HTML sanitizer (nh3)
+pip install "asok[sanitize]"        # Hardened DOM HTML sanitizer (nh3)
 pip install "asok[postgres,redis]"  # Combined
 ```
 
@@ -432,7 +434,8 @@ asok build    # optimized production build (bytecode + minification)
 | v0.5.1 | ✅ Released (June 2026) | CLI and database connection patch updates |
 | v0.6.0 | ✅ Released (July 2026) | Asset pipeline optimizations, developer toolbar & error overlay |
 | v0.7.0 | ✅ Released (September 2026) | Native SPA Router, Zero-JS Forms, Optional Chaining, Active link tokens |
-| v1.0.0 | 📋 Q1 2027 | Stable API, observability (OpenTelemetry), SaaS multi-tenancy |
+| v0.8.0 | ✅ Released (September 2026) | Real-time cluster scaling (Redis WS), SQLite WAL concurrency, Prometheus metrics & healthcheck |
+| v1.0.0 | 📋 Q1 2027 | Stable API, SaaS multi-tenancy, edge CDN integrations (LTS) |
 
 Full details in [ROADMAP.md](ROADMAP.md).
 

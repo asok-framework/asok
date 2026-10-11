@@ -128,10 +128,10 @@ def _schedule_job_retry(client: Any, job: dict[str, Any], error_msg: str) -> Non
     retry_count = job.get("retry_count", 0) + 1
     job["retry_count"] = retry_count
     backoff = job.get("backoff", 2)
-    delay = backoff**retry_count
-    run_at = time.time() + delay
+    from asok.background import _sign_job_payload, compute_retry_delay
 
-    from asok.background import _sign_job_payload
+    delay = compute_retry_delay(backoff, retry_count)
+    run_at = time.time() + delay
 
     job_json = json.dumps(job, sort_keys=True)
     envelope = json.dumps(

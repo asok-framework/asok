@@ -162,15 +162,21 @@ def _handle_inheritance(text: str, root_dir, depth: int = 0) -> str:
         return text
     parent_path = _resolve_extends_path(text, root_dir)
     if parent_path is None:
-        if _RE_EXTENDS.search(text):
-            return (
-                f"<!-- Inheritance Error: "
-                f"{_RE_EXTENDS.search(text).group(1)} not found in search paths -->"
+        m = _RE_EXTENDS.search(text)
+        if m:
+            from asok.exceptions import TemplateError
+
+            raise TemplateError(
+                f"Template inheritance error: parent template '{m.group(1)}' not found in search paths"
             )
         return text
     parent_text = read_template_file(parent_path)
     if parent_text is None:
-        return "<!-- Inheritance Error: template file too large or unreadable -->"
+        from asok.exceptions import TemplateError
+
+        raise TemplateError(
+            f"Template inheritance error: template '{parent_path}' too large or unreadable"
+        )
     return _merge_parent_with_child(text, parent_text, root_dir, depth)
 
 
@@ -277,7 +283,7 @@ def _handle_includes(text: str, root_dir, depth: int = 0) -> str:
         else:
             inc_path = expr.strip("'\"")
         expanded = _resolve_include(inc_path, root_dir, depth)
-        if with_clause and not expanded.startswith("<!-- Include Error:"):
+        if with_clause:
             return f"{{% with {with_clause} %}}{expanded}{{% endwith %}}"
         return expanded
 
@@ -287,10 +293,18 @@ def _handle_includes(text: str, root_dir, depth: int = 0) -> str:
 def _resolve_include(inc_path: str, root_dir, depth: int) -> str:
     search_path = search_template_path(root_dir, inc_path)
     if not search_path:
-        return f"<!-- Include Error: {inc_path} not found -->"
+        from asok.exceptions import TemplateError
+
+        raise TemplateError(
+            f"Template include error: template '{inc_path}' not found in search paths"
+        )
     content = read_template_file(search_path)
     if content is None:
-        return "<!-- Include Error: file too large or unreadable -->"
+        from asok.exceptions import TemplateError
+
+        raise TemplateError(
+            f"Template include error: template '{inc_path}' too large or unreadable"
+        )
     # Mask before recursing so an `{% include %}` example sitting inside the
     # included file's own HTML comment can't re-trigger expansion.
     content, stash = _mask_html_comments(content)

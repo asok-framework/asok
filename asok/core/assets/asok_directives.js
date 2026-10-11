@@ -28,7 +28,7 @@
     try {
       return new URL(url, window.location.href).origin === window.location.origin;
     } catch (e) {
-      return true; // relative / opaque URLs resolve against the current origin
+      return false;
     }
   };
   const asokFetch = (url, options = {}) => {
@@ -80,7 +80,11 @@
   window.fetch = asokFetch;
 
   // Global store reactive proxy
-  const globalStore = new Proxy({}, {
+  const initialStore = (window.Asok && window.Asok.store && typeof window.Asok.store === 'object')
+    ? Object.assign({}, window.Asok.store)
+    : ((window.$store && typeof window.$store === 'object') ? Object.assign({}, window.$store) : {});
+
+  const globalStore = new Proxy(initialStore, {
     get(target, prop) {
       if (currentSubscriber && !prop.startsWith('_')) {
         if (!dependencyMap.has(prop)) {
@@ -109,6 +113,36 @@
     }
   });
 
+  try {
+    Object.defineProperty(window.Asok, 'store', {
+      get() { return globalStore; },
+      set(val) {
+        if (val && typeof val === 'object') {
+          Object.assign(globalStore, val);
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
+  } catch (_) {
+    window.Asok.store = globalStore;
+  }
+
+  try {
+    Object.defineProperty(window, '$store', {
+      get() { return globalStore; },
+      set(val) {
+        if (val && typeof val === 'object') {
+          Object.assign(globalStore, val);
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
+  } catch (_) {
+    window.$store = globalStore;
+  }
+
   // Find the nearest ancestor element that defines/holds Asok state
   const findStateOwner = (el) => {
     while (el && el !== document.documentElement) {
@@ -126,7 +160,7 @@
 
     return [
       localState,
-      window.Asok.store,
+      globalStore,
       el,
       event,
       ctx.refs || {},
@@ -139,7 +173,10 @@
   // Evaluate a standard compiled expression function
   const evaluateExpression = (ref, state, el) => {
     const fn = (window.__asok_registry || {})[ref];
-    if (!fn) return;
+    if (!fn) {
+      console.warn("[Asok] Missing compiled directive function for ref:", ref);
+      return;
+    }
     try {
       return fn(...getArgumentsForExpression(state, el));
     } catch (e) {
@@ -150,7 +187,10 @@
   // Evaluate an event compiled expression function
   const executeEventExpression = (ref, state, event, el) => {
     const fn = (window.__asok_registry || {})[ref];
-    if (!fn) return;
+    if (!fn) {
+      console.warn("[Asok] Missing compiled event function for ref:", ref);
+      return;
+    }
     try {
       return fn(...getArgumentsForExpression(state, el, event));
     } catch (e) {
@@ -427,8 +467,9 @@
         if (isTruthy) {
           const strVal = String(val);
 
-          // SECURITY: Validate URLs in href/src attributes
-          if ((attrName === 'href' || attrName === 'src') &&
+          // SECURITY: Validate URLs in URL-accepting attributes
+          const urlAttrs = ['href', 'src', 'action', 'poster', 'background', 'cite', 'xlink:href'];
+          if (urlAttrs.includes(attrName.toLowerCase()) &&
             window.AsokSecurity && !window.AsokSecurity.isSafeUrl(strVal)) {
             console.warn('[Asok] Blocked unsafe URL in attribute:', attrName);
             return;
@@ -497,7 +538,7 @@
     try {
       return fn(
         { [itemVar]: item, [indexVar]: index },
-        window.Asok.store, el, null, {},
+        globalStore, el, null, {},
         (cb) => Promise.resolve().then(cb)
       );
     } catch (e) {
@@ -763,18 +804,38 @@
   const initModel = (el) => {
     if (el._modelInitialized) return;
     const modelAttr = el.getAttribute('asok-model');
+    if (!modelAttr) return;
     const owner = findStateOwner(el);
-    if (!modelAttr || !owner) return;
+    if (!owner) {
+      console.warn(`[Asok] asok-model="${modelAttr}" used without a parent asok-state scope.`);
+      return;
+    }
 
     const state = contexts.get(owner).state;
     el._modelInitialized = 1;
 
-    const getValue = (obj, path) => path.replace(/\[([^\]]+)\]/g, '.$1').split('.').reduce((acc, k) => acc && acc[k], obj);
+    const isDangerousKey = (k) => k === '__proto__' || k === 'constructor' || k === 'prototype';
+
+    const getValue = (obj, path) => {
+      const keys = path.replace(/\[([^\]]+)\]/g, '.$1').split('.');
+      if (keys.some(isDangerousKey)) return undefined;
+      return keys.reduce((acc, k) => acc && acc[k], obj);
+    };
     const setValue = (obj, path, val) => {
       const keys = path.replace(/\[([^\]]+)\]/g, '.$1').split('.');
+      if (keys.some(isDangerousKey)) {
+        console.warn('[Asok Security] Blocked model update to protected prototype property:', path);
+        return;
+      }
       const lastKey = keys.pop();
+      if (isDangerousKey(lastKey)) {
+        console.warn('[Asok Security] Blocked model update to protected prototype property:', lastKey);
+        return;
+      }
       const target = keys.reduce((acc, x) => acc[x] = acc[x] || {}, obj);
-      target[lastKey] = val;
+      if (target) {
+        target[lastKey] = val;
+      }
     };
 
     el._updateValue = () => {
@@ -894,32 +955,64 @@
   // Declarative fetch (asok-fetch)
   const initFetch = (el) => {
     if (el._fetchInitialized) return;
-    const url = el.getAttribute('asok-fetch');
+    const rawUrl = el.getAttribute('asok-fetch');
     const targetProp = el.getAttribute('asok-fetch-as') || 'data';
     const trigger = el.getAttribute('asok-fetch-on') || (el.tagName.toLowerCase() === 'form' ? 'submit' : 'load');
     const owner = findStateOwner(el);
-    if (!url || !owner) return;
+    if (!rawUrl || !owner) return;
 
     const state = contexts.get(owner).state;
     el._fetchInitialized = 1;
 
+    const resolveFetchUrl = (inputUrl) => {
+      if (!inputUrl) return '';
+      let resolved = inputUrl.trim();
+      if (resolved.includes('$store.')) {
+        resolved = resolved.replace(/\$store\.([a-zA-Z0-9_]+)/g, (match, key) => {
+          return (globalStore && globalStore[key] !== undefined) ? globalStore[key] : match;
+        });
+        resolved = resolved.replace(/['"]\s*\+\s*['"]|['"]\s*\+\s*|\s*\+\s*['"]/g, '').replace(/^['"]|['"]$/g, '').trim();
+      }
+      const routerParams = (window.AsokRouter && window.AsokRouter.params)
+        || (window.Asok && window.Asok.$route && window.Asok.$route.params)
+        || {};
+      // Replace path parameters like /:slug or /:id (starts with a letter/underscore, not numeric ports like :8000)
+      resolved = resolved.replace(/\/:(?=[a-zA-Z_])([a-zA-Z0-9_]+)/g, (match, key) => {
+        if (routerParams[key] !== undefined) return '/' + encodeURIComponent(routerParams[key]);
+        if (state && state[key] !== undefined) return '/' + encodeURIComponent(state[key]);
+        return match;
+      });
+      // Handle trailing slash if a route slug exists (e.g. /api/products/ with slug: "pomme")
+      if (resolved.endsWith('/') && routerParams.slug) {
+        resolved += encodeURIComponent(routerParams.slug);
+      }
+      return resolved;
+    };
+
     const doFetch = async () => {
-      if (state.loading) return;
+      if (el._isFetching) return;
+      const targetUrl = resolveFetchUrl(rawUrl);
+      if (!targetUrl) return;
       try {
+        el._isFetching = true;
         state.loading = true;
         state.error = null;
         const fetchFn = (window.Asok && window.Asok.fetch) ? window.Asok.fetch : asokFetch;
-        const res = await fetchFn(url);
+        const res = await fetchFn(targetUrl);
         state.status = res.status;
         state.statusCode = res.status;
         state.ok = res.ok;
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         const data = await res.json();
-        state[targetProp] = data;
+        if (targetProp !== '__proto__' && targetProp !== 'constructor' && targetProp !== 'prototype') {
+          state[targetProp] = data;
+        }
         state.loading = false;
       } catch (e) {
         state.error = e.message || 'Fetch error';
         state.loading = false;
+      } finally {
+        el._isFetching = false;
       }
     };
 
@@ -981,8 +1074,9 @@
     };
 
     const doAsync = async (event) => {
-      if (state.loading) return;
+      if (el._isFetching) return;
       try {
+        el._isFetching = true;
         state.loading = true;
         state.error = null;
         await executeEventExpression(ref, state, event, el);
@@ -991,6 +1085,8 @@
       } catch (e) {
         state.error = e.message || 'Async action error';
         state.loading = false;
+      } finally {
+        el._isFetching = false;
       }
     };
 
@@ -1012,8 +1108,15 @@
   // Declarative POST fetch (asok-fetch-post & asok-fetch-post-async)
   const initFetchPost = (el) => {
     if (el._fetchPostInitialized) return;
-    const url = el.getAttribute('asok-fetch-post') || el.getAttribute('asok-fetch-post-async');
-    if (!url) return;
+    const rawPostUrl = el.getAttribute('asok-fetch-post') || el.getAttribute('asok-fetch-post-async');
+    if (!rawPostUrl) return;
+    let url = rawPostUrl.trim();
+    if (url.includes('$store.')) {
+      url = url.replace(/\$store\.([a-zA-Z0-9_]+)/g, (match, key) => {
+        return (globalStore && globalStore[key] !== undefined) ? globalStore[key] : match;
+      });
+      url = url.replace(/['"]\s*\+\s*['"]|['"]\s*\+\s*|\s*\+\s*['"]/g, '').replace(/^['"]|['"]$/g, '').trim();
+    }
 
     const owner = findStateOwner(el);
     let state;
@@ -1057,8 +1160,9 @@
     };
 
     const doPost = async (event) => {
-      if (state.loading) return;
+      if (el._isFetching) return;
       try {
+        el._isFetching = true;
         state.loading = true;
         state.error = null;
 
@@ -1066,7 +1170,9 @@
         if (formEl) {
           const formData = new FormData(formEl);
           formData.forEach((val, key) => {
-            payload[key] = val;
+            if (key !== '__proto__' && key !== 'constructor' && key !== 'prototype') {
+              payload[key] = val;
+            }
           });
         }
         Object.keys(state).forEach(key => {
@@ -1096,12 +1202,16 @@
         }
 
         const data = await res.json();
-        state[targetProp] = data;
+        if (targetProp !== '__proto__' && targetProp !== 'constructor' && targetProp !== 'prototype') {
+          state[targetProp] = data;
+        }
         state.loading = false;
         resetFormIfNeeded();
       } catch (e) {
         state.error = e.message || 'Fetch error';
         state.loading = false;
+      } finally {
+        el._isFetching = false;
       }
     };
 
@@ -1132,6 +1242,7 @@
 
   const applyMetaItemDirective = (key, val) => {
     if (!key || val === undefined || val === null) return;
+    if (!/^[a-zA-Z0-9_:-]+$/.test(key)) return;
     const strVal = String(val);
     if (key === 'title') {
       document.title = strVal;
@@ -1292,6 +1403,8 @@
         if (owner) {
           contexts.get(owner).refs[el.getAttribute('asok-ref')] = el;
           el._refInitialized = 1;
+        } else {
+          console.warn(`[Asok] asok-ref="${el.getAttribute('asok-ref')}" used without a parent asok-state scope.`);
         }
       }
 
@@ -1300,6 +1413,12 @@
         const selector = el.getAttribute('asok-teleport');
         const target = document.querySelector(selector);
         const owner = findStateOwner(el);
+        if (!target) {
+          console.warn(`[Asok] asok-teleport target selector "${selector}" not found in DOM.`);
+        }
+        if (!owner) {
+          console.warn(`[Asok] asok-teleport used without a parent asok-state scope.`);
+        }
         if (target && owner) {
           const ownerCtx = contexts.get(owner);
           const fragment = el.content.cloneNode(true);
@@ -1567,7 +1686,11 @@
     let contentToCopy = text;
     if (text && text.startsWith('#')) {
       const target = document.querySelector(text);
-      if (target) contentToCopy = target.value || target.textContent || '';
+      if (target) {
+        contentToCopy = target.value || target.textContent || '';
+      } else {
+        console.warn(`[Asok] asok-copy target selector "${text}" not found in DOM.`);
+      }
     } else if ((!contentToCopy || contentToCopy === 'true') && triggerEl) {
       const parentBlock = triggerEl.closest('.code-block, code-block, [asok-code-block]');
       const preEl = parentBlock ? parentBlock.querySelector('pre, code') : triggerEl.nextElementSibling;
@@ -1605,7 +1728,10 @@
   // ── 2. Accessible Modal Directive (asok-modal) ───────────────
   const openModal = (modalId) => {
     const modal = document.querySelector(`[asok-modal="${modalId}"], [data-asok-modal="${modalId}"], [data-modal="${modalId}"]`);
-    if (!modal) return;
+    if (!modal) {
+      console.warn(`[Asok] asok-modal with id "${modalId}" not found in DOM.`);
+      return;
+    }
     if (modal.tagName === 'DIALOG' && modal.showModal) {
       modal.showModal();
     } else {

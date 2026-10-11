@@ -183,6 +183,11 @@
           {{ icon('monitor', 14) }}
           <span>{{ t('Active Admin Sessions') }}</span>
         </a>
+        <a href="{{ admin_prefix }}/jobs"
+          class="nav-item {% if active == 'jobs' %}is-active{% endif %}" data-spa>
+          {{ icon('layers', 14) }}
+          <span>{{ t('Background Jobs & DLQ') }}</span>
+        </a>
         <a href="{{ admin_prefix }}/trash" class="nav-item {% if active == 'trash' %}is-active{% endif %}" data-spa>
           {{ icon('trash', 14) }}
           <span>{{ t('Trash') }}</span>
@@ -245,7 +250,7 @@
             </button>
             <div class="locale-dd-menu user-dd-menu" id="user-menu" data-dropdown hidden>
               <div class="user-info">
-                <span class="user-name">{{ request.user.name or request.user.email }}</span>
+                <span class="user-name">{{ request.user.name or request.user.email or '' }}</span>
                 <span class="user-role">{{ user_role_label }}</span>
               </div>
               <hr class="menu-divider">

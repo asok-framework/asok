@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from asok.exceptions import ValidationError
 from asok.orm import Model
@@ -82,33 +82,55 @@ class Form(SchemaMixin):
             fields[name] = self._build_single_field(name, definition, is_post, request)
         return fields
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        declared = {}
+        for k, v in list(cls.__dict__.items()):
+            if isinstance(v, tuple) and len(v) == 6 and isinstance(v[0], str):
+                declared[k] = v
+        cls._declared_fields = declared
+
+    def _resolve_init_args(
+        self,
+        fields_or_request: Any,
+        request: Optional[Request],
+    ) -> tuple[dict[str, tuple], Optional[Request]]:
+        declared = dict(getattr(self.__class__, "_declared_fields", None) or {})
+        if isinstance(fields_or_request, Request):
+            return declared, fields_or_request
+        if fields_or_request is None:
+            return declared, request
+        if isinstance(fields_or_request, dict):
+            return fields_or_request, request
+        raise TypeError(
+            f"fields_dict must be a dict; got {type(fields_or_request).__name__}"
+        )
+
     def __init__(
-        self, fields_dict: dict[str, tuple], request: Optional[Request] = None
+        self,
+        fields_dict: Optional[Union[dict[str, tuple], Request]] = None,
+        request: Optional[Request] = None,
     ):
         """Initialize a form with a field schema and optional request binding.
 
-        Example:
-            form = Form({"name": Form.text("Name", "required")}, request)
+        Supports both:
+            - Declarative class syntax: class LoginForm(Form): ... -> form = LoginForm(request)
+            - Dictionary schema syntax: form = Form({"name": Form.text("Name")}, request)
         """
-        if not isinstance(fields_dict, dict):
-            raise TypeError(
-                "fields_dict must be a dict; got {}".format(type(fields_dict).__name__)
-            )
-        if not fields_dict:
+        fields, req = self._resolve_init_args(fields_dict, request)
+        if not fields:
             raise ValueError("Form fields_dict cannot be empty.")
 
         # Fall back to the ongoing request so forms built without an explicit
         # request still carry a CSRF token and validate on submit.
-        if request is None:
-            request = _current_request()
+        if req is None:
+            req = _current_request()
 
-        self._request: Optional[Request] = request
-        self._schema: dict[str, tuple] = fields_dict
-        self._is_template: bool = request is None
-        is_post = bool(request) and request.method in _SUBMIT_METHODS
-        self._fields: dict[str, FormField] = self._build_fields(
-            fields_dict, is_post, request
-        )
+        self._request: Optional[Request] = req
+        self._schema: dict[str, tuple] = fields
+        self._is_template: bool = req is None
+        is_post = bool(req) and req.method in _SUBMIT_METHODS
+        self._fields: dict[str, FormField] = self._build_fields(fields, is_post, req)
 
     def _bind(self, request: Request) -> Form:
         """Internal helper for creating a bound copy of the form."""
@@ -251,13 +273,88 @@ class Form(SchemaMixin):
                 html.append(str(field))
         return SafeString("\n".join(html))
 
+    def is_valid(
+        self,
+        request: Optional[Request] = None,
+        csrf: bool = True,
+        raise_error: bool = False,
+    ) -> bool:
+        """Alias for validate(), matching standard convention in Python frameworks."""
+        return self.validate(request=request, csrf=csrf, raise_error=raise_error)
+
+    @property
+    def has_errors(self) -> bool:
+        """Return True if the form contains any validation errors."""
+        return any(bool(f._error) for f in self._fields.values())
+
+    def has_error(self, field_name: str) -> bool:
+        """Check if a specific field has a validation error."""
+        if field_name not in self._fields:
+            raise KeyError(
+                f"Form has no field '{field_name}'. Available fields: {', '.join(sorted(self._fields))}"
+            )
+        field = self._fields.get(field_name)
+        return bool(field and field._error)
+
+    def error(self, field_name: str) -> str:
+        """Get the validation error message for a specific field, or empty string."""
+        if field_name not in self._fields:
+            raise KeyError(
+                f"Form has no field '{field_name}'. Available fields: {', '.join(sorted(self._fields))}"
+            )
+        field = self._fields.get(field_name)
+        return field._error if field else ""
+
+    def render(self, submit: Optional[str] = None, **attrs: Any) -> SafeString:
+        """Render all form fields into HTML, including CSRF token and optional submit button."""
+        parts = [str(self.csrf)] + [str(f) for f in self._fields.values()]
+        if submit:
+            from html import escape
+
+            parts.append(
+                f'<button type="submit" class="form-submit">{escape(submit)}</button>'
+            )
+        return SafeString("\n".join(parts))
+
+    def __iter__(self):
+        """Iterate over FormField instances in the form."""
+        return iter(self._fields.values())
+
+    def __len__(self) -> int:
+        return len(self._fields)
+
+    def __getitem__(self, name: str) -> FormField:
+        if name in self._fields:
+            return self._fields[name]
+        raise KeyError(f"Form field '{name}' not found.")
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._fields
+
+    def __str__(self) -> str:
+        return str(self.render())
+
     # Instance API that must win over a model field sharing the same name — so
     # `form.data` / `form.validate` keep working even if the model has a `data`
     # field (its value is still reachable via `form.data["data"]`). Schema
     # helpers (Form.email, Form.text, ...) are intentionally NOT reserved: those
     # are common field names and should resolve to the field on an instance.
     _RESERVED_ATTRS = frozenset(
-        {"data", "errors", "csrf", "hidden_fields", "validate", "bind", "fill", "reset"}
+        {
+            "data",
+            "errors",
+            "csrf",
+            "hidden_fields",
+            "validate",
+            "is_valid",
+            "has_errors",
+            "has_error",
+            "error",
+            "render",
+            "bind",
+            "fill",
+            "reset",
+        }
     )
 
     def __getattribute__(self, name):
@@ -265,6 +362,10 @@ class Form(SchemaMixin):
             fields = super().__getattribute__("_fields")
             if name in fields:
                 return fields[name]
+            if name in SchemaMixin.__dict__:
+                raise AttributeError(
+                    f"'{self.__class__.__name__}' has no field '{name}'"
+                )
         return super().__getattribute__(name)
 
     @classmethod

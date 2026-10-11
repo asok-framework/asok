@@ -87,22 +87,9 @@ class WebSocketServer:
         allowed_origins: Optional[Union[str, list[str]]] = None,
         max_connections: int = 1000,
         app: Optional[Asok] = None,
+        adapter: Optional[Any] = None,
     ):
-        """Initialize the WebSocket server.
-
-        Args:
-            host: Interface to bind to.
-            port: Port to listen on.
-            secret_key: Key for verifying signed cookies (defaults to env
-              SECRET_KEY).
-            auth_model: Model name for authentication.
-            allowed_origins: List of allowed Origin headers for CORS validation.
-                **Security**: Never use ``"*"`` in production — it disables
-                Origin checks and allows any website to open WebSocket
-                connections to your server using your users' cookies.
-            max_connections: Maximum number of simultaneous clients.
-            app: Optional Asok application instance for shared state/session.
-        """
+        """Initialize the WebSocket server."""
         self.host = host
         self.port = _resolve_ws_server_port(port, app)
         self.secret_key = secret_key
@@ -120,6 +107,8 @@ class WebSocketServer:
         self._running = False
         self.presence_counts: dict[int, int] = {}
         self._room_authorizer = None
+        self.adapter = self._resolve_adapter(adapter, app)
+        self.adapter.bind(self)
 
         # Internal: auto-register live component handler
         if self.app:
@@ -232,24 +221,60 @@ class WebSocketServer:
                 return r, params
         return None, None
 
+    @staticmethod
+    def _app_conf(app: Optional[Asok], key: str, default: Any = None) -> Any:
+        if app and hasattr(app, "config"):
+            return app.config.get(key, default)
+        return default
+
+    @classmethod
+    def _resolve_adapter(cls, adapter: Optional[Any], app: Optional[Asok]) -> Any:
+        if adapter is not None:
+            return adapter
+        from .adapter import InMemoryWebSocketAdapter, RedisWebSocketAdapter
+
+        ws_adapter = cls._app_conf(app, "WS_ADAPTER") or os.getenv(
+            "WS_ADAPTER", "memory"
+        )
+        if ws_adapter == "redis":
+            url = cls._app_conf(app, "WS_REDIS_URL") or os.getenv(
+                "WS_REDIS_URL", "redis://localhost:6379/0"
+            )
+            return RedisWebSocketAdapter(redis_url=url)
+        return InMemoryWebSocketAdapter()
+
+    def _send_to_conns(
+        self,
+        conns: list[Connection],
+        message: Union[str, bytes],
+        exclude: Optional[Connection],
+    ) -> list[Connection]:
+        dead = []
+        for c in conns:
+            if c is not exclude and not c.send(message):
+                dead.append(c)
+        return dead
+
+    def _publish_to_adapter(
+        self, channel: str, message: Union[str, bytes], from_adapter: bool
+    ) -> None:
+        if not from_adapter and getattr(self, "adapter", None):
+            self.adapter.publish(channel, message)
+
     # --- broadcast / introspection ---
     def broadcast(
         self,
         path: str,
         message: Union[str, bytes],
         exclude: Optional[Connection] = None,
+        from_adapter: bool = False,
     ) -> None:
         """Send a text message to every connection on `path`."""
         with self._conn_lock:
             conns = list(self._connections.get(path, ()))
-        dead = []
-        for c in conns:
-            if c is exclude:
-                continue
-            if not c.send(message):
-                dead.append(c)
-        for c in dead:
+        for c in self._send_to_conns(conns, message, exclude):
             self._remove(c)
+        self._publish_to_adapter(f"path:{path}", message, from_adapter)
 
     def broadcast_json(
         self,
@@ -265,16 +290,13 @@ class WebSocketServer:
         room: str,
         message: Union[str, bytes],
         exclude: Optional[Connection] = None,
+        from_adapter: bool = False,
     ) -> None:
         """Send a text message to every connection that has joined `room`."""
-        all_conns = self._all_connections()
-        dead = [
-            c
-            for c in all_conns
-            if self._should_deliver_to_room(c, room, exclude) and not c.send(message)
-        ]
-        for c in dead:
-            self._remove(c)
+        for c in self._all_connections():
+            if self._should_deliver_to_room(c, room, exclude) and not c.send(message):
+                self._remove(c)
+        self._publish_to_adapter(f"room:{room}", message, from_adapter)
 
     @staticmethod
     def _should_deliver_to_room(conn, room: str, exclude) -> bool:
@@ -351,6 +373,8 @@ class WebSocketServer:
     def stop(self) -> None:
         """Stop the server and gracefully close all active connections."""
         self._running = False
+        if getattr(self, "adapter", None):
+            self.adapter.close()
         for conn in self._all_connections():
             self._close_connection_safe(conn)
         with self._conn_lock:
@@ -427,16 +451,25 @@ class WebSocketServer:
         "wss://127.0.0.1",
     )
 
+    def _is_no_origin_permitted(self) -> bool:
+        if os.getenv("WS_ALLOW_NO_ORIGIN", "").lower() in ("true", "1"):
+            return True
+        app = getattr(self, "app", None)
+        if app and app.config.get("ALLOW_WEBSOCKET_NO_ORIGIN", False):
+            return True
+        return bool(_is_debug_env() and self._is_wildcard_allowed())
+
     def _is_origin_allowed(self, origin: Optional[str]) -> bool:
         """Check if the given Origin header is allowed to connect.
 
-        SECURITY: even in debug mode, only localhost origins pass when no
-        explicit allow-list is set.
+        SECURITY: Origin header is required for browser clients to prevent CORS bypass.
+        Non-browser clients without Origin (CLI, backend workers, health checks) can connect
+        if ALLOW_WEBSOCKET_NO_ORIGIN is configured, or in debug mode when origins are wildcarded.
         """
+        if not origin:
+            return self._is_no_origin_permitted()
         if self._is_wildcard_allowed():
             return self._origin_allowed_wildcard(origin)
-        if not origin:
-            return True
         return self._origin_in_allowlist(origin)
 
     def _is_wildcard_allowed(self) -> bool:
@@ -450,7 +483,7 @@ class WebSocketServer:
                 "(e.g., https://yourdomain.com)."
             )
         if not origin:
-            return True
+            return False
         return self._origin_is_localhost(origin)
 
     def _origin_is_localhost(self, origin: str) -> bool:
@@ -754,24 +787,31 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Error in on_message handler: {e}", exc_info=True)
 
+    @staticmethod
+    def _inc_ws_metric() -> None:
+        try:
+            from ..core.metrics import default_metrics
+
+            default_metrics.inc_ws_connections()
+        except Exception:
+            pass
+
+    def _track_presence_on_register(self, conn: Connection) -> None:
+        user_id = getattr(conn.user, "id", None) if conn.user else None
+        if user_id is None:
+            return
+        with self._conn_lock:
+            old_count = self.presence_counts.get(user_id, 0)
+            self.presence_counts[user_id] = old_count + 1
+            is_first = old_count == 0
+        if is_first:
+            self._broadcast_presence(user_id, "online")
+
     def _register(self, conn: Connection) -> None:
         with self._conn_lock:
             self._connections.setdefault(conn.path, set()).add(conn)
-        user_id = getattr(conn.user, "id", None) if conn.user else None
-        if user_id is not None:
-            with self._conn_lock:
-                old_count = self.presence_counts.get(user_id, 0)
-                self.presence_counts[user_id] = old_count + 1
-                is_first = old_count == 0
-            if is_first:
-                payload = {
-                    "op": "broadcast",
-                    "type": "presence",
-                    "user_id": user_id,
-                    "status": "online",
-                }
-                for p in list(self._connections.keys()):
-                    self.broadcast_json(p, payload)
+        self._inc_ws_metric()
+        self._track_presence_on_register(conn)
 
     def _remove(self, conn: Connection) -> None:
         self._drop_connection(conn)
@@ -787,6 +827,12 @@ class WebSocketServer:
             if s:
                 s.discard(conn)
             self._connection_count = max(0, self._connection_count - 1)
+        try:
+            from ..core.metrics import default_metrics
+
+            default_metrics.dec_ws_connections()
+        except Exception:
+            pass
 
     def _decrement_presence(self, user_id) -> bool:
         with self._conn_lock:

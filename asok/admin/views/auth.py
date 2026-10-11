@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
+import os
 import time
 from typing import Any
 
 from ...exceptions import AbortException, RedirectException, SecurityError
 from ...forms import Form
 from ...orm import MODELS_REGISTRY
+from ...utils.qr import generate_qr_data_uri
 from ..rbac import _get_user_roles
 from ..utils import (
     _encrypt_totp_secret,
@@ -16,6 +19,8 @@ from ..utils import (
     _totp_verify,
     _verify_backup_code,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AuthViewsMixin:
@@ -125,20 +130,29 @@ class AuthViewsMixin:
             self.t(request, "You do not have permission to access the admin panel."),
         )
 
+    def _dispatch_authenticated_user(self, request: Any, user: Any, email: str) -> None:
+        if not user:
+            self._handle_login_failure(request, email)
+        elif self._has_admin_access(user):
+            self._handle_login_success(request, user)
+        else:
+            self._handle_login_no_admin_role(request, user)
+
     def _process_login_attempt(self, request: Any, form: Form) -> None:
         try:
             if form.validate():
                 user = request.authenticate(
                     email=form.email.value, password=form.password.value
                 )
-                if not user:
-                    self._handle_login_failure(request, form.email.value)
-                elif self._has_admin_access(user):
-                    self._handle_login_success(request, user)
-                else:
-                    self._handle_login_no_admin_role(request, user)
+                self._dispatch_authenticated_user(request, user, form.email.value)
         except (AbortException, SecurityError) as e:
             self._handle_login_exception(request, e)
+        except ValueError as e:
+            logger.error("Authentication configuration error: %s", e, exc_info=True)
+            request.flash(
+                "error",
+                self.t(request, "Authentication service is currently unavailable."),
+            )
 
     def _handle_post_login(self, request: Any, form: Form) -> Any:
         allowed, remaining = self._login_rate_check(request)
@@ -293,7 +307,11 @@ class AuthViewsMixin:
         backup_codes_hashed = [_hash_backup_code(code) for code in backup_codes_plain]
         import json
 
-        master_key = self.app.config.get("SECRET_KEY", "")
+        master_key = (
+            os.getenv("TOTP_ENCRYPTION_KEY")
+            or self.app.config.get("TOTP_ENCRYPTION_KEY")
+            or self.app.config.get("SECRET_KEY", "")
+        )
         encrypted_secret = _encrypt_totp_secret(secret, master_key)
 
         User = MODELS_REGISTRY.get(self.app.config.get("AUTH_MODEL", "User"))
@@ -347,6 +365,7 @@ class AuthViewsMixin:
         secret = self._get_pending_2fa_secret(request)
         account = getattr(u, "email", None) or f"user-{u.id}"
         uri = _totp_uri(secret, account, self.site_name)
+        qr_data_uri = generate_qr_data_uri(uri)
         form = Form(
             {"code": Form.text("Verification code", "required", autofocus=True)},
             request,
@@ -359,6 +378,7 @@ class AuthViewsMixin:
             form=form,
             secret=secret,
             uri=uri,
+            qr_data_uri=qr_data_uri,
             active=None,
             breadcrumbs=[
                 {"label": "Dashboard", "url": self.prefix},

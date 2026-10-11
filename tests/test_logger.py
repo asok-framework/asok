@@ -9,11 +9,16 @@ import logging
 
 import pytest
 
-from asok.logger import RequestLogger, get_logger
+from asok.logger import (
+    JSONFormatter,
+    RequestLogger,
+    configure_security_logger,
+    get_logger,
+)
 from asok.request import Request
 
 # ---------------------------------------------------------------------------
-# get_logger
+# get_logger and formatters
 # ---------------------------------------------------------------------------
 
 
@@ -44,6 +49,55 @@ class TestGetLogger:
         assert data["level"] == "INFO"
         assert data["message"] == "Hello JSON"
         assert "timestamp" in data
+
+    def test_json_formatter_serializes_arbitrary_extras(self):
+        formatter = JSONFormatter()
+        record = logging.LogRecord(
+            name="asok.test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=20,
+            msg="User login successful",
+            args=(),
+            exc_info=None,
+        )
+        record.user_id = "user_123"
+        record.ip = "127.0.0.1"
+        record.auth_method = "magic_link"
+
+        output = formatter.format(record)
+        data = json.loads(output)
+        assert data["user_id"] == "user_123"
+        assert data["ip"] == "127.0.0.1"
+        assert data["auth_method"] == "magic_link"
+        assert data["logger"] == "asok.test"
+
+    def test_configure_security_logger(self):
+        stream = io.StringIO()
+        sec_logger = configure_security_logger(
+            json_format=True, level="WARNING", stream=stream
+        )
+        assert sec_logger.name == "asok.security"
+        assert sec_logger.level == logging.WARNING
+
+        sec_logger.warning(
+            "Rate limit reached",
+            extra={"event": "rate_limit", "key": "ip:1.2.3.4", "count": 10},
+        )
+        output = stream.getvalue()
+        data = json.loads(output)
+        assert data["logger"] == "asok.security"
+        assert data["level"] == "WARNING"
+        assert data["event"] == "rate_limit"
+        assert data["key"] == "ip:1.2.3.4"
+        assert data["count"] == 10
+
+    def test_reconfigure_logger(self):
+        log = get_logger("reconf_logger", level="INFO")
+        assert log.level == logging.INFO
+        # Reconfigure to DEBUG
+        log2 = get_logger("reconf_logger", level="DEBUG", reconfigure=True)
+        assert log2.level == logging.DEBUG
 
 
 # ---------------------------------------------------------------------------

@@ -169,7 +169,7 @@ def _format_registry_entry(app, h: str, expr: str) -> str:
     is_async = app._is_async_expression_cached(expr)
     fn_prefix = "async " if is_async else ""
     return (
-        f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick)"
+        f"    {json.dumps(h)}: {fn_prefix}function($, $store, $el, $event, $refs, $nextTick, $route, $fetch)"
         f" {{ with($||{{}}) {{ {body} }} }}"
     )
 

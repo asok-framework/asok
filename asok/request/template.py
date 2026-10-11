@@ -39,17 +39,18 @@ def _has_no_required_params(params: list[Any]) -> bool:
 
 
 def _try_eval_callable(req: Any, val: Any) -> Any:
-    try:
-        import inspect
+    import inspect
 
+    try:
         sig = inspect.signature(val)
-        params = list(sig.parameters.values())
-        if _has_request_param(params):
-            return val(req)
-        if _has_no_required_params(params):
-            return val()
-    except Exception:
-        pass
+    except (ValueError, TypeError):
+        return val
+
+    params = list(sig.parameters.values())
+    if _has_request_param(params):
+        return val(req)
+    if _has_no_required_params(params):
+        return val()
     return val
 
 
@@ -292,7 +293,12 @@ class TemplateMixin:
         """
         from asok.forms import Form
 
-        return self.shared(name, Form)
+        form = self.shared(name, Form)
+        if form is None:
+            raise KeyError(
+                f"Shared form '{name}' not found. Make sure it is registered via app.share('{name}', Form(...))"
+            )
+        return form
 
     def _inject_shared_vars(self: Any, ctx: dict[str, Any]) -> None:
         app_ref = self.environ.get("asok.app")
@@ -300,8 +306,12 @@ class TemplateMixin:
             for name in app_ref._shared:
                 try:
                     ctx[name] = self.shared(name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+
+                    logging.getLogger("asok.templates").warning(
+                        "Failed to resolve shared variable '%s': %s", name, e
+                    )
         # Inject per-request shared variables (manual share)
         cache = self.__dict__.get("_shared_cache", {})
         ctx.update(cache)
@@ -317,6 +327,8 @@ class TemplateMixin:
             "meta": self.meta,
             "csrf_input": getattr(self, "csrf_input", None),
             "csrf_token": getattr(self, "csrf_token_value", ""),
+            "old": getattr(self, "old", lambda k, d="": d),
+            "errors": getattr(self, "errors", {}),
         }
 
         # -- component() helper ----------------------------------------
@@ -330,7 +342,11 @@ class TemplateMixin:
 
             cls = COMPONENTS_REGISTRY.get(name)
             if cls is None:
-                return SafeString(f"<!-- Component '{name}' not found -->")
+                from asok.exceptions import TemplateError
+
+                raise TemplateError(
+                    f"Component '{name}' not found. Make sure the component is registered and imported."
+                )
 
             # Stable CID: explicit or auto (tpl--name--index)
             cid = kwargs.pop("cid", None)
@@ -366,6 +382,7 @@ class TemplateMixin:
                     if instance is not None:
                         instance._slot = slot
                         instance._client = client
+                        instance._request = self
                         return SafeString(str(instance))
                 except Exception:
                     pass
@@ -383,6 +400,7 @@ class TemplateMixin:
 
             instance = cls(_cid=cid, _client=client, **kwargs)
             instance._slot = slot
+            instance._request = self
             # Save initial state so it survives a refresh
             signed_state = instance._sign_state(secret)
             sess[f"_comp_{cid}"] = signed_state
@@ -432,8 +450,13 @@ class TemplateMixin:
                 template_name=filepath,
             )
 
-    def html(self: Any, filepath: str, **context: Any) -> str:
+    def html(self: Any, filepath: str, *args: Any, **context: Any) -> str:
         """Render an HTML template and return the result as a string."""
+        if args and isinstance(args[0], dict):
+            merged = dict(args[0])
+            merged.update(context)
+            context = merged
+
         # Auto-detect block request (from data-block JS swap)
         block_header = self.environ.get("HTTP_X_BLOCK")
         if block_header:
@@ -490,8 +513,12 @@ class TemplateMixin:
             safe_page_id = html.escape(page_id, quote=True)
             safe_css = scoped_css.replace("</style>", r"<\/style>")
             yield f'<style id="asok-scoped-css" data-page-id="{safe_page_id}">{safe_css}</style>'
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+
+            logging.getLogger("asok.assets").warning(
+                "Failed to render scoped CSS: %s", e
+            )
 
     def _yield_scoped_js(self: Any, page_id: Optional[str]) -> Iterator[str]:
         """Yield a <script> tag with scoped and possibly minified JS."""
@@ -509,8 +536,12 @@ class TemplateMixin:
             nonce = getattr(self, "nonce", "")
             safe_js = scoped_js.replace("</script>", r"<\/script>")
             yield f"<script id=\"asok-scoped-js\" nonce=\"{nonce}\">(function(){{const init=function(){{{safe_js}}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();}})();</script>"
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+
+            logging.getLogger("asok.assets").warning(
+                "Failed to render scoped JS: %s", e
+            )
 
     def _yield_block_item(
         self: Any,
@@ -718,3 +749,8 @@ class TemplateMixin:
         target_path = self._resolve_static_target(filepath, app_ref, root)
         url = TemplateMixin._build_static_url(target_path)
         return TemplateMixin._append_static_version(url, target_path, app_ref)
+
+    # Convenience aliases
+    render_template = html
+    render_block = block
+    render_blocks = blocks

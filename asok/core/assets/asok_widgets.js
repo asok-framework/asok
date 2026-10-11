@@ -225,6 +225,7 @@
 
   // Transfer field helpers
   window.Asok.updateTransferSelection = (state, prop, event) => {
+    if (!prop || typeof prop !== 'string' || prop === '__proto__' || prop === 'constructor' || prop === 'prototype') return;
     state[prop] = Array.from(event.target.selectedOptions).map(o => o.value);
   };
 

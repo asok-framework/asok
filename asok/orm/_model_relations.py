@@ -15,6 +15,17 @@ from .utils import MODELS_REGISTRY
 # ── Foreign-key derived "parent" properties ─────────────────────────
 
 
+def _resolve_target_model(target_model_name: str, rel_name: str, owner_cls: Any) -> Any:
+    target_model = MODELS_REGISTRY.get(target_model_name)
+    if not target_model:
+        raise ValueError(
+            f"Related model '{target_model_name}' for relation '{rel_name}' on "
+            f"{owner_cls.__name__} was not found in MODELS_REGISTRY. "
+            f"Make sure the model is imported."
+        )
+    return target_model
+
+
 def build_foreign_key_property(field_name: str, related_model: Any) -> property:
     def get_related(self):
         val = getattr(self, field_name)
@@ -28,7 +39,16 @@ def build_foreign_key_property(field_name: str, related_model: Any) -> property:
             else related_model
         )
         if model is None:
-            return None
+            model_name = (
+                related_model
+                if isinstance(related_model, str)
+                else getattr(related_model, "__name__", str(related_model))
+            )
+            raise ValueError(
+                f"Related model '{model_name}' for foreign key '{field_name}' on "
+                f"{self.__class__.__name__} was not found in MODELS_REGISTRY. "
+                f"Make sure the model is imported."
+            )
         from .router import database_router_context
 
         with database_router_context(shard=getattr(self, "_shard", None)):
@@ -45,9 +65,9 @@ def build_has_many_property(rel, rel_name: str) -> property:
         cached = _cached_relation(self, rel_name)
         if cached is not None:
             return cached
-        target_model = MODELS_REGISTRY.get(rel.target_model_name)
-        if not target_model:
-            return []
+        target_model = _resolve_target_model(
+            rel.target_model_name, rel_name, self.__class__
+        )
         fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
         with _shard_context(self):
             return target_model.all(**{fk: self.id})
@@ -60,9 +80,9 @@ def build_has_one_property(rel, rel_name: str) -> property:
         cached = _cached_relation(self, rel_name)
         if cached is not None:
             return cached
-        target_model = MODELS_REGISTRY.get(rel.target_model_name)
-        if not target_model:
-            return None
+        target_model = _resolve_target_model(
+            rel.target_model_name, rel_name, self.__class__
+        )
         fk = rel.foreign_key or f"{self.__class__.__name__.lower()}_id"
         with _shard_context(self):
             return target_model.find(**{fk: self.id})
@@ -75,13 +95,13 @@ def build_belongs_to_property(rel, rel_name: str) -> property:
         cached = _cached_relation(self, rel_name)
         if cached is not None:
             return cached
-        target_model = MODELS_REGISTRY.get(rel.target_model_name)
-        if not target_model:
-            return None
         fk = rel.foreign_key or f"{rel.target_model_name.lower()}_id"
         val = getattr(self, fk, None)
         if not val:
             return None
+        target_model = _resolve_target_model(
+            rel.target_model_name, rel_name, self.__class__
+        )
         with _shard_context(self):
             return target_model.find(id=val)
 
@@ -93,9 +113,9 @@ def build_belongs_to_many_property(rel, rel_name: str) -> property:
         cached = _cached_relation(self, rel_name)
         if cached is not None:
             return cached
-        target_model = MODELS_REGISTRY.get(rel.target_model_name)
-        if not target_model:
-            return []
+        target_model = _resolve_target_model(
+            rel.target_model_name, rel_name, self.__class__
+        )
         return _execute_pivot_query(self, rel, target_model)
 
     return property(get_many_to_many)
@@ -112,9 +132,7 @@ def build_morph_to_property(rel, rel_name: str) -> property:
         target_type = getattr(self, fk_type_name, None)
         if not target_id or not target_type:
             return None
-        target_model = MODELS_REGISTRY.get(target_type)
-        if not target_model:
-            return None
+        target_model = _resolve_target_model(target_type, rel_name, self.__class__)
         with _shard_context(self):
             return target_model.find(id=target_id)
 
@@ -126,9 +144,9 @@ def build_morph_many_property(rel, rel_name: str) -> property:
         cached = _cached_relation(self, rel_name)
         if cached is not None:
             return cached
-        target_model = MODELS_REGISTRY.get(rel.target_model_name)
-        if not target_model:
-            return []
+        target_model = _resolve_target_model(
+            rel.target_model_name, rel_name, self.__class__
+        )
         fk_id = f"{rel.foreign_key}_id"
         fk_type = f"{rel.foreign_key}_type"
         with _shard_context(self):
@@ -154,10 +172,13 @@ _RELATION_BUILDERS: dict[str, Callable[..., property]] = {
 }
 
 
-def build_relation_property(rel, rel_name: str) -> property | None:
+def build_relation_property(rel, rel_name: str) -> property:
     builder = _RELATION_BUILDERS.get(rel.type)
     if builder is None:
-        return None
+        raise ValueError(
+            f"Unknown relation type '{rel.type}' for relation '{rel_name}'. "
+            f"Supported types: {', '.join(_RELATION_BUILDERS.keys())}"
+        )
     return builder(rel, rel_name)
 
 

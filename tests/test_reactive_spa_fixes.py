@@ -472,7 +472,7 @@ def test_optional_chaining_expression_validation():
     content = (
         "<html><head></head><body>"
         '<div asok-state="{ response: null }">'
-        '  <p asok-text="response?.message || \'Succès\'"></p>'
+        "  <p asok-text=\"response?.message || 'Succès'\"></p>"
         "</div>"
         "</body></html>"
     )
@@ -812,3 +812,34 @@ def test_directives_coexistence_with_islands():
     app = Asok()
     directives_js = app.get_asset("asok_directives.js")
     assert "isInsideUnhydratedIsland" in directives_js
+
+
+def test_directive_with_store_and_fetch():
+    """Test that expressions using $store and $fetch compile and validate properly."""
+    app = Asok()
+    app.directives_enabled = True
+
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": None,
+    }
+    request = Request(environ)
+
+    content = (
+        "<html><head></head><body>"
+        '<section asok-state="{ products: [], loading: false }"'
+        ' asok-init="loading = true; $fetch($store.API_URL + \'/api/products\').then(r => r.json()).then(data => { products = data; loading = false; })">'
+        "<h1>Products</h1>"
+        "</section>"
+        "</body></html>"
+    )
+
+    result = app._inject_assets(content, request, "testnonce123")
+    assert "asok-init-ref=" in result
+    assert "$store.API_URL" in result
+    assert "$fetch" in result
+
+    directives_min = app.get_asset("asok_directives.min.js")
+    assert "$store" in directives_min
+

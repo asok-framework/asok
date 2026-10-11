@@ -6,6 +6,34 @@ This roadmap documents the evolution of the Asok web framework — detailing bot
 
 ## Current Stable Release
 
+### v0.8.0 (Released: September 2026)
+
+**Status**: ✅ Stable
+
+Major scaling, concurrency and observability release introducing multi-server WebSocket clustering, SQLite WAL concurrency optimizations, and built-in Prometheus telemetry:
+
+**Real-Time Cluster Scaling & Streaming:**
+- **Distributed WebSocket Adapters (`asok.ws.adapter`)**: Native in-memory and Redis Pub/Sub broadcast adapters enabling multi-server horizontal WebSocket clustering.
+- **Database Concurrency Optimizations**: Multi-process SQLite WAL connection coordination with automatic retry backoff on database locks (`PRAGMA busy_timeout = 5000;`, `PRAGMA synchronous = NORMAL;`).
+- **Streaming SSR Enhancements**: HTTP 103 Early Hints (`send_early_hints`) and preload link generation for asset acceleration.
+
+**Enterprise SaaS & Multi-Tenancy:**
+- **SaaS Multi-Tenancy Routing (`asok.orm.tenant`, `asok.middleware.TenantMiddleware`)**: Database-per-tenant and schema-level isolation with automatic query routing (`TenantRouter`), context managers (`tenant_context`), and request resolution from headers, subdomains, or query parameters.
+
+**Distributed Tracing & Observability:**
+- **W3C TraceContext & OpenTelemetry (`asok.core.tracing`, `asok.middleware.TracingMiddleware`)**: Standard distributed tracing propagating `traceparent`, `X-Trace-ID`, and `X-Span-ID` with zero external dependencies and OTel-compliant JSON exports.
+- **Built-in Prometheus Metrics**: Zero-dependency, thread-safe `/metrics` text exposition endpoint with latency tracking and active WebSocket connections gauge.
+- **Healthcheck Probes**: Health probe endpoints (`/health`, `/healthz`, `/__health`) validating database and cache connectivity.
+- **Slow Query Alerting**: Automatic configurable warning logs (`SLOW_QUERY_THRESHOLD_MS`) and query duration telemetry across SQLite, PostgreSQL, and MySQL.
+
+**Resilient Task Queue & Admin DLQ Dashboard:**
+- **Dead Letter Queue (DLQ) & Jittered Backoff**: Exponential backoff with randomized jitter avoiding thundering herds, with native DLQ storage for Redis and local task backends.
+- **Admin Queue & DLQ Dashboard (`/admin/jobs`)**: Interactive web inspection of queue depths, failed jobs, one-click retries, bulk re-enqueueing, and DLQ purging.
+
+---
+
+## Previous Releases (Implemented Features)
+
 ### v0.7.0 (Released: September 2026)
 
 **Status**: ✅ Stable
@@ -30,8 +58,6 @@ Major frontend modernization release introducing a native declarative SPA router
 - **Zero-Eval Strict CSP**: 100% compliant with strict Content Security Policies — no `'unsafe-eval'` or `'unsafe-inline'` required.
 
 ---
-
-## Previous Releases (Implemented Features)
 
 ### v0.6.0 (Released: July 2026)
 
@@ -142,23 +168,9 @@ Framework refactoring and architecture overhaul for long-term maintainability:
 
 ## Upcoming Releases
 
-### v0.8.0 - Real-Time Cluster Scaling & Streaming (Planned Q4 2026)
+### v1.0.0 - Enterprise Multi-Tenancy & Edge Integrations (Planned Q1 2027)
 
 **Status**: 📋 Planned
-
-- **Distributed WebSocket Adapters**: Redis Pub/Sub and Valkey broadcast adapters allowing multi-server horizontal WebSocket clustering.
-- **Database Concurrency Optimizations**: Multi-process SQLite WAL connection pool queue coordination with automatic retry backoff.
-- **Streaming SSR Enhancements**: HTTP/2 & HTTP/3 Early Hints (103) and chunked template streaming delivery.
-
----
-
-### v1.0.0 - Enterprise Observability & Multi-Tenancy (Planned Q1 2027)
-
-**Status**: 📋 Planned
-
-#### Monitoring & Observability
-- **Built-in OpenTelemetry & Prometheus**: Automated latency metrics collection, health check endpoints, and distributed tracing export (`/metrics`).
-- **Slow Query Alerting**: Automatic warning logs and configurable notifications for database query bottlenecks.
 
 #### Enterprise Features
 - **SaaS Multi-Tenancy**: Native tenant isolation supporting dynamic schema-level and database-level tenancy.
@@ -196,8 +208,8 @@ We want to hear from you! Help shape the future of Asok:
 | v0.5.1 | June 24, 2026 | ✅ Released | CLI Fixes & Patch Update |
 | v0.6.0 | July 2026 | ✅ Released | Asset Pipeline & Toolbar DX |
 | v0.7.0 | September 2026 | ✅ Released | Native SPA Router & Zero-JS Forms |
-| v0.8.0 | Q4 2026 | 📋 Planned | Real-Time Cluster Scaling & Streaming |
-| v1.0.0 | Q1 2027 | 📋 Planned | Enterprise Observability & Multi-Tenancy (LTS) |
+| v0.8.0 | September 2026 | ✅ Released | Real-Time Scaling & Observability |
+| v1.0.0 | Q1 2027 | 📋 Planned | Enterprise Multi-Tenancy & Edge Integrations (LTS) |
 
 **Note**: Dates are approximate and subject to change based on community priorities and development capacity.
 

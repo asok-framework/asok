@@ -87,7 +87,9 @@ def check_unique(val: Any, model_name: str, field_name: str) -> bool:
         return False
     model = MODELS_REGISTRY.get(model_name)
     if not model:
-        return True
+        raise ValueError(
+            f"Model '{model_name}' not found in registry for 'unique' validation rule"
+        )
     try:
         return not model.find(**{field_name: val})
     except (AttributeError, TypeError, ValueError):
@@ -146,8 +148,8 @@ def check_size(file: Any, limit_arg: str) -> bool:
         return False
     try:
         bytes_limit = _parse_size_limit(limit_arg)
-    except (ValueError, OverflowError):
-        return True
+    except (ValueError, OverflowError) as e:
+        raise ValueError(f"Invalid size limit '{limit_arg}' for rule 'size'") from e
     return len(getattr(file, "content", b"")) <= bytes_limit
 
 
@@ -199,6 +201,20 @@ def check_numeric(val: Any) -> bool:
         return False
     try:
         float(val_str)
+        return True
+    except (ValueError, OverflowError):
+        return False
+
+
+def check_integer(val: Any) -> bool:
+    """Check if value is an integer or string representing an integer."""
+    if val is None or val == "":
+        return True
+    val_str = str(val)
+    if len(val_str) > 50:
+        return False
+    try:
+        int(val_str)
         return True
     except (ValueError, OverflowError):
         return False

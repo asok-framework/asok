@@ -751,6 +751,7 @@ def _filter_protected_fields(model_cls: Any, arguments: dict) -> dict:
         k: v
         for k, v in arguments.items()
         if not getattr(model_fields.get(k), "protected", False)
+        and not getattr(model_fields.get(k), "hidden", False)
     }
 
 
@@ -956,11 +957,49 @@ def get_graphiql_html() -> str:
 </html>"""
 
 
+def _parse_get_variables(vars_raw: str) -> dict:
+    if not vars_raw:
+        return {}
+    try:
+        from ..utils.security import safe_json_loads
+
+        parsed = safe_json_loads(vars_raw, max_depth=50)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _execute_get_query(app: Any, request: Request, query: str) -> bytes:
+    tokens = tokenize(query)
+    if tokens and tokens[0] == "mutation":
+        request.status = "405 Method Not Allowed"
+        request.content_type = "application/json"
+        return json.dumps(
+            {"errors": [{"message": "GraphQL mutations cannot be executed via GET"}]}
+        ).encode("utf-8")
+
+    denied_error = _check_operation_denied(app, tokens)
+    if denied_error:
+        request.status = "403 Forbidden"
+        request.content_type = "application/json"
+        return json.dumps({"errors": [{"message": denied_error}]}).encode("utf-8")
+
+    variables = _parse_get_variables(request.args.get("variables", ""))
+    result = execute_graphql(app, query, variables)
+    request.content_type = "application/json"
+    return json.dumps(result).encode("utf-8")
+
+
 def _handle_graphql_get(app: Any, request: Request) -> bytes:
-    if app.config.get("DEBUG"):
+    query = request.args.get("query", "").strip()
+    if query:
+        return _execute_get_query(app, request, query)
+
+    if app.config.get("DEBUG") or app.config.get("GRAPHQL_PLAYGROUND", False):
         request.content_type = "text/html"
         return get_graphiql_html().encode("utf-8")
     request.status = "405 Method Not Allowed"
+    request.content_type = "application/json"
     return json.dumps(
         {"error": "GraphQL GET is only allowed in development mode"}
     ).encode("utf-8")
@@ -974,22 +1013,55 @@ def _is_mutation_denied(app: Any, tokens: list[str]) -> bool:
     return False
 
 
-def _handle_graphql_post(app: Any, request: Request) -> bytes:
+def _is_query_denied(app: Any, tokens: list[str]) -> bool:
+    if tokens and tokens[0] != "mutation":
+        auth_hook = app.config.get("GRAPHQL_AUTHORIZE")
+        allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES", True)
+        return not auth_hook and not allow_unauth
+    return False
+
+
+def _check_operation_denied(app: Any, tokens: list[str]) -> Optional[str]:
+    if _is_mutation_denied(app, tokens):
+        return (
+            "GraphQL mutations require authentication. Configure GRAPHQL_AUTHORIZE or "
+            "set GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS=True."
+        )
+    if _is_query_denied(app, tokens):
+        return (
+            "GraphQL queries require authentication. Configure GRAPHQL_AUTHORIZE or "
+            "set GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES=True."
+        )
+    return None
+
+
+def _parse_graphql_post_payload(body: bytes) -> Optional[tuple[str, dict]]:
     try:
-        body_data = json.loads(request.body.decode("utf-8"))
+        from ..utils.security import safe_json_loads
+
+        body_data = safe_json_loads(body.decode("utf-8"), max_depth=100)
     except Exception:
+        return None
+    query = body_data.get("query", "")
+    query_str = query if isinstance(query, str) else ""
+    variables = body_data.get("variables")
+    var_dict = variables if isinstance(variables, dict) else {}
+    return query_str, var_dict
+
+
+def _handle_graphql_post(app: Any, request: Request) -> bytes:
+    payload = _parse_graphql_post_payload(request.body)
+    if payload is None:
         request.status = "400 Bad Request"
         return json.dumps({"error": "Invalid JSON payload"}).encode("utf-8")
 
-    query = body_data.get("query", "")
-    variables = body_data.get("variables") or {}
-
+    query, variables = payload
     tokens = tokenize(query)
-    if _is_mutation_denied(app, tokens):
+    denied_error = _check_operation_denied(app, tokens)
+    if denied_error:
         request.status = "403 Forbidden"
         request.content_type = "application/json"
-        msg = "GraphQL mutations require authentication. Configure GRAPHQL_AUTHORIZE or set GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS=True."
-        return json.dumps({"errors": [{"message": msg}]}).encode("utf-8")
+        return json.dumps({"errors": [{"message": denied_error}]}).encode("utf-8")
 
     result = execute_graphql(app, query, variables)
     request.content_type = "application/json"
@@ -1018,6 +1090,20 @@ def handle_graphql_request(app: Any, request: Request) -> Optional[bytes]:
 # ── WebSockets Subscriptions ──────────────────────────
 
 
+def _is_subscribe_denied(conn: Any) -> bool:
+    app = getattr(getattr(conn, "server", None), "app", None)
+    if not app:
+        return False
+    auth_hook = app.config.get("GRAPHQL_AUTHORIZE")
+    req = getattr(conn, "request", None)
+    if auth_hook:
+        if not req:
+            return True
+        return not auth_hook(req)
+    allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES", True)
+    return not allow_unauth
+
+
 def _handle_subscribe(conn: Any, data: dict) -> None:
     sub_id = data.get("id")
     payload = data.get("payload", {})
@@ -1028,6 +1114,19 @@ def _handle_subscribe(conn: Any, data: dict) -> None:
         return
 
     try:
+        if _is_subscribe_denied(conn):
+            conn.send_json(
+                {
+                    "type": "error",
+                    "id": sub_id,
+                    "payload": [
+                        {
+                            "message": "GraphQL subscriptions require authentication. Configure GRAPHQL_AUTHORIZE or set GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES=True."
+                        }
+                    ],
+                }
+            )
+            return
         tokens = tokenize(query_str)
         max_depth = conn.server.app.config.get("GRAPHQL_MAX_DEPTH", 20)
         parser = GraphQLParser(tokens, variables, max_depth=max_depth)
@@ -1037,8 +1136,7 @@ def _handle_subscribe(conn: Any, data: dict) -> None:
         max_complexity = conn.server.app.config.get("GRAPHQL_MAX_COMPLEXITY", 100)
         check_complexity(fields, max_complexity)
 
-        if not hasattr(conn, "graphql_subscriptions"):
-            conn.graphql_subscriptions = {}
+        conn.graphql_subscriptions = getattr(conn, "graphql_subscriptions", {})
         conn.graphql_subscriptions[sub_id] = (fields, variables)
     except Exception as e:
         conn.send_json(

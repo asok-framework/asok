@@ -208,12 +208,29 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         """No longer auto-alters the user table. Relies on migrations."""
         pass
 
+    def _get_totp_encryption_key(self) -> str:
+        """Return the dedicated TOTP encryption key, or fall back to SECRET_KEY."""
+        return (
+            os.getenv("TOTP_ENCRYPTION_KEY")
+            or self.app.config.get("TOTP_ENCRYPTION_KEY")
+            or self.app.config.get("SECRET_KEY", "")
+        )
+
     def _decrypt_user_totp(self, user) -> tuple[str | None, bool]:
         encrypted_secret = getattr(user, "totp_secret", None)
         enabled = bool(getattr(user, "totp_enabled", False))
         if encrypted_secret:
-            master_key = self.app.config.get("SECRET_KEY", "")
-            return _decrypt_totp_secret(encrypted_secret, master_key), enabled
+            master_key = self._get_totp_encryption_key()
+            decrypted = _decrypt_totp_secret(encrypted_secret, master_key)
+            if decrypted is None and (
+                os.getenv("TOTP_ENCRYPTION_KEY")
+                or self.app.config.get("TOTP_ENCRYPTION_KEY")
+            ):
+                # Fallback to SECRET_KEY for existing secrets prior to key separation
+                decrypted = _decrypt_totp_secret(
+                    encrypted_secret, self.app.config.get("SECRET_KEY", "")
+                )
+            return decrypted, enabled
         return None, enabled
 
     def _get_user_2fa(self, user_id: int) -> tuple[str | None, bool]:
@@ -2005,6 +2022,9 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         trash = self._handle_global_trash_routes(request, path, method)
         if trash is not _NO_EARLY:
             return trash
+        jobs = self._handle_jobs_routes(request, path, method)
+        if jobs is not None:
+            return jobs
         return _NO_EARLY
 
     # ── Global Trash ─────────────────────────────────────────

@@ -49,6 +49,9 @@
         <div class="asok-nav-item" data-tab="request">
             Request
         </div>
+        <div class="asok-nav-item" data-tab="router">
+            Router (SPA) <span class="asok-nav-badge" id="asok-router-badge">0</span>
+        </div>
         <div class="asok-nav-item" data-tab="reactive">
             Reactive <span class="asok-nav-badge" id="asok-reactive-count">0</span>
         </div>
@@ -109,6 +112,56 @@
                 <div class="asok-section-header">Payload & Environment</div>
                 <pre class="asok-code-block">[[request_data]]</pre>
                 [[redir_info_html]]
+            </div>
+        </div>
+
+        <!-- ROUTER & SPA TAB -->
+        <div class="asok-debug-tab" id="tab-router">
+            <div class="asok-tab-inner">
+                <div class="asok-section-header">Server Route Resolution</div>
+                <div class="asok-router-server-card">
+                    <div class="asok-router-grid">
+                        <div>
+                            <div class="asok-meta-label">Matched File</div>
+                            <div class="asok-meta-value" id="asok-route-file">[[endpoint]]</div>
+                        </div>
+                        <div>
+                            <div class="asok-meta-label">Page ID</div>
+                            <div class="asok-meta-value" id="asok-route-page-id">[[page_id]]</div>
+                        </div>
+                        <div>
+                            <div class="asok-meta-label">Render Mode</div>
+                            <div class="asok-meta-value"><span class="asok-method-badge">[[render_type]]</span></div>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px">
+                        <div class="asok-meta-label">Server Resolution Context</div>
+                        <pre class="asok-code-block">[[routing_data]]</pre>
+                    </div>
+                </div>
+
+                <div class="asok-section-header" style="margin-top:18px">Client Router (SPA Active State)</div>
+                <div id="asok-client-router-info" class="asok-router-server-card"></div>
+
+                <div class="asok-section-header" style="margin-top:18px">SPA View Containers &amp; Registered Routes</div>
+                <div id="asok-spa-routes-list"></div>
+
+                <div class="asok-section-header" style="margin-top:18px; display:flex; justify-content:space-between; align-items:center;">
+                    <span>Live SPA Navigation &amp; Block Swaps</span>
+                    <button type="button" id="asok-clear-spa-log" class="asok-btn-clear">Clear History</button>
+                </div>
+                <table class="asok-data-table" style="margin-top:8px">
+                    <thead>
+                        <tr>
+                            <th style="width:75px">Time</th>
+                            <th style="width:110px">Event</th>
+                            <th>Target / URL</th>
+                            <th style="width:140px">Block / Mode</th>
+                            <th style="width:85px; text-align:right; padding-right:16px">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="asok-spa-log-rows"></tbody>
+                </table>
             </div>
         </div>
 

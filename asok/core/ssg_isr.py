@@ -67,7 +67,11 @@ class SSGISRMixin:
         config_locales = self.config.get("LOCALES")
         if not config_locales:
             return []
-        locales_list = [config_locales] if isinstance(config_locales, str) else list(config_locales)
+        locales_list = (
+            [config_locales]
+            if isinstance(config_locales, str)
+            else list(config_locales)
+        )
         return locales_list if len(locales_list) > 1 else []
 
     def _get_active_locales(self) -> list[str]:

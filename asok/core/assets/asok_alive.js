@@ -84,20 +84,38 @@ window.asokWS = function (path) {
         }
       }
 
+      if (d.op === "error") {
+        console.error('[Asok Live Error]', d.message || d);
+        return;
+      }
+
       if (d.op === "render") {
+        if (!d.cid || typeof d.cid !== "string" || !/^[a-zA-Z0-9_-]+$/.test(d.cid)) {
+          console.warn("[Asok Security] Invalid component ID format in render:", d.cid);
+          return;
+        }
         const el = document.getElementById("asok-" + d.cid);
         if (el) {
-          if (d.registry) {
+          if (d.registry && typeof d.registry === "object") {
             let code = "";
             for (let h in d.registry) {
-              code += "window.__asok_registry[" + JSON.stringify(h) + "] = (" + d.registry[h] + ");\n";
+              if (
+                Object.prototype.hasOwnProperty.call(d.registry, h) &&
+                h !== "__proto__" &&
+                h !== "constructor" &&
+                h !== "prototype"
+              ) {
+                code += "window.__asok_registry[" + JSON.stringify(h) + "] = (" + d.registry[h] + ");\n";
+              }
             }
-            const s = document.createElement("script");
-            const nonce = window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
-            if (nonce) s.nonce = nonce;
-            s.textContent = code;
-            document.head.appendChild(s);
-            s.remove();
+            if (code) {
+              const s = document.createElement("script");
+              const nonce = window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+              if (nonce) s.nonce = nonce;
+              s.textContent = code;
+              document.head.appendChild(s);
+              s.remove();
+            }
           }
           if (d.invalidate_cache) {
             if (window.__asokClearCache) window.__asokClearCache();
@@ -212,6 +230,10 @@ window.asokWS = function (path) {
     }
     el.__asokIniting = true;
     const cid = el.id.replace("asok-", "");
+    if (!cid || !/^[a-zA-Z0-9_-]+$/.test(cid)) {
+      delete el.__asokIniting;
+      return;
+    }
     const base = el.dataset.asokComponent;
     const st = el.dataset.asokState;
 
@@ -348,6 +370,39 @@ window.asokWS = function (path) {
   window.Asok = window.Asok || {};
   window.Asok._wsInit = initWS;
   window.Asok._wsSub = initSub;
+
+  window.Asok.leaveComponent = function (cid) {
+    if (cid && ws && ws.readyState === 1) {
+      send({ op: "leave", cid: cid });
+    }
+  };
+
+  const prevInit = window.Asok.init;
+  window.Asok.init = function (root) {
+    if (prevInit) prevInit(root);
+    const container = root || document;
+    if (container.dataset && container.dataset.asokComponent) {
+      delete container.__asokWsReady;
+      delete container.__asokIniting;
+      setupComponentIsland(container);
+    }
+    if (container.querySelectorAll) {
+      container.querySelectorAll("[data-asok-component]").forEach(function (el) {
+        delete el.__asokWsReady;
+        delete el.__asokIniting;
+        setupComponentIsland(el);
+      });
+      container.querySelectorAll("[data-subscribe]").forEach(initSub);
+    }
+  };
+
+  window.addEventListener("asok:routechange", function () {
+    document.querySelectorAll("[data-asok-component]").forEach(function (el) {
+      if (!el.__asokWsReady && !el.__asokIniting) {
+        setupComponentIsland(el);
+      }
+    });
+  });
 
   document.addEventListener("asok:success", function (e) {
     if (e.detail && e.detail.target) {

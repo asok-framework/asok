@@ -188,12 +188,31 @@ def test_build_assets_minification(tmp_path):
     os.makedirs(partials_js_dir, exist_ok=True)
     os.makedirs(pages_dir, exist_ok=True)
 
-    # Copy esbuild binary from the project root
+    # Copy esbuild binary from the project root if present, or attempt download/system binary
     real_root = os.path.dirname(os.path.dirname(__file__))
     real_bin = os.path.join(real_root, ".asok", "bin")
     dest_bin = os.path.join(root_dir, ".asok", "bin")
     if os.path.exists(real_bin):
         shutil.copytree(real_bin, dest_bin)
+    else:
+        system_esbuild = shutil.which("esbuild")
+        if system_esbuild:
+            os.makedirs(dest_bin, exist_ok=True)
+            shutil.copy2(system_esbuild, os.path.join(dest_bin, "esbuild"))
+        else:
+            try:
+                from asok.cli.tools import assets_install
+
+                assets_install(root_dir, verbose=False)
+            except Exception:
+                pass
+
+    from asok.cli.tools import _esbuild_binary_path
+
+    if not os.path.isfile(_esbuild_binary_path(root_dir)):
+        import pytest
+
+        pytest.skip("esbuild not installed and could not be downloaded")
 
     # Create unminified global static asset
     with open(os.path.join(partials_js_dir, "base.js"), "w", encoding="utf-8") as f:

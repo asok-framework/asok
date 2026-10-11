@@ -248,7 +248,11 @@ class DeveloperToolbar:
 
     def _build_template_data(self) -> tuple[str, str]:
         tpl_list = getattr(self.request, "_asok_templates", [])
+        if not isinstance(tpl_list, list):
+            tpl_list = []
         blk_list = getattr(self.request, "_asok_blocks", [])
+        if not isinstance(blk_list, list):
+            blk_list = []
         tpl_info = {
             "Main Template": tpl_list[0] if tpl_list else "None",
             "All Templates": tpl_list,
@@ -256,6 +260,49 @@ class DeveloperToolbar:
             "WS Components": [],
         }
         return json.dumps(tpl_info), json.dumps(tpl_info, indent=2)
+
+    def _get_request_render_type(self) -> str:
+        x_block = self.request.headers.get("x-block")
+        if x_block:
+            return f"SPA Block ({x_block})"
+        if self.request.headers.get("x-prefetch"):
+            return "Prefetch Request"
+        return "Full Page Load"
+
+    def _get_endpoint_display(self) -> str:
+        page_file = getattr(self.request, "_current_page_file", None)
+        if not page_file:
+            return "Dynamic / In-Memory"
+        if os.path.isabs(page_file):
+            try:
+                return os.path.relpath(page_file, self.app.root_dir)
+            except Exception:
+                return str(page_file)
+        return str(page_file)
+
+    def _get_middleware_names(self) -> list[str]:
+        return [
+            getattr(m, "__name__", str(m)) for m in getattr(self.app, "middlewares", [])
+        ]
+
+    def _extract_server_route_info(self) -> dict[str, Any]:
+        return {
+            "Endpoint / File": self._get_endpoint_display(),
+            "Page ID": getattr(self.request, "page_id", "index"),
+            "Route Params": dict(getattr(self.request, "params", {})),
+            "Query Params": dict(self.request.args),
+            "Render Type": self._get_request_render_type(),
+            "Scoped Assets": dict(getattr(self.request, "scoped_assets", {})),
+            "Middlewares": self._get_middleware_names(),
+            "Database": str(self.config.get("DATABASE", "None")),
+            "Debug Mode": bool(self.config.get("DEBUG", False)),
+        }
+
+    def _build_routing_data(self) -> tuple[str, str, dict[str, Any]]:
+        info = self._extract_server_route_info()
+        raw_json = json.dumps(info)
+        pretty_json = json.dumps(info, indent=2)
+        return raw_json, pretty_json, info
 
     def _get_redir_stats(self) -> Optional[dict]:
         try:
@@ -292,6 +339,9 @@ class DeveloperToolbar:
         tpl_json, tpl_raw_data = self._build_template_data()
         tpl_data = _html.escape(tpl_raw_data)
 
+        routing_json, routing_raw_data, routing_info = self._build_routing_data()
+        routing_data = _html.escape(routing_raw_data)
+
         css = self._read_file("static", "toolbar.css")
         js = self._read_file("static", "toolbar.js")
         template = self._read_file("templates", "toolbar.html")
@@ -299,8 +349,8 @@ class DeveloperToolbar:
         content = template.replace("[[css]]", css).replace("[[js]]", js)
 
         replacements = {
-            "[[nonce]]": nonce,
-            "[[version]]": self.config.get("VERSION", self.app.version),
+            "[[nonce]]": str(nonce or ""),
+            "[[version]]": str(self.config.get("VERSION", self.app.version) or ""),
             "[[sql_count]]": str(total_count),
             "[[sql_rows]]": sql_rows,
             "[[session_data]]": session_data,
@@ -310,6 +360,15 @@ class DeveloperToolbar:
             "[[path]]": _html.escape(self.request.path),
             "[[tpl_data]]": tpl_data,
             "[[tpl_json]]": tpl_json,
+            "[[routing_data]]": routing_data,
+            "[[routing_json]]": routing_json,
+            "[[page_id]]": _html.escape(str(routing_info.get("Page ID", "index"))),
+            "[[endpoint]]": _html.escape(
+                str(routing_info.get("Endpoint / File", "Dynamic"))
+            ),
+            "[[render_type]]": _html.escape(
+                str(routing_info.get("Render Type", "Full Page Load"))
+            ),
             "[[redir_info_html]]": redir_info_html,
         }
         for placeholder, value in replacements.items():

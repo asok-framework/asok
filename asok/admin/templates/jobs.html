@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% from "macros.html" import icon %}
+{% block title %}{{ t('Background Jobs & DLQ') }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ t('Background Jobs & DLQ') }}</h1>
+    <p class="page-subtitle">
+      {{ t('Monitor task queue health, pending jobs, and manage dead lettered tasks.') }}
+    </p>
+  </div>
+  <div class="page-actions">
+    {% if counts.dlq > 0 %}
+    <form method="post" action="{{ admin_prefix }}/jobs/retry-all" style="display:inline" data-block="#page-body"
+      data-push-url data-confirm="{{ t('Requeue all failed jobs for execution?') }}">
+      {{ request.csrf_input() }}
+      <button type="submit" class="btn btn-primary btn-sm">
+        {{ icon('refresh-cw', 14) }} <span style="margin-left:4px">{{ t('Retry All') }}</span>
+      </button>
+    </form>
+    <form method="post" action="{{ admin_prefix }}/jobs/purge" style="display:inline; margin-left:6px"
+      data-block="#page-body" data-push-url
+      data-confirm="{{ t('Permanently clear all failed jobs from Dead Letter Queue?') }}">
+      {{ request.csrf_input() }}
+      <button type="submit" class="btn btn-ghost btn-sm text-danger">
+        {{ icon('trash', 14) }} <span style="margin-left:4px">{{ t('Purge DLQ') }}</span>
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{# Queue Metric Cards #}
+<div class="stats-grid"
+  style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:16px; margin-bottom:24px;">
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('High Priority') }}</span>
+    <span class="stat-value">{{ counts.high }}</span>
+  </div>
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Default Queue') }}</span>
+    <span class="stat-value">{{ counts.default }}</span>
+  </div>
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Low Priority') }}</span>
+    <span class="stat-value">{{ counts.low }}</span>
+  </div>
+  <div class="card stat-card">
+    <span class="stat-label">{{ t('Delayed Tasks') }}</span>
+    <span class="stat-value">{{ counts.delayed }}</span>
+  </div>
+  <div class="card stat-card"
+    {% if counts.dlq > 0 %}style="border-color: rgba(220, 38, 38, 0.4); background: var(--danger-pale);"{% endif %}>
+    <span class="stat-label" {% if counts.dlq > 0 %}style="color: var(--danger-fg);"{% endif %}>{{ t('Dead Letter Queue') }}</span>
+    <span class="stat-value" {% if counts.dlq > 0 %}style="color: var(--danger);"{% endif %}>
+      {{ counts.dlq }}
+    </span>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <div class="card-header-row">
+    <h3 class="card-section-title" style="margin:0; font-size:0.95rem;">
+      {{ icon('alert-triangle', 16) }} {{ t('Failed Tasks (Dead Letter Queue)') }}
+    </h3>
+    <span class="muted" style="font-size:0.85rem;">{{ jobs|length }} {{ t('items listed') }}</span>
+  </div>
+
+  {% if jobs %}
+  <div class="table-wrap" style="box-shadow:none; border:none; border-radius:0;">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('Job / Function') }}</th>
+          <th>{{ t('Queue') }}</th>
+          <th>{{ t('Retries') }}</th>
+          <th>{{ t('Failed at') }}</th>
+          <th>{{ t('Error Message') }}</th>
+          <th style="width:160px; text-align:right"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td>
+            <div style="font-weight:600; font-family:var(--font-mono); font-size:0.9rem;">
+              {{ j.module | e }}.{{ j.function | e }}
+            </div>
+            <div class="muted" style="font-size:0.75rem; font-family:var(--font-mono); margin-top:2px;">
+              #{{ j.id | e }}
+            </div>
+          </td>
+          <td>
+            <span class="badge badge-ghost">{{ j.queue or 'default' }}</span>
+          </td>
+          <td>
+            <span class="muted">{{ j.retry_count or 0 }} / {{ j.retries or 0 }}</span>
+          </td>
+          <td class="muted" style="font-size:0.85rem; white-space:nowrap">
+            {{ j.failed_at_fmt }}
+          </td>
+          <td>
+            <div
+              style="font-size:0.82rem; color:var(--danger); max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+              title="{{ j.error | e }}">
+              {{ (j.error or t('Execution failed')) | e }}
+            </div>
+          </td>
+          <td style="text-align:right; white-space:nowrap">
+            <form method="post" action="{{ admin_prefix }}/jobs/retry/{{ j.id }}" style="display:inline"
+              data-block="#page-body" data-push-url>
+              {{ request.csrf_input() }}
+              <button type="submit" class="btn btn-sm btn-ghost" title="{{ t('Retry Job') }}">
+                {{ icon('refresh-cw', 13) }} <span style="margin-left:3px">{{ t('Retry') }}</span>
+              </button>
+            </form>
+            <form method="post" action="{{ admin_prefix }}/jobs/delete/{{ j.id }}"
+              style="display:inline; margin-left:4px" data-block="#page-body" data-push-url
+              data-confirm="{{ t('Delete this failed job from DLQ?') }}">
+              {{ request.csrf_input() }}
+              <button type="submit" class="btn btn-sm btn-ghost text-danger" title="{{ t('Delete Job') }}">
+                {{ icon('trash', 13) }}
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:64px 20px;">
+    <div style="color:var(--success); margin-bottom:14px; display:inline-flex; align-items:center; justify-content:center;">
+      {{ icon('check-circle', 48) }}
+    </div>
+    <p class="empty-title" style="margin-bottom:6px;">{{ t('No failed jobs') }}</p>
+    <p class="muted" style="margin:0 auto; font-size:0.9rem; max-width:480px;">
+      {{ t('The Dead Letter Queue is currently empty. All background workers are healthy.') }}
+    </p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

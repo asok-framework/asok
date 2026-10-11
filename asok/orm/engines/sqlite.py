@@ -89,6 +89,8 @@ class SQLiteEngine(BaseEngine):
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
 
         # Register Vector functions
         conn.create_function("cosine_similarity", 2, _asok_cosine_similarity)
@@ -114,17 +116,44 @@ class SQLiteEngine(BaseEngine):
         if hasattr(self._local, "conn"):
             delattr(self._local, "conn")
 
+    def _commit_with_retry(self, conn: Any) -> None:
+        import time
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                else:
+                    raise
+
     def _autocommit_if_needed(self, conn: Any) -> None:
         txn_level = getattr(self._local, "txn_level", 0)
         if txn_level == 0 and conn.in_transaction:
-            conn.commit()
+            self._commit_with_retry(conn)
+
+    def _execute_query(self, conn: Any, sql: str, query_args: Any) -> Any:
+        import time
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return conn.execute(sql, query_args)
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                else:
+                    raise
 
     def execute(
         self, sql: str, args: List[Any] | Tuple[Any, ...] | None = None
     ) -> List[Dict[str, Any]] | int:
         conn = self.get_connection()
         query_args = args if args is not None else ()
-        cursor = conn.execute(sql, query_args)
+        cursor = self._execute_query(conn, sql, query_args)
         if cursor.description:
             return [dict(row) for row in cursor.fetchall()]
         # Auto-commit DML statements when not inside an explicit transaction,

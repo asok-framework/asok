@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform as _p
+import shutil
 import subprocess
 import tarfile
 import urllib.request
@@ -243,10 +244,10 @@ class User(Model):
     email = Field.String(unique=True, nullable=False)
     password = Field.Password()
     name = Field.String()
-    is_admin = Field.Boolean(default=False)
-    totp_secret = Field.String(nullable=True, hidden=True)
-    totp_enabled = Field.Boolean(default=False)
-    backup_codes = Field.String(nullable=True, hidden=True)
+    is_admin = Field.Boolean(default=False, protected=True)
+    totp_secret = Field.String(nullable=True, hidden=True, protected=True)
+    totp_enabled = Field.Boolean(default=False, protected=True)
+    backup_codes = Field.String(nullable=True, hidden=True, protected=True)
     created_at = Field.CreatedAt()
 
     class Admin(ModelAdmin):
@@ -542,7 +543,13 @@ def image_optimize_all(root: str, delete_originals: bool = False) -> None:
 def _esbuild_binary_path(root: str) -> str:
     suffix = _tailwind_platform_suffix()
     name = "esbuild.exe" if suffix.endswith(".exe") else "esbuild"
-    return os.path.join(root, ".asok", "bin", name)
+    local_bin = os.path.join(root, ".asok", "bin", name)
+    if os.path.isfile(local_bin):
+        return local_bin
+    system_bin = shutil.which(name)
+    if system_bin:
+        return system_bin
+    return local_bin
 
 
 def _is_assets_installed(bin_path: str, ver_file: str) -> bool:

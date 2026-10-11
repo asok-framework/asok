@@ -120,9 +120,23 @@ class MagicLink:
     def create_token(
         request: Request, email: str, expires_in: Optional[int] = None
     ) -> str:
-        """Create a signed magic link token valid for a specific duration."""
+        """Create a signed magic link token valid for a specific duration.
+
+        SECURITY / ARCHITECTURE DESIGN (Hard Fail-Secure Stop):
+        In production with multi-worker deployments, token single-use enforcement requires
+        Redis or a shared cache to prevent cross-worker replay attacks.
+        Using the in-memory cache in production deliberately raises RuntimeError without
+        automatic silent fallback. To run in single-process or non-Redis production,
+        explicitly configure `app.config['MAGIC_LINK_ALLOW_IN_MEMORY'] = True`
+        or `MAGIC_LINK_ALLOW_IN_MEMORY=1`.
+        """
+        from .cache import default_cache
+
+        app = request.environ.get("asok.app") if request else None
+        # Intentionally unhandled RuntimeError: fail-closed hard stop if cache is unshared in prod
+        MagicLink._check_production_cache_warning(default_cache, app=app)
+
         if expires_in is None:
-            app = request.environ.get("asok.app")
             expires_in = app.config.get("MAGIC_LINK_TTL", 3600) if app else 3600
 
         exp = int(time.time()) + expires_in
@@ -144,15 +158,30 @@ class MagicLink:
             return "", 0, False
 
     @staticmethod
-    def _check_production_cache_warning(default_cache: Any) -> None:
-        app = getattr(default_cache, "_app", None)
-        if default_cache.backend != "memory":
-            return
+    def _is_production_env(app: Any) -> bool:
         import os
 
-        if os.environ.get("ASOK_ENV") == "production" or (
-            app and not app.config.get("DEBUG", False)
-        ):
+        env_prod = (
+            os.environ.get("ASOK_ENV") == "production"
+            or os.environ.get("ENV") == "production"
+        )
+        app_prod = bool(app and getattr(app, "config", {}).get("ENV") == "production")
+        return env_prod or app_prod
+
+    @staticmethod
+    def _allow_in_memory_cache(app: Any) -> bool:
+        import os
+
+        app_allow = getattr(app, "config", {}).get("MAGIC_LINK_ALLOW_IN_MEMORY", False)
+        env_allow = os.environ.get("MAGIC_LINK_ALLOW_IN_MEMORY", "").lower() in (
+            "1",
+            "true",
+        )
+        return bool(app_allow or env_allow)
+
+    @staticmethod
+    def _warn_in_memory_cache(is_production: bool, app: Any) -> None:
+        if is_production or (app and not app.config.get("DEBUG", False)):
             logger.warning(
                 "SECURITY WARNING: MagicLink is using in-memory cache in production. "
                 "In multi-worker deployments, token single-use enforcement requires Redis "
@@ -160,7 +189,25 @@ class MagicLink:
             )
 
     @staticmethod
-    def _mark_token_used(token: str, exp: int) -> bool:
+    def _check_production_cache_warning(
+        default_cache: Any, app: Optional[Any] = None
+    ) -> None:
+        if default_cache.backend != "memory":
+            return
+        if app is None:
+            app = getattr(default_cache, "_app", None)
+        is_production = MagicLink._is_production_env(app)
+        if is_production and not MagicLink._allow_in_memory_cache(app):
+            raise RuntimeError(
+                "SECURITY ERROR: MagicLink cannot use in-memory cache in production. "
+                "In multi-worker deployments, token single-use enforcement requires Redis "
+                "or a shared cache backend to prevent cross-worker replay attacks. "
+                "Configure CACHE_BACKEND='redis' or set MAGIC_LINK_ALLOW_IN_MEMORY=True to bypass."
+            )
+        MagicLink._warn_in_memory_cache(is_production, app)
+
+    @staticmethod
+    def _mark_token_used(token: str, exp: int, app: Optional[Any] = None) -> bool:
         """Mark a token as consumed. Returns False if it was already used.
 
         SECURITY: Single-use enforcement — an intercepted link (mail logs, URL
@@ -172,7 +219,7 @@ class MagicLink:
 
         from .cache import default_cache
 
-        MagicLink._check_production_cache_warning(default_cache)
+        MagicLink._check_production_cache_warning(default_cache, app=app)
 
         used_key = f"magic_used:{hashlib.sha256(token.encode()).hexdigest()}"
         if default_cache.has(used_key):
@@ -201,7 +248,8 @@ class MagicLink:
         if not is_valid or is_expired:
             return None
 
-        if not MagicLink._mark_token_used(token, exp):
+        app = getattr(request, "environ", {}).get("asok.app")
+        if not MagicLink._mark_token_used(token, exp, app=app):
             return None
 
         return email
@@ -213,7 +261,11 @@ class MagicLink:
         subject: str = "Login to Asok",
         template: Optional[str] = None,
     ) -> str:
-        """Generate a magic link and send it to the specified email address."""
+        """Generate a magic link and send it to the specified email address.
+
+        Raises RuntimeError if executed in production with in-memory cache without
+        MAGIC_LINK_ALLOW_IN_MEMORY=True (fail-closed security constraint).
+        """
         token = MagicLink.create_token(request, email)
         base = _resolve_magic_link_base(request)
 

@@ -42,7 +42,9 @@ def _arg_handler(check_name: str):
 
     def handler(validator, field: str, arg, messages: dict) -> None:
         if not arg:
-            return
+            raise ValueError(
+                f"Rule '{check_name}' requires an argument (e.g. '{check_name}:<value>')"
+            )
         val = validator.data.get(field, "")
         if not check_fn(val, arg):
             validator.errors[field] = validator._msg(check_name, messages, arg, field)
@@ -55,7 +57,9 @@ def _file_arg_handler(check_name: str):
 
     def handler(validator, field: str, arg, messages: dict) -> None:
         if not arg:
-            return
+            raise ValueError(
+                f"Rule '{check_name}' requires an argument (e.g. '{check_name}:<value>')"
+            )
         f = validator.files.get(field)
         if not check_fn(f, arg):
             validator.errors[field] = validator._msg(check_name, messages, arg, field)
@@ -71,14 +75,12 @@ def _handle_required(validator, field: str, arg, messages: dict) -> None:
 
 
 def _handle_unique(validator, field: str, arg, messages: dict) -> None:
-    if not arg:
-        return
-    val = validator.data.get(field)
-    try:
-        model_name, field_name = arg.split(",")
-    except ValueError:
-        return
-    if not rules_mod.check_unique(val, model_name, field_name):
+    if not arg or "," not in arg:
+        raise ValueError(
+            "Rule 'unique' requires an argument: 'unique:<model>,<column>'"
+        )
+    model_name, field_name = arg.split(",", 1)
+    if not rules_mod.check_unique(validator.data.get(field), model_name, field_name):
         validator.errors[field] = validator._msg("unique", messages, field=field)
 
 
@@ -90,12 +92,11 @@ def _handle_confirmed(validator, field: str, arg, messages: dict) -> None:
 
 
 def _handle_required_if(validator, field: str, arg, messages: dict) -> None:
-    if not arg:
-        return
-    try:
-        other, expected = arg.split(",", 1)
-    except ValueError:
-        return
+    if not arg or "," not in arg:
+        raise ValueError(
+            "Rule 'required_if' requires an argument: 'required_if:<field>,<expected>'"
+        )
+    other, expected = arg.split(",", 1)
     val = validator.data.get(field)
     other_val = validator.data.get(other, "")
     if not rules_mod.check_required_if(val, other_val, expected):
@@ -104,7 +105,9 @@ def _handle_required_if(validator, field: str, arg, messages: dict) -> None:
 
 def _handle_required_with(validator, field: str, arg, messages: dict) -> None:
     if not arg:
-        return
+        raise ValueError(
+            "Rule 'required_with' requires a target field argument: 'required_with:<field>'"
+        )
     val = validator.data.get(field)
     other_val = validator.data.get(arg)
     if not rules_mod.check_required_with(val, other_val):
@@ -112,20 +115,17 @@ def _handle_required_with(validator, field: str, arg, messages: dict) -> None:
 
 
 def _handle_between(validator, field: str, arg, messages: dict) -> None:
-    if not arg:
-        return
+    if not arg or "," not in arg:
+        raise ValueError("Rule 'between' requires two bounds: 'between:<min>,<max>'")
+    lo, hi = arg.split(",", 1)
     val = validator.data.get(field, "")
-    try:
-        lo, hi = arg.split(",")
-    except ValueError:
-        return
     if not rules_mod.check_between(val, lo, hi):
         validator.errors[field] = validator._msg("between", messages, arg, field)
 
 
 def _handle_same(validator, field: str, arg, messages: dict) -> None:
     if not arg:
-        return
+        raise ValueError("Rule 'same' requires a target field argument: 'same:<field>'")
     val = validator.data.get(field, "")
     other_val = validator.data.get(arg, "")
     if not rules_mod.check_same(val, other_val):
@@ -206,6 +206,8 @@ _HANDLERS: dict[str, Callable] = {
     "uuid": _simple_handler("uuid", default_arg=""),
     "alpha": _simple_handler("alpha", default_arg=""),
     "alpha_num": _simple_handler("alpha_num", default_arg=""),
+    "alphanumeric": _simple_handler("alpha_num", default_arg=""),
+    "integer": _simple_handler("integer", default_arg=""),
     "tel": _simple_handler("tel", default_arg=""),
     "image": _file_handler("image"),
     "password_strength": _simple_handler("password_strength", default_arg=""),

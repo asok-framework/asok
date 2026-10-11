@@ -267,3 +267,35 @@ class TestCachePageDecorator:
             res2
             == "<html><head><meta name='csrf-token' content='token_second_user'></head><body>token_second_user</body></html>"
         )
+
+    def test_cache_page_preserves_content_type(self):
+        from asok.cache import Cache, cache_page
+
+        class MockRequest:
+            def __init__(self, path):
+                self.method = "GET"
+                self.path = path
+                self.raw_query_string = ""
+                self.content_type = "text/html; charset=utf-8"
+                self.status = "200 OK"
+                self.response_headers = []
+
+        cache = Cache(backend="memory")
+
+        @cache_page(ttl=60, cache_instance=cache)
+        def api_view(request):
+            request.content_type = "application/json"
+            return '{"data": [1, 2, 3]}'
+
+        req1 = MockRequest("/api/items")
+        res1 = api_view(req1)
+        assert res1 == '{"data": [1, 2, 3]}'
+        assert req1.content_type == "application/json"
+
+        # Second request hits cache
+        req2 = MockRequest("/api/items")
+        assert req2.content_type == "text/html; charset=utf-8"
+        res2 = api_view(req2)
+        assert res2 == '{"data": [1, 2, 3]}'
+        # Crucial: content_type should be restored to application/json
+        assert req2.content_type == "application/json"

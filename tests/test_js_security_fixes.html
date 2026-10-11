@@ -103,6 +103,18 @@
             return assert(AsokSecurity.isSafeUrl(safe), 'Fragment identifier was incorrectly blocked');
         });
 
+        test('URL Validation - Block protocol-relative slashes', () => {
+            return assert(!AsokSecurity.isSafeUrl('//evil.com/phish'), 'Protocol-relative // was not blocked');
+        });
+
+        test('URL Validation - Block protocol-relative backslashes', () => {
+            return assert(!AsokSecurity.isSafeUrl('\\\\evil.com/phish'), 'Protocol-relative \\\\ was not blocked');
+        });
+
+        test('URL Validation - Block nested percent-encoded scheme', () => {
+            return assert(!AsokSecurity.isSafeUrl('%256a%2561vascript:alert(1)'), 'Double-encoded javascript: was not blocked');
+        });
+
         // ==========================================
         // Test 3: Attribute Validation
         // ==========================================
@@ -210,8 +222,8 @@
             return assert(AsokSecurity.isValidPort(8001), 'Valid port was rejected');
         });
 
-        test('Port Validation - Reject privileged port', () => {
-            return assert(!AsokSecurity.isValidPort(80), 'Privileged port was accepted');
+        test('Port Validation - Reject invalid port 0', () => {
+            return assert(!AsokSecurity.isValidPort(0), 'Port 0 was accepted');
         });
 
         test('Port Validation - Reject invalid port', () => {

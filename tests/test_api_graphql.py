@@ -157,16 +157,39 @@ def test_graphql_playground_in_dev(fresh_app):
     fresh_app.config["GRAPHQL_ENABLED"] = True
     client = TestClient(fresh_app)
 
-    # GET in production should fail
+    # GET in production without query parameter should fail
     fresh_app.config["DEBUG"] = False
     res = client.get("/graphql")
     assert res.status_code == 405
+    assert "GraphQL GET is only allowed in development mode" in res.text
+
+    # GET in production with GRAPHQL_PLAYGROUND=True should return HTML playground
+    fresh_app.config["GRAPHQL_PLAYGROUND"] = True
+    res = client.get("/graphql")
+    assert res.status_code == 200
+    assert "Asok GraphQL Explorer" in res.text
+    fresh_app.config["GRAPHQL_PLAYGROUND"] = False
 
     # GET in development should return HTML playground
     fresh_app.config["DEBUG"] = True
     res = client.get("/graphql")
     assert res.status_code == 200
     assert "Asok GraphQL Explorer" in res.text
+
+    # GET with query parameter in production should execute query
+    fresh_app.config["DEBUG"] = False
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
+    QLUser.query().create(name="Eve", email="eve@example.com")
+    res = client.get("/graphql?query=%7B%20qlusers%20%7B%20name%20%7D%20%7D")
+    assert res.status_code == 200
+    assert "Eve" in res.text
+
+    # GET with mutation in production should be blocked
+    res = client.get(
+        "/graphql?query=mutation%20%7B%20createQLUser(name%3A%20%22X%22)%20%7B%20id%20%7D%20%7D"
+    )
+    assert res.status_code == 405
+    assert "mutations cannot be executed via GET" in res.text
 
 
 def test_graphql_disabled_by_default(fresh_app):
@@ -182,6 +205,7 @@ def test_graphql_disabled_by_default(fresh_app):
 def test_graphql_queries_and_mutations(fresh_app):
     fresh_app.config["GRAPHQL_ENABLED"] = True
     fresh_app.config["GRAPHQL_MAX_COMPLEXITY"] = 1000
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
     fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS"] = True
     client = TestClient(fresh_app)
 
@@ -264,6 +288,7 @@ def test_graphql_queries_and_mutations(fresh_app):
 
 def test_graphql_query_complexity(fresh_app):
     fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
     fresh_app.config["GRAPHQL_MAX_COMPLEXITY"] = 200
     client = TestClient(fresh_app)
 
@@ -292,6 +317,7 @@ def test_graphql_query_complexity(fresh_app):
 
 
 def test_graphql_subscriptions(fresh_app):
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
     server = WebSocketServer(app=fresh_app)
     conn = MockWebsocketConn(server)
 
@@ -324,8 +350,35 @@ def test_graphql_subscriptions(fresh_app):
     assert msg["payload"]["data"]["qluserCreated"]["name"] == "Charlie"
 
 
+def test_graphql_subscriptions_rejected_by_default(fresh_app):
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = False
+    server = WebSocketServer(app=fresh_app)
+    conn = MockWebsocketConn(server)
+    server._connections["/graphql"] = {conn}
+
+    on_graphql_ws_message(conn, json.dumps({"type": "connection_init"}))
+    assert conn.sent_messages[-1]["type"] == "connection_ack"
+
+    on_graphql_ws_message(
+        conn,
+        json.dumps(
+            {
+                "type": "subscribe",
+                "id": "sub-id-unauth",
+                "payload": {"query": "subscription { qluserCreated { id name } }"},
+            }
+        ),
+    )
+
+    msg = conn.sent_messages[-1]
+    assert msg["type"] == "error"
+    assert msg["id"] == "sub-id-unauth"
+    assert "require authentication" in msg["payload"][0]["message"]
+
+
 def test_graphql_query_depth_limit(fresh_app):
     fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
     fresh_app.config["GRAPHQL_MAX_DEPTH"] = 15
     client = TestClient(fresh_app)
 
@@ -423,6 +476,7 @@ def test_graphql_authorize_ws_hook_live_connection(fresh_app):
 
 def test_graphql_disable_introspection(fresh_app):
     fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
     client = TestClient(fresh_app)
 
     # 1. By default, in DEBUG=True mode, introspection is allowed
@@ -467,3 +521,129 @@ def test_graphql_disable_introspection(fresh_app):
     res = client.post("/graphql", json_body={"query": "{ __typename }"})
     assert res.status_code == 200
     assert "errors" not in res.json
+
+
+def test_graphql_unauthenticated_query_denied_by_default(fresh_app):
+    """Ensure GraphQL read queries work by default without auth, but can be denied via config."""
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    client = TestClient(fresh_app)
+
+    # Create test model
+    QLUser.query().create(name="Alice", email="alice@example.com")
+
+    # 1. Anonymous query works by default (safe read operation)
+    res = client.post("/graphql", json_body={"query": "{ qlusers { id name } }"})
+    assert res.status_code == 200
+    assert len(res.json["data"]["qlusers"]) == 1
+
+    # 2. Named query works by default
+    res = client.post(
+        "/graphql", json_body={"query": "query GetUsers { qlusers { id } }"}
+    )
+    assert res.status_code == 200
+
+    # 3. Mutations are strictly blocked by default when unauthenticated
+    mutation_create = (
+        'mutation { createQLUser(name: "Bob", email: "bob@example.com") { id } }'
+    )
+    res = client.post("/graphql", json_body={"query": mutation_create})
+    assert res.status_code == 403
+    assert res.json["errors"][0]["message"] == (
+        "GraphQL mutations require authentication. Configure GRAPHQL_AUTHORIZE or set GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS=True."
+    )
+
+    # 4. Explicitly disallow unauthenticated queries when configured
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = False
+    res = client.post("/graphql", json_body={"query": "{ qlusers { id name } }"})
+    assert res.status_code == 403
+    assert res.json["errors"][0]["message"] == (
+        "GraphQL queries require authentication. Configure GRAPHQL_AUTHORIZE or set GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES=True."
+    )
+
+
+def test_graphql_unauthenticated_mutations_isolation(fresh_app):
+    """Ensure GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS does not leak read access."""
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = False
+    client = TestClient(fresh_app)
+
+    # Read queries must still be blocked
+    res = client.post("/graphql", json_body={"query": "{ qlusers { id } }"})
+    assert res.status_code == 403
+    assert "GraphQL queries require authentication" in res.json["errors"][0]["message"]
+
+    # Mutations are permitted
+    mutation = 'mutation { createQLUser(name: "Carol", email: "carol@example.com") { id name } }'
+    res = client.post("/graphql", json_body={"query": mutation})
+    assert res.status_code == 200
+    assert res.json["data"]["createQLUser"]["name"] == "Carol"
+
+
+def test_graphql_subscription_denied_when_request_is_none(fresh_app):
+    """Ensure subscription is denied fail-closed when GRAPHQL_AUTHORIZE is set but request is None."""
+    from unittest.mock import MagicMock
+
+    from asok.api.graphql import _is_subscribe_denied
+
+    fresh_app.config["GRAPHQL_AUTHORIZE"] = lambda req: True  # Requires auth
+
+    conn = MagicMock()
+    conn.server.app = fresh_app
+    conn.request = None  # No request object attached
+
+    # Must be denied (True) to prevent unauthenticated bypass
+    assert _is_subscribe_denied(conn) is True
+
+
+def test_graphql_mutation_filters_protected_and_hidden_fields(
+    fresh_app, tmp_path, monkeypatch
+):
+    """Test that GraphQL mutations strip both protected=True and hidden=True fields against mass assignment."""
+
+    class QLAccount(Model):
+        name = Field.String()
+        is_admin = Field.Boolean(default=False, protected=True)
+        api_key = Field.String(nullable=True, hidden=True)
+
+    db_path = str(tmp_path / "account.db")
+    QLAccount.close_connections()
+    monkeypatch.setattr(QLAccount, "_db_path", db_path)
+    QLAccount.create_table()
+
+    fresh_app.config["GRAPHQL_ENABLED"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_MUTATIONS"] = True
+    fresh_app.config["GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES"] = True
+    client = TestClient(fresh_app)
+
+    # 1. Attempt create with is_admin=true and api_key="secret"
+    mutation_create = """
+    mutation {
+      createQLAccount(name: "Eve", is_admin: true, api_key: "stolen") {
+        id
+        name
+      }
+    }
+    """
+    res = client.post("/graphql", json_body={"query": mutation_create})
+    assert res.status_code == 200
+    account = QLAccount.find(name="Eve")
+    assert account is not None
+    assert account.is_admin is False or account.is_admin == 0
+    assert account.api_key is None
+
+    # 2. Attempt update with is_admin=true and api_key="secret"
+    mutation_update = f"""
+    mutation {{
+      updateQLAccount(id: {account.id}, is_admin: true, api_key: "hacked") {{
+        id
+        name
+      }}
+    }}
+    """
+    res = client.post("/graphql", json_body={"query": mutation_update})
+    assert res.status_code == 200
+    account.refresh()
+    assert account.is_admin is False or account.is_admin == 0
+    assert account.api_key is None
+

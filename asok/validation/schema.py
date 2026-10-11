@@ -99,6 +99,8 @@ class Schema(metaclass=SchemaMeta):
 
     def _deserialize(self, data: dict[str, Any]) -> dict[str, Any]:
         """Clean and filter external data based on schema fields."""
+        if not isinstance(data, dict):
+            raise TypeError(f"Schema.load() expects a dict, got {type(data).__name__}")
         clean_data = {}
         for field_name in self._fields:
             clean_data[field_name] = data.get(field_name)

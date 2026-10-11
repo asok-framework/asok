@@ -4,7 +4,7 @@ import json
 import re
 import secrets
 from http.cookies import SimpleCookie
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 from urllib.parse import parse_qsl, unquote
 
 if TYPE_CHECKING:
@@ -41,6 +41,84 @@ def _is_safe_csrf_token(token: Optional[str]) -> bool:
 # Pre-compiled regex for multipart parsing
 _RE_NAME = re.compile(r'name="([^"]+)"')
 _RE_FILENAME = re.compile(r'filename="([^"]+)"')
+
+
+class FlashMessage(tuple):
+    """Represents a flash message as a (category, message) tuple with backward-compatible dict/attribute access."""
+
+    def __new__(cls, category: str, message: str):
+        return super().__new__(cls, (str(category or "info"), str(message or "")))
+
+    @property
+    def category(self) -> str:
+        return super().__getitem__(0)
+
+    @property
+    def message(self) -> str:
+        return super().__getitem__(1)
+
+    def __str__(self) -> str:
+        return super().__getitem__(1)
+
+    def __getitem__(self, item: Any) -> Any:
+        if item == "category" or item == 0:
+            return super().__getitem__(0)
+        if item == "message" or item == 1:
+            return super().__getitem__(1)
+        return super().__getitem__(item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "category":
+            return super().__getitem__(0)
+        if key == "message":
+            return super().__getitem__(1)
+        return default
+
+
+def _parse_flash_item(item: Any) -> tuple[str, str]:
+    if isinstance(item, dict):
+        return str(item.get("category", "info")), str(item.get("message", ""))
+    return str(item[0]), str(item[1])
+
+
+def _format_flash_messages(
+    raw: list[Any],
+    with_categories: bool,
+    allowed: Optional[set[str]],
+) -> list[Any]:
+    out: list[Any] = []
+    for x in raw:
+        c, m = _parse_flash_item(x)
+        if allowed and c not in allowed:
+            continue
+        val = FlashMessage(c, m) if with_categories else m
+        out.append(val)
+    return out
+
+
+_STANDARD_FLASH_CATEGORIES = frozenset(
+    {"info", "success", "error", "warning", "danger", "alert", "notice", "debug"}
+)
+
+
+def _resolve_flash_args(arg1: Any, arg2: Optional[Any]) -> tuple[str, str]:
+    if arg2 is None:
+        return "info", str(arg1)
+    s1, s2 = str(arg1), str(arg2)
+    if (
+        s2.lower() in _STANDARD_FLASH_CATEGORIES
+        and s1.lower() not in _STANDARD_FLASH_CATEGORIES
+    ):
+        return s2.lower(), s1
+    return s1, s2
+
+
+def _is_form_target(target: Any) -> bool:
+    from asok.forms import Form
+
+    if isinstance(target, Form):
+        return True
+    return isinstance(target, type) and issubclass(target, Form)
 
 
 class Request(
@@ -105,6 +183,7 @@ class Request(
         self.scoped_assets: dict[str, Optional[str]] = {"css": None, "js": None}
         self._nonce: Optional[str] = None
         self._body_rejected = False
+        self._json_error: Optional[Exception] = None
 
     def _init_cookies(self, cookie_header: str) -> None:
         # SECURITY: RFC 6265 cookie parsing with URL decoding
@@ -137,6 +216,15 @@ class Request(
         if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
             val = val[1:-1]
         self.cookies_dict[k.strip()] = unquote(val)
+
+    @property
+    def cookies(self) -> dict[str, str]:
+        """A dictionary of all parsed request cookies."""
+        return self.cookies_dict
+
+    def cookie(self, name: str, default: Any = None) -> Any:
+        """Get a single request cookie by name, or default if absent."""
+        return self.cookies_dict.get(name, default)
 
     def _init_csrf(self, environ: dict[str, Any]) -> None:
         self._csrf_cookie_name = "asok_csrf"
@@ -174,7 +262,9 @@ class Request(
             import logging
 
             logging.getLogger("asok.security").warning(
-                "Failed to deserialize flash messages: %s", e
+                "Failed to deserialize flash messages: %s",
+                e,
+                extra={"event": "flash_deserialize_failed", "error": str(e)},
             )
 
     def _content_length(self, environ: dict[str, Any]) -> int:
@@ -215,15 +305,36 @@ class Request(
 
     def _parse_json_body(self) -> None:
         try:
-            # SECURITY: MAX_CONTENT_LENGTH caps size; RecursionError stops deep-JSON DoS.
-            self.json_body = json.loads(self.body.decode("utf-8"))
-        except (json.JSONDecodeError, RecursionError) as e:
+            # SECURITY: MAX_CONTENT_LENGTH caps size; depth limit stops deep-JSON DoS.
+            raw_text = self.body.decode("utf-8")
+            from ..utils.security import is_safe_json_depth
+
+            if not is_safe_json_depth(raw_text, max_depth=100):
+                import logging
+
+                logging.getLogger("asok.security").warning(
+                    "Rejected deeply nested JSON payload exceeding maximum depth (possible DoS attempt)",
+                    extra={
+                        "event": "json_depth_exceeded",
+                        "path": getattr(self, "path", ""),
+                    },
+                )
+                self.json_body = None
+                return
+            self.json_body = json.loads(raw_text)
+        except (json.JSONDecodeError, RecursionError, ValueError) as e:
             if isinstance(e, RecursionError):
                 import logging
 
                 logging.getLogger("asok.security").warning(
-                    "Rejected deeply nested JSON payload (possible DoS attempt)"
+                    "Rejected deeply nested JSON payload (possible DoS attempt)",
+                    extra={
+                        "event": "json_recursion_error",
+                        "path": getattr(self, "path", ""),
+                    },
                 )
+            self.json_body = None
+            self._json_error = e
 
     def _extract_boundary(self, enc_content_type: str) -> Optional[bytes]:
         # SECURITY: RFC 2046 — boundary may be quoted.
@@ -307,16 +418,148 @@ class Request(
             return list(self.all_files)
         return [f for _, f in self._files_multi.get(name, [])]
 
-    def flash(self, category: str, message: str) -> None:
-        """Store a temporary message to be displayed on the next page rendering."""
-        self._new_flashes.append({"category": category, "message": message})
+    def flash(self, category_or_message: str, message: Optional[str] = None) -> None:
+        """Store a temporary message to be displayed on the next page rendering.
 
-    def get_flashed_messages(self) -> list[dict[str, str]]:
-        """Retrieve all flash messages (current and newly added)."""
-        messages = self.flashed_messages + self._new_flashes
+        Supports:
+            - Asok style: request.flash("success", "Saved successfully!")
+            - Flask style: request.flash("Saved successfully!", "success")
+            - Single arg: request.flash("Saved successfully!")  # default: 'info'
+        """
+        cat, msg = _resolve_flash_args(category_or_message, message)
+        self._new_flashes.append({"category": cat, "message": msg})
+
+    def get_flashed_messages(
+        self,
+        with_categories: bool = True,
+        category_filter: Optional[Iterable[str]] = None,
+    ) -> list[Any]:
+        """Retrieve all flash messages.
+
+        Supports Flask-style tuple unpacking:
+            {% for category, message in get_flashed_messages() %}
+                <div class="alert alert-{{ category }}">{{ message }}</div>
+            {% endfor %}
+
+        As well as direct property access (backward-compatible):
+            {% for f in get_flashed_messages() %}{{ f.message }}{% endfor %}
+
+        And plain string list when with_categories=False:
+            {% for message in get_flashed_messages(with_categories=False) %}
+        """
         if self._new_flashes:
             self._new_flashes_consumed = True
-        return messages
+
+        allowed = set(category_filter) if category_filter else None
+        return _format_flash_messages(
+            self.flashed_messages + self._new_flashes,
+            with_categories,
+            allowed,
+        )
+
+    def old(self, name: str, default: Any = "") -> Any:
+        """Retrieve a submitted or session-flashed form value for repopulating HTML inputs."""
+        if self.form and name in self.form:
+            return self.form.get(name, default)
+        session_old = (
+            self.session.get("_old_input", {}) if hasattr(self, "session") else {}
+        )
+        return session_old.get(name, default)
+
+    @property
+    def errors(self) -> dict[str, str]:
+        """Retrieve active validation errors."""
+        cache = getattr(self, "_cached_errors", None)
+        if cache is not None:
+            return cache
+        return self.session.get("_errors", {}) if hasattr(self, "session") else {}
+
+    def error(self, name: str) -> str:
+        """Retrieve the validation error message for a specific field."""
+        return self.errors.get(name, "")
+
+    def _validate_form_target(self, target: Any, csrf: bool, raise_error: bool) -> Any:
+        from asok.forms import Form
+
+        if isinstance(target, type) and issubclass(target, Form):
+            form = target(self)
+            form.validate(csrf=csrf, raise_error=raise_error)
+            return form
+        target.bind(self)
+        target.validate(csrf=csrf, raise_error=raise_error)
+        return target
+
+    @property
+    def is_json(self) -> bool:
+        """Check if incoming request has a JSON Content-Type."""
+        ct = self.environ.get("CONTENT_TYPE", "")
+        return "application/json" in ct
+
+    def _resolve_json_payload(self) -> dict[str, Any]:
+        if getattr(self, "_json_error", None) is not None:
+            from asok.exceptions import ValidationError
+
+            raise ValidationError(
+                f"Malformed JSON in request body: {self._json_error}",
+                errors={"_json": [f"Malformed JSON: {self._json_error}"]},
+            )
+        json_data = self.get_json()
+        if json_data is not None and not isinstance(json_data, dict):
+            from asok.exceptions import ValidationError
+
+            raise ValidationError(
+                f"Expected a JSON object (dict) in request body, got {type(json_data).__name__}",
+                errors={"_json": ["JSON payload must be an object"]},
+            )
+        return json_data if isinstance(json_data, dict) else {}
+
+    def _resolve_validation_payload(
+        self, data: Optional[dict[str, Any]]
+    ) -> dict[str, Any]:
+        if data is not None:
+            return data
+        if self.is_json:
+            return self._resolve_json_payload()
+        return self.form or {}
+
+    def _maybe_verify_csrf(self, csrf: bool) -> None:
+        if csrf and self.method in ("POST", "PUT", "PATCH"):
+            self.verify_csrf()
+
+    def _run_rule_validation(self, rules: Any, data: Any, raise_error: bool) -> Any:
+        from asok.exceptions import ValidationError
+        from asok.validation import Validator
+
+        payload = self._resolve_validation_payload(data)
+        v = Validator(payload, self.files, translate=self.__)
+        if not v.rules(rules):
+            if raise_error:
+                raise ValidationError("Validation failed", errors=v.errors)
+            return False
+        return payload
+
+    def validate(
+        self,
+        rules_or_form: Any,
+        data: Optional[dict[str, Any]] = None,
+        csrf: bool = True,
+        raise_error: bool = True,
+    ) -> Any:
+        """Validate request input against validation rules or a Form class.
+
+        Usage:
+            data = request.validate({"email": "required|email", "name": "required"})
+            # or
+            form = request.validate(ContactForm)
+        """
+        if _is_form_target(rules_or_form):
+            return self._validate_form_target(rules_or_form, csrf, raise_error)
+        if not isinstance(rules_or_form, dict):
+            raise TypeError(
+                f"request.validate() expects a dict of rules or a Form class, got {type(rules_or_form).__name__}"
+            )
+        self._maybe_verify_csrf(csrf)
+        return self._run_rule_validation(rules_or_form, data, raise_error)
 
     def rate_limit(
         self,
@@ -454,16 +697,42 @@ class Request(
             app_ref and not app_ref.config.get("DEBUG")
         )
 
+    _VALID_SAMESITE = frozenset({"Strict", "Lax", "None"})
+
+    def _resolve_session_samesite(self, app_ref: Optional[Any]) -> str:
+        raw = str(
+            app_ref.config.get("SESSION_SAMESITE", "Lax") if app_ref else "Lax"
+        ).strip()
+        raw = raw.replace("\r", "").replace("\n", "")
+        title_val = raw.capitalize()
+        return title_val if title_val in self._VALID_SAMESITE else "Lax"
+
     def _session_cookie(self, value: str, max_age: Optional[int] = None) -> str:
         """Formats the session cookie header."""
         app_ref: Optional[Any] = self.environ.get("asok.app")
-        samesite = app_ref.config.get("SESSION_SAMESITE", "Lax") if app_ref else "Lax"
+        samesite = self._resolve_session_samesite(app_ref)
         cookie = f"asok_session={value}; HttpOnly; Path=/; SameSite={samesite}"
         if max_age is not None:
             cookie += f"; Max-Age={max_age}"
-        if self._is_secure_cookie_required(app_ref):
+        if self._is_secure_cookie_required(app_ref) or samesite == "None":
             cookie += "; Secure"
         return cookie
+
+    def _format_translation(self, text: str, kwargs: dict[str, Any], key: str) -> str:
+        try:
+            return text.format(**kwargs)
+        except KeyError as e:
+            import logging
+
+            logging.getLogger("asok.i18n").warning(
+                "Missing translation placeholder %s in key '%s' for locale '%s'",
+                e,
+                key,
+                self.lang,
+            )
+        except Exception:
+            pass
+        return text
 
     def __(self, key: str, **kwargs: Any) -> str:
         """Translate a key using the current request language."""
@@ -472,12 +741,7 @@ class Request(
             return key
         lang_dict = app_ref.locales.get(self.lang, app_ref.locales.get("en", {}))
         text = lang_dict.get(key, key)
-        if kwargs:
-            try:
-                return text.format(**kwargs)
-            except Exception:
-                pass
-        return text
+        return self._format_translation(text, kwargs, key) if kwargs else text
 
     @property
     def ip(self) -> str:
@@ -615,7 +879,13 @@ class Request(
             import logging
 
             logging.getLogger("asok.security").warning(
-                "Open redirect attempt blocked: %s", next_url
+                "Open redirect attempt blocked: %s",
+                next_url,
+                extra={
+                    "event": "open_redirect_blocked",
+                    "blocked_url": next_url,
+                    "path": getattr(self, "path", ""),
+                },
             )
             return "/"
         return next_url
@@ -663,18 +933,32 @@ class Request(
     def _is_host_matched(self, allowed: str, raw_host: str, host_name: str) -> bool:
         if allowed in ("*", raw_host, host_name):
             return True
-        return bool(allowed.startswith(".") and (host_name.endswith(allowed) or host_name == allowed[1:]))
+        return bool(
+            allowed.startswith(".")
+            and (host_name.endswith(allowed) or host_name == allowed[1:])
+        )
 
-    def _check_host_against_allowed(self, raw_host: str, allowed_hosts: Any, app_ref: Any) -> str:
+    def _check_host_against_allowed(
+        self, raw_host: str, allowed_hosts: Any, app_ref: Any
+    ) -> str:
         host_name = self._strip_host_port(raw_host)
-        hosts_list = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
+        hosts_list = (
+            [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
+        )
         if any(self._is_host_matched(h, raw_host, host_name) for h in hosts_list):
             return raw_host
 
         import logging
+
         logging.getLogger("asok.security").warning(
             "Host header poisoning attempt blocked: Host %r not in ALLOWED_HOSTS %r",
-            raw_host, allowed_hosts
+            raw_host,
+            allowed_hosts,
+            extra={
+                "event": "host_poisoning_blocked",
+                "host": raw_host,
+                "allowed_hosts": str(allowed_hosts),
+            },
         )
         return self._fallback_allowed_host(app_ref, hosts_list)
 
@@ -684,6 +968,7 @@ class Request(
         if not app_url:
             return ""
         from urllib.parse import urlsplit
+
         parsed = urlsplit(app_url if "://" in app_url else f"http://{app_url}")
         return parsed.netloc or ""
 
@@ -707,7 +992,9 @@ class Request(
             import logging
 
             logging.getLogger("asok.security").warning(
-                "Malformed Host header detected: %r", raw_host
+                "Malformed Host header detected: %r",
+                raw_host,
+                extra={"event": "malformed_host_detected", "host": raw_host},
             )
             return True
         return False

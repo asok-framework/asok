@@ -238,7 +238,9 @@ def _replace_directive(app, registry: dict[str, str], match) -> str:
 
 def _replace_for_directive(app, registry, name, val, match) -> str:
     if " in " not in val:
-        return match.group(0)
+        raise ValueError(
+            f"Invalid asok-for expression '{val}'. Expected format: 'item in items' or '(item, index) in items'"
+        )
     var_part, expr_part = val.split(" in ", 1)
     _assert_safe_expression(app, name, expr_part)
     h = _expr_hash(expr_part)
@@ -247,6 +249,8 @@ def _replace_for_directive(app, registry, name, val, match) -> str:
 
 
 def _replace_expr_directive(app, registry, name, val) -> str:
+    if not val.strip():
+        raise ValueError(f"Directive '{name}' cannot have an empty expression.")
     _assert_safe_expression(app, name, val)
     h = _expr_hash(val)
     registry[h] = val
@@ -328,8 +332,18 @@ class AssetInjector:
         self.registry: dict[str, str] = {}
         self.is_block = bool(request.environ.get("HTTP_X_BLOCK"))
 
+    def _is_json_content(self) -> bool:
+        if "application/json" in getattr(self.request, "content_type", ""):
+            return True
+        stripped = self.content.strip()
+        return (stripped.startswith("{") and stripped.endswith("}")) or (
+            stripped.startswith("[") and stripped.endswith("]")
+        )
+
     def inject(self) -> str:
         """Execute the asset injection pipeline on the page content and return the result."""
+        if self._is_json_content():
+            return self.content
         self._ensure_pending_buffers()
         self._inject_anti_fouc()  # ← FIRST: prevents all FOUC before any JS loads
         self._inject_meta()
@@ -839,9 +853,7 @@ class AssetInjector:
     def _inject_copy_style_if_needed(self) -> None:
         if not any(m in self.content for m in _COPY_MARKERS):
             return
-        self.request._asok_pending_styles += (
-            f'<style nonce="{self.nonce}">.asok-copied:not([data-copied]):not([asok-copied-text]):after{{content:" \\2713";opacity:.9}}</style>'
-        )
+        self.request._asok_pending_styles += f'<style nonce="{self.nonce}">.asok-copied:not([data-copied]):not([asok-copied-text]):after{{content:" \\2713";opacity:.9}}</style>'
 
     def _inject_link_style_if_needed(self) -> None:
         if getattr(self.request, "_asok_link_style_done", False):
@@ -849,9 +861,7 @@ class AssetInjector:
         if not any(m in self.content for m in _LINK_MARKERS):
             return
         self.request._asok_link_style_done = True
-        self.request._asok_pending_styles += (
-            f'<style nonce="{self.nonce}">[asok-link],[data-asok-link],[data-link]{{cursor:pointer}}</style>'
-        )
+        self.request._asok_pending_styles += f'<style nonce="{self.nonce}">[asok-link],[data-asok-link],[data-link]{{cursor:pointer}}</style>'
 
     def _inject_directives_css(self) -> None:
         if getattr(self.request, "_asok_directives_css_done", False):

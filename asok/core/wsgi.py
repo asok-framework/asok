@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import traceback
@@ -14,6 +15,8 @@ from ..context import request_context, request_var
 from ..exceptions import AbortException, RedirectException
 from ..request import Request
 from ..templates import render_template_string
+from ..templates._preprocess_helpers import search_template_path
+from ..templates.preprocessor import _RE_EXTENDS
 from ..utils.minify import minify_html
 from .smart_streamer import SmartStreamer
 
@@ -537,7 +540,11 @@ class WSGIMixin:
             return None
         from ..api import handle_docs_request
 
-        res = handle_docs_request(self, request)
+        try:
+            res = handle_docs_request(self, request)
+        except AbortException as abort:
+            err_body = self._abort_to_error_page(request, abort)
+            return self._send_api_response(request, err_body, start_response)
         if not res:
             return None
         return self._send_api_response(request, res, start_response)
@@ -681,6 +688,17 @@ class WSGIMixin:
     _PROTECTED_SPA_SEGMENTS = frozenset(
         ["api", "admin", "static", "assets", "css", "js", "images", "uploads"]
     )
+    _ROUTER_FALLBACK_MARKERS = (
+        "asok-router",
+        "data-asok-router",
+        "data-router",
+        "asok-route",
+        "data-asok-route",
+    )
+    _RE_TPL_NAME = re.compile(r"""['"]([a-zA-Z0-9_\-/\\]+\.(?:html|asok))['"]""")
+    _RE_ROUTE_PATTERN = re.compile(
+        r"""(?:asok-route|data-asok-route|data-route)\s*=\s*['"]([^'"]+)['"]"""
+    )
 
     @staticmethod
     def _has_malformed_traversal(clean_path: str) -> bool:
@@ -717,11 +735,61 @@ class WSGIMixin:
             return False
         return not WSGIMixin._is_static_asset_path(clean)
 
+    @staticmethod
+    def _seg_matches(pat_seg: str, path_seg: str) -> bool:
+        return pat_seg == path_seg or pat_seg.startswith(":")
+
+    @staticmethod
+    def _segments_match(pat_parts: list[str], path_parts: list[str]) -> bool:
+        for p, s in zip(pat_parts, path_parts):
+            if not WSGIMixin._seg_matches(p, s):
+                return False
+        return True
+
+    @staticmethod
+    def _split_clean_segments(path: str) -> list[str]:
+        return [p for p in path.strip("/").split("/") if p]
+
+    @staticmethod
+    def _match_route_pattern(pattern: str, path: str) -> bool:
+        if pattern in ("*", "/*"):
+            return False
+        pat_parts = WSGIMixin._split_clean_segments(pattern)
+        path_parts = WSGIMixin._split_clean_segments(path)
+        if len(pat_parts) != len(path_parts):
+            return False
+        return WSGIMixin._segments_match(pat_parts, path_parts)
+
+    def _collect_spa_routes(self, file_path: str) -> set[str]:
+        routes: set[str] = set()
+        curr: Optional[str] = file_path
+        visited: set[str] = set()
+        while curr:
+            visited.add(os.path.normpath(curr))
+            content = self._read_file_text_safe(curr)
+            if content:
+                for pat in WSGIMixin._RE_ROUTE_PATTERN.findall(content):
+                    routes.add(pat.strip())
+            curr = self._next_path(curr, content or "", visited)
+        return routes
+
+    def _adjust_spa_status_if_not_found(
+        self, request: Request, fallback_file: str
+    ) -> None:
+        routes = self._collect_spa_routes(fallback_file)
+        if not any(r in ("*", "/*") for r in routes):
+            return
+        clean_path = request.path.split("?")[0]
+        if not any(self._match_route_pattern(r, clean_path) for r in routes):
+            request.status_code(404)
+
     def _dispatch_spa_fallback(self, request: Request, fallback_file: str) -> Any:
         request._current_page_file = fallback_file
         self._assign_page_metadata(request, fallback_file)
         try:
-            return self._run_dispatch(request, fallback_file)
+            res = self._run_dispatch(request, fallback_file)
+            self._adjust_spa_status_if_not_found(request, fallback_file)
+            return res
         except RedirectException as redir:
             raise self._build_final_redirect(request, request.environ, redir)
         except AbortException as abort:
@@ -733,19 +801,102 @@ class WSGIMixin:
     def _existing_file_or_none(filepath: Optional[str]) -> Optional[str]:
         return filepath if (filepath and os.path.isfile(filepath)) else None
 
+    @staticmethod
+    def _is_unreadable_file(path: str) -> bool:
+        return not path or not os.path.isfile(path) or path.endswith((".pyc", ".pyo"))
+
+    @staticmethod
+    def _read_file_text_safe(path: str) -> Optional[str]:
+        if WSGIMixin._is_unreadable_file(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    @staticmethod
+    def _content_has_router(content: str) -> bool:
+        return any(m in content for m in WSGIMixin._ROUTER_FALLBACK_MARKERS)
+
+    def _find_extended_template(self, content: str) -> Optional[str]:
+        match = _RE_EXTENDS.search(content)
+        if not match:
+            return None
+        roots = list(getattr(self, "_template_search_paths", [])) + [
+            os.path.join(self.root_dir, "src", "html"),
+            self.root_dir,
+        ]
+        return search_template_path(roots, match.group(1))
+
+    def _next_extended_path(self, content: str, visited: set[str]) -> Optional[str]:
+        parent = self._find_extended_template(content)
+        if not parent:
+            return None
+        return parent if os.path.normpath(parent) not in visited else None
+
+    def _sibling_template(self, py_path: str, visited: set[str]) -> Optional[str]:
+        base, _ = os.path.splitext(py_path)
+        for ext in (".html", ".asok", ".py"):
+            cand = base + ext
+            if os.path.isfile(cand) and os.path.normpath(cand) not in visited:
+                return cand
+        return None
+
+    def _referenced_template(self, content: str, visited: set[str]) -> Optional[str]:
+        roots = list(getattr(self, "_template_search_paths", [])) + [self.root_dir]
+        for match in WSGIMixin._RE_TPL_NAME.finditer(content):
+            target = search_template_path(roots, match.group(1))
+            if target and os.path.normpath(target) not in visited:
+                return target
+        return None
+
+    def _next_py_target(
+        self, curr: str, content: str, visited: set[str]
+    ) -> Optional[str]:
+        sibling = self._sibling_template(curr, visited)
+        return sibling or self._referenced_template(content, visited)
+
+    def _next_path(self, curr: str, content: str, visited: set[str]) -> Optional[str]:
+        if curr.endswith((".py", ".pyc", ".pyo")):
+            return self._next_py_target(curr, content, visited)
+        return self._next_extended_path(content, visited)
+
+    def _step_router_search(
+        self, curr: str, visited: set[str]
+    ) -> tuple[bool, Optional[str]]:
+        visited.add(os.path.normpath(curr))
+        content = self._read_file_text_safe(curr)
+        if content and self._content_has_router(content):
+            return True, None
+        return False, self._next_path(curr, content or "", visited)
+
+    def _template_uses_router(self, file_path: str) -> bool:
+        curr: Optional[str] = file_path
+        visited: set[str] = set()
+        while curr:
+            has_router, curr = self._step_router_search(curr, visited)
+            if has_router:
+                return True
+        return False
+
     def _resolve_string_fallback(self, cfg: str, request: Request) -> Optional[str]:
         parts = [p for p in cfg.strip().lstrip("/").split("/") if p]
         file_path, _ = self._resolve_route(parts, request=request)
         return self._existing_file_or_none(file_path)
 
+    def _resolve_root_fallback(self, request: Request) -> Optional[str]:
+        file_root, _ = self._resolve_route([], request=request)
+        resolved_root = self._existing_file_or_none(file_root)
+        if not resolved_root:
+            return None
+        return resolved_root if self._template_uses_router(resolved_root) else None
+
     def _resolve_spa_fallback_file(self, request: Request) -> Optional[str]:
         cfg = self.config.get("ENABLE_SPA_FALLBACK")
         if isinstance(cfg, str) and cfg.strip():
-            fallback = self._resolve_string_fallback(cfg, request)
-            if fallback:
-                return fallback
-        file_root, _ = self._resolve_route([], request=request)
-        return self._existing_file_or_none(file_root)
+            return self._resolve_string_fallback(cfg, request)
+        return self._resolve_root_fallback(request)
 
     def _not_found_response(self, request: Request) -> Any:
         if self._is_spa_fallback_request(self.config, request.method, request.path):
@@ -969,12 +1120,14 @@ class WSGIMixin:
 
     def _dispatch_template(self, req: Request, page_file: str) -> Any:
         content_raw = self._read_template(page_file)
-        tpl_ctx = {
-            "request": req,
-            "__": req.__,
-            "static": req.static,
-            "get_flashed_messages": req.get_flashed_messages,
-        }
+        tpl_ctx = req._template_context(
+            {
+                "request": req,
+                "__": req.__,
+                "static": req.static,
+                "get_flashed_messages": req.get_flashed_messages,
+            }
+        )
         return render_template_string(
             content_raw, tpl_ctx, root_dir=self._tpl_root, template_name=page_file
         )
@@ -1199,6 +1352,21 @@ class WSGIMixin:
         body = self._inject_assets(body, request, getattr(request, "nonce", ""))
         raise _FinalResponseException(body, 500)
 
+    @staticmethod
+    def _apply_response_headers(request: Request, headers: Any) -> None:
+        if headers:
+            for k, v in headers.items():
+                request.response_headers.append((k, str(v)))
+
+    def _unwrap_response_object(self, request: Request, content_str: Any) -> Any:
+        if not (hasattr(content_str, "status_code") and hasattr(content_str, "body")):
+            return content_str
+        request.status_code(content_str.status_code)
+        if getattr(content_str, "content_type", None):
+            request.content_type = content_str.content_type
+        self._apply_response_headers(request, getattr(content_str, "headers", None))
+        return content_str.body
+
     def _finalize_response(
         self,
         request: Request,
@@ -1207,6 +1375,8 @@ class WSGIMixin:
         is_head: bool,
         start_response: Callable,
     ) -> list[bytes]:
+        content_str = self._unwrap_response_object(request, content_str)
+
         if "asok.stream_file" in environ:
             return self._finalize_stream_file(request, environ, is_head, start_response)
         if "asok.binary_response" in environ:
@@ -1236,6 +1406,7 @@ class WSGIMixin:
         headers += environ.get("asok.extra_headers", [])
         headers += self._cookie_headers(request, environ)
         headers += self._security_headers(request=request)
+        self._maybe_add_vary_cookie(request, environ, headers)
         start_response(request.status, headers)
         if is_head:
             return [b""]
@@ -1266,6 +1437,7 @@ class WSGIMixin:
         headers += environ.get("asok.extra_headers", [])
         headers += self._cookie_headers(request, environ)
         headers.append(("Content-Length", str(len(output))))
+        self._maybe_add_vary_cookie(request, environ, headers)
         start_response(request.status, headers)
         return [b""] if is_head else [output]
 
@@ -1284,6 +1456,7 @@ class WSGIMixin:
 
         self._expose_csrf_token_if_needed(headers, request, origin, cors_origins)
         self._append_cors_headers(headers, environ)
+        self._maybe_add_vary_cookie(request, environ, headers)
         return headers
 
     def _expose_csrf_token_if_needed(
@@ -1376,7 +1549,7 @@ class WSGIMixin:
     ) -> Any:
         if self._gzip_accepted(environ):
             headers.append(("Content-Encoding", "gzip"))
-            headers.append(("Vary", "Accept-Encoding"))
+            self._add_vary_header(headers, "Accept-Encoding")
         block_header = environ.get("HTTP_X_BLOCK")
         if block_header:
             headers.append(("X-Asok-Blocks", block_header))
@@ -1389,8 +1562,20 @@ class WSGIMixin:
             return False
         return "gzip" in environ.get("HTTP_ACCEPT_ENCODING", "").lower()
 
-    def _maybe_inject_and_minify(self, request: Request, content_str: Any) -> Any:
+    @staticmethod
+    def _is_json_payload(content_str: Any) -> bool:
+        s = str(content_str).strip()
+        return (s.startswith("{") and s.endswith("}")) or (
+            s.startswith("[") and s.endswith("]")
+        )
+
+    def _should_inject_assets(self, request: Request, content_str: Any) -> bool:
         if "text/html" not in request.content_type:
+            return False
+        return not self._is_json_payload(content_str)
+
+    def _maybe_inject_and_minify(self, request: Request, content_str: Any) -> Any:
+        if not self._should_inject_assets(request, content_str):
             return content_str
         content_str = self._inject_assets(
             content_str, request, getattr(request, "nonce", None)
@@ -1419,7 +1604,7 @@ class WSGIMixin:
         with gzip_mod.GzipFile(fileobj=buf, mode="wb") as f:
             f.write(output)
         headers.append(("Content-Encoding", "gzip"))
-        headers.append(("Vary", "Accept-Encoding"))
+        self._add_vary_header(headers, "Accept-Encoding")
         return buf.getvalue()
 
     def _apply_asok_blocks_headers(
@@ -1511,22 +1696,60 @@ class WSGIMixin:
             return True
         return path in cls._NOISE_PATHS or path.startswith("/.well-known/")
 
+    def _record_request_metrics(
+        self, request: Request, duration: float, status_holder: list[str]
+    ) -> None:
+        try:
+            from .metrics import default_metrics
+
+            status_str = status_holder[0] if status_holder else "200 OK"
+            status_code = status_str.split()[0]
+            default_metrics.record_http_request(
+                request.method, status_code, request.path, duration
+            )
+        except Exception:
+            pass
+
     def _handle_request_lifecycle(
         self, request: Request, environ: dict[str, Any], start_response: Callable
     ) -> list[bytes]:
+        import time
+
         from .signals import request_started
+
+        start_time = time.time()
+        status_holder = ["200 OK"]
+
+        def tracking_start_response(
+            status: str, headers: list[tuple[str, str]], exc_info: Any = None
+        ) -> Any:
+            status_holder[0] = status
+            if exc_info:
+                return start_response(status, headers, exc_info)
+            return start_response(status, headers)
 
         request_started.send(self, request=request)
         self._init_request_nonce(request)
         is_head = self._normalize_head(request)
-        if getattr(request, "_body_rejected", False):
-            start_response("413 Payload Too Large", [("Content-Type", "text/plain")])
-            return [b"Request body too large"]
-        res = self._run_specialized_handlers(request, environ, start_response)
-        if res is not None:
-            return res
-        _ = request.session
-        return self._dispatch_and_finalize(request, environ, is_head, start_response)
+        try:
+            if getattr(request, "_body_rejected", False):
+                tracking_start_response(
+                    "413 Payload Too Large", [("Content-Type", "text/plain")]
+                )
+                return [b"Request body too large"]
+            res = self._run_specialized_handlers(
+                request, environ, tracking_start_response
+            )
+            if res is not None:
+                return res
+            _ = request.session
+            return self._dispatch_and_finalize(
+                request, environ, is_head, tracking_start_response
+            )
+        finally:
+            self._record_request_metrics(
+                request, time.time() - start_time, status_holder
+            )
 
     def _init_request_nonce(self, request: Request) -> None:
         # SECURITY: 128 bits of entropy (CSP Level 3 minimum), base64url ~22 chars.
@@ -1546,6 +1769,7 @@ class WSGIMixin:
             lambda: self._handle_lang_switch(request, environ, start_response),
             lambda: self._handle_options_request(request, environ, start_response),
             lambda: self._handle_health_check(request, start_response),
+            lambda: self._handle_metrics(request, start_response),
         ):
             res = early()
             if res is not None:
@@ -1644,18 +1868,57 @@ class WSGIMixin:
         )
         return [b""]
 
-    @staticmethod
     def _handle_health_check(
-        request: Request, start_response: Callable
+        self, request: Request, start_response: Callable
     ) -> Optional[list[bytes]]:
-        if request.path != "/__health":
+        if request.path.rstrip("/") not in ("/health", "/healthz", "/__health"):
             return None
-        body = b'{"status":"ok"}'
+        if not self.config.get("HEALTHCHECK_ENABLED", True):
+            return None
+        from .metrics import check_health
+
+        report, status_code = check_health(self)
+        status_str = "200 OK" if status_code == 200 else "503 Service Unavailable"
+        body = json.dumps(report).encode("utf-8")
+        start_response(
+            status_str,
+            [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Content-Length", str(len(body))),
+                ("Cache-Control", "no-cache, no-store, must-revalidate"),
+            ],
+        )
+        return [body]
+
+    def _handle_metrics(
+        self, request: Request, start_response: Callable
+    ) -> Optional[list[bytes]]:
+        metrics_path = self.config.get("METRICS_PATH", "/metrics")
+        if request.path != metrics_path:
+            return None
+        if not self.config.get("METRICS_ENABLED", True):
+            return None
+        metrics_token = self.config.get("METRICS_TOKEN")
+        if metrics_token:
+            auth = request.environ.get("HTTP_AUTHORIZATION", "")
+            if auth != f"Bearer {metrics_token}":
+                start_response(
+                    "401 Unauthorized",
+                    [
+                        ("Content-Type", "text/plain"),
+                        ("WWW-Authenticate", 'Bearer realm="metrics"'),
+                    ],
+                )
+                return [b"Unauthorized"]
+        from .metrics import default_metrics
+
+        body = default_metrics.export_prometheus().encode("utf-8")
         start_response(
             "200 OK",
             [
-                ("Content-Type", "application/json"),
+                ("Content-Type", "text/plain; version=0.0.4; charset=utf-8"),
                 ("Content-Length", str(len(body))),
+                ("Cache-Control", "no-cache, no-store, must-revalidate"),
             ],
         )
         return [body]

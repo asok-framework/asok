@@ -82,6 +82,14 @@
     return (window.Asok && window.Asok.csrfToken) ? window.Asok.csrfToken : '';
   }
 
+  function isSameOrigin(targetUrl) {
+    try {
+      return new URL(targetUrl, window.location.href).origin === window.location.origin;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Find the target element by selector or block comment markers
   function findTargetElement(selector) {
     if (!selector) return null;
@@ -404,7 +412,11 @@
     }
 
     const cleanBlockHeader = (blockName || '').split(',').map(b => b.trim().replace(/^#/, '')).join(',');
-    const headers = Object.assign({ 'X-Block': cleanBlockHeader, 'X-CSRF-Token': getCsrfToken() }, options.headers || {});
+    const csrfToken = (url && typeof url === 'string' && !isSameOrigin(url)) ? '' : getCsrfToken();
+    const headers = Object.assign({ 'X-Block': cleanBlockHeader }, options.headers || {});
+    if (csrfToken && !Object.keys(headers).some(h => h.toLowerCase() === 'x-csrf-token')) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
     options.headers = headers;
     options.credentials = 'same-origin';
 
@@ -423,11 +435,26 @@
 
         const redirectUrl = res.headers.get('X-Asok-Redirect');
         if (redirectUrl) {
-          if (window.AsokSecurity && window.AsokSecurity.isSafeUrl) {
-            if (!window.AsokSecurity.isSafeUrl(redirectUrl)) {
-              console.error('[Asok] Blocked unsafe redirect URL:', redirectUrl);
-              return Promise.reject('unsafe_redirect');
+          const _isSafeRedirect = function (u) {
+            if (!u || typeof u !== 'string') return false;
+            if (window.AsokSecurity && window.AsokSecurity.isSafeUrl && !window.AsokSecurity.isSafeUrl(u)) {
+              return false;
             }
+            var clean = u.replace(/[\x00-\x1F\x7F]/g, '').trim();
+            try { clean = decodeURIComponent(clean); } catch (_) {}
+            if (
+              clean.startsWith('//') ||
+              clean.startsWith('\\\\') ||
+              clean.startsWith('/\\') ||
+              clean.startsWith('\\/')
+            ) {
+              return false;
+            }
+            return isSameOrigin(u);
+          };
+          if (!_isSafeRedirect(redirectUrl)) {
+            console.error('[Asok] Blocked unsafe redirect URL:', redirectUrl);
+            return Promise.reject('unsafe_redirect');
           }
           window.location.href = redirectUrl;
           return Promise.reject('redirected');

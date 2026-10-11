@@ -26,7 +26,7 @@ from .filters import TEMPLATE_FILTERS
 from .loop import _Loop
 from .preprocessor import _RE_TOKENS, _macro_cache, _macro_mtimes
 from .safestring import _escape
-from .sandbox import _get, _resolve_name
+from .sandbox import _get, _is_strict_variables, _resolve_name
 from .tests import TEMPLATE_TESTS
 
 # Caches
@@ -228,13 +228,19 @@ def _compile_and_run(
     if run_fn is None:
         run_fn = _build_compiled_callable(template_string, is_debug, template_name)
         _compiled_cache[cache_key] = run_fn
+    get_fn: Any = (
+        (lambda obj, key: _get(obj, key, strict=True))
+        if _is_strict_variables(context)
+        else _get
+    )
     gen = run_fn(
-        context, TEMPLATE_FILTERS, TEMPLATE_TESTS, _get, _resolve_name, is_debug
+        context, TEMPLATE_FILTERS, TEMPLATE_TESTS, get_fn, _resolve_name, is_debug
     )
 
     def _generator_wrapper() -> Any:
         try:
-            yield from gen
+            if gen is not None:
+                yield from gen
         except Exception as e:
             import sys
 

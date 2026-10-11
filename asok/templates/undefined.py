@@ -18,12 +18,19 @@ class Undefined:
         self._name = name
         self._strict = strict
 
+    def _raise_strict(self) -> None:
+        from asok.exceptions import TemplateError
+
+        name_str = f" '{self._name}'" if self._name else ""
+        if "." in self._name:
+            raise TemplateError(
+                f"Undefined attribute or key{name_str} in template context"
+            )
+        raise TemplateError(f"Undefined variable{name_str} in template context")
+
     def __str__(self) -> str:
         if self._strict:
-            from asok.exceptions import TemplateError
-
-            name_str = f" '{self._name}'" if self._name else ""
-            raise TemplateError(f"Undefined variable{name_str} in template context")
+            self._raise_strict()
         return ""
 
     def __repr__(self) -> str:
@@ -38,9 +45,13 @@ class Undefined:
         return False
 
     def __len__(self) -> int:
+        if self._strict:
+            self._raise_strict()
         return 0
 
     def __iter__(self):
+        if self._strict:
+            self._raise_strict()
         return iter(())
 
     def __getattr__(self, item: str) -> Any:
@@ -54,4 +65,6 @@ class Undefined:
         return Undefined(child_name, strict=self._strict)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self._strict:
+            self._raise_strict()
         return self

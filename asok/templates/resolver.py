@@ -435,8 +435,7 @@ def _resolve_expr(
 
         resolved_value = _resolve_dotted(value_expr, locals_set, _debug)
 
-        # Use conditional expression to avoid lambda that would be transformed
-        test_call = f"(_get(__tests, '{test_name}')({resolved_value}) if '{test_name}' in __tests else False)"
+        test_call = f"__tests['{test_name}']({resolved_value})"
 
         if negated:
             return f"(not {test_call})"

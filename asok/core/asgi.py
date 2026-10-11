@@ -188,6 +188,7 @@ class ASGIMixin:
             headers += self._security_headers(
                 request=request, nonce=getattr(request, "nonce", None)
             )
+            self._maybe_add_vary_cookie(request, environ, headers)
         headers.append(("Content-Length", str(len(body_bytes))))
 
         asgi_headers = [
@@ -377,10 +378,21 @@ class ASGIMixin:
                 status_headers[0] = status
                 status_headers[1] = headers
 
-            if request.path == "/__health":
-                await self._send_error_response(
-                    200, b'{"status":"ok"}', send, content_type=b"application/json"
-                )
+            if request.path.rstrip("/") in ("/health", "/healthz", "/__health"):
+                if self.config.get("HEALTHCHECK_ENABLED", True):
+                    from .metrics import check_health
+
+                    report, status_code = check_health(self)
+                    import json as _json
+
+                    body = _json.dumps(report).encode("utf-8")
+                    await self._send_error_response(
+                        status_code, body, send, content_type=b"application/json"
+                    )
+                else:
+                    await self._send_error_response(
+                        200, b'{"status":"ok"}', send, content_type=b"application/json"
+                    )
                 return
 
             await self._run_asgi_request_flow(

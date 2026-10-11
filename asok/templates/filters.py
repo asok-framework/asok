@@ -239,40 +239,52 @@ def _markdown_filter(v: Any) -> SafeString:
     return SafeString(_markdown_to_html_str(str(v)))
 
 
-TEMPLATE_FILTERS = {
-    "string": lambda v: str(v) if v is not None else "",
-    "upper": lambda v: str(v).upper(),
-    "lower": lambda v: str(v).lower(),
-    "capitalize": lambda v: str(v).capitalize(),
-    "title": lambda v: str(v).title(),
-    "truncate": _truncate_filter,
-    "replace": _replace_filter,
-    "join": lambda v, sep=", ": sep.join(str(i) for i in v),
-    "default": lambda v, d="": (
-        d if isinstance(v, Undefined) or v is None or v == "" else v
-    ),
-    "striptags": lambda v: _RE_STRIPTAGS.sub("", str(v)),
-    "length": lambda v: len(v),
-    "date": lambda v, f="%d/%m/%Y": _date_filter(v, f),
-    "epoch": lambda v, f="%d/%m/%Y %H:%M": _epoch_filter(v, f),
-    "pluralize": _pluralize_filter,
-    "safe": lambda v: SafeString(str(v)) if v is not None else SafeString(""),
-    "escape": lambda v: _html.escape(str(v)) if v is not None else "",
-    "e": lambda v: _html.escape(str(v)) if v is not None else "",
-    "first": lambda v: v[0] if v and len(v) > 0 else None,
-    "last": lambda v: v[-1] if v and len(v) > 0 else None,
-    "selectattr": lambda v, attr, val=True: [i for i in v if _get(i, attr) == val],
-    "abs": lambda v: abs(v),
-    "tojson": lambda v, **kwargs: html_safe_json(v, **kwargs),
-    "dump": lambda v, **kwargs: html_safe_json(v, **kwargs),
-    "dictsort": lambda v: sorted(v.items()) if isinstance(v, dict) else v,
-    # Humanize filters
-    "time_ago": humanize.time_ago,
-    "filesize": humanize.file_size,
-    "intcomma": humanize.intcomma,
-    "duration": humanize.duration,
-    # Base64 decoding filter for signatures and images
-    "decode_base64": _decode_base64_filter,
-    "display": _display_filter,
-    "markdown": _markdown_filter,
-}
+class _FiltersDict(dict):
+    def __missing__(self, key: str):
+        from asok.exceptions import TemplateError
+
+        available = ", ".join(sorted(self.keys()))
+        raise TemplateError(
+            f"Unknown template filter '{key}'. Available filters: {available}"
+        )
+
+
+TEMPLATE_FILTERS = _FiltersDict(
+    {
+        "string": lambda v: str(v) if v is not None else "",
+        "upper": lambda v: str(v).upper(),
+        "lower": lambda v: str(v).lower(),
+        "capitalize": lambda v: str(v).capitalize(),
+        "title": lambda v: str(v).title(),
+        "truncate": _truncate_filter,
+        "replace": _replace_filter,
+        "join": lambda v, sep=", ": sep.join(str(i) for i in v),
+        "default": lambda v, d="": (
+            d if isinstance(v, Undefined) or v is None or v == "" else v
+        ),
+        "striptags": lambda v: _RE_STRIPTAGS.sub("", str(v)),
+        "length": lambda v: len(v),
+        "date": lambda v, f="%d/%m/%Y": _date_filter(v, f),
+        "epoch": lambda v, f="%d/%m/%Y %H:%M": _epoch_filter(v, f),
+        "pluralize": _pluralize_filter,
+        "safe": lambda v: SafeString(str(v)) if v is not None else SafeString(""),
+        "escape": lambda v: _html.escape(str(v)) if v is not None else "",
+        "e": lambda v: _html.escape(str(v)) if v is not None else "",
+        "first": lambda v: v[0] if v and len(v) > 0 else None,
+        "last": lambda v: v[-1] if v and len(v) > 0 else None,
+        "selectattr": lambda v, attr, val=True: [i for i in v if _get(i, attr) == val],
+        "abs": lambda v: abs(v),
+        "tojson": lambda v, **kwargs: html_safe_json(v, **kwargs),
+        "dump": lambda v, **kwargs: html_safe_json(v, **kwargs),
+        "dictsort": lambda v: sorted(v.items()) if isinstance(v, dict) else v,
+        # Humanize filters
+        "time_ago": humanize.time_ago,
+        "filesize": humanize.file_size,
+        "intcomma": humanize.intcomma,
+        "duration": humanize.duration,
+        # Base64 decoding filter for signatures and images
+        "decode_base64": _decode_base64_filter,
+        "display": _display_filter,
+        "markdown": _markdown_filter,
+    }
+)

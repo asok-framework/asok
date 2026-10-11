@@ -35,10 +35,13 @@ class BaseDatabaseRouter:
 ROUTERS: List[BaseDatabaseRouter] = []
 
 
-def register_router(router: BaseDatabaseRouter) -> None:
+def register_router(router: BaseDatabaseRouter, priority: bool = False) -> None:
     """Register a database router."""
     if router not in ROUTERS:
-        ROUTERS.append(router)
+        if priority:
+            ROUTERS.insert(0, router)
+        else:
+            ROUTERS.append(router)
 
 
 def unregister_router(router: BaseDatabaseRouter) -> None:

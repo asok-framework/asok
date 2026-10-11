@@ -521,10 +521,21 @@ class Model(metaclass=ModelMeta):
         self._shard: Optional[str] = kwargs.get("_shard")
         self.id: Optional[int] = kwargs.get("id")
         is_new = not self.id
+        if not _trust:
+            self._check_unexpected_fields(kwargs)
         for name in self._fields:
             self._assign_field(name, kwargs, _trust, is_new)
         if _trust:
             self._absorb_extra_kwargs(kwargs)
+
+    def _check_unexpected_fields(self, kwargs: dict) -> None:
+        unknown = [
+            k for k in kwargs if k not in self._fields and k not in ("id", "_shard")
+        ]
+        if unknown:
+            raise TypeError(
+                f"'{self.__class__.__name__}' got unexpected field(s): {', '.join(sorted(unknown))}"
+            )
 
     def _assign_field(
         self, name: str, kwargs: dict, _trust: bool, is_new: bool
@@ -748,25 +759,32 @@ class Model(metaclass=ModelMeta):
         """Called after a model record is successfully deleted."""
         pass
 
-    def update(self, **values: Any) -> Model:
+    def _apply_update_field(self, k: str, v: Any, _strict: bool) -> None:
+        if k in ("id", "_csrf", "csrf_token"):
+            return
+        field = self._fields.get(k)
+        if not field:
+            if _strict:
+                raise AttributeError(f"'{self.__class__.__name__}' has no field '{k}'")
+            return
+        if not field.protected:
+            setattr(self, k, v)
+
+    def update(self, _strict: bool = True, **values: Any) -> Model:
         """Set multiple attributes and save the model in one call.
 
         Security: prevents mass assignment of protected fields and id reassignment.
+        Pass `_strict=False` or use `.update_safe(**payload)` to ignore unmapped fields
+        from user forms or extra payload keys.
         """
         for k, v in values.items():
-            # SECURITY: never allow id reassignment — it would redirect save() to a
-            # different row, potentially overwriting another record.
-            if k == "id":
-                continue
-            field = self._fields.get(k)
-            # Skip unknown keys silently (not part of the schema).
-            if not field:
-                continue
-            if field.protected:
-                continue
-            setattr(self, k, v)
+            self._apply_update_field(k, v, _strict)
         self.save()
         return self
+
+    def update_safe(self, **values: Any) -> Model:
+        """Update only matching declared fields, safely ignoring extra unmapped keys."""
+        return self.update(_strict=False, **values)
 
     def increment(self, column: str, amount: int = 1) -> Model:
         """Atomically increment a numeric column in the database."""

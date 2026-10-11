@@ -78,6 +78,13 @@ class ResponseMixin:
             payload["errors"] = errors
         return json.dumps(payload)
 
+    def text(self: Any, content: str = "", status: int = 200) -> str:
+        """Return a plain text response with the given status code."""
+        if status != 200 and hasattr(self, "status_code"):
+            self.status_code(status)
+        self.content_type = "text/plain; charset=utf-8"
+        return str(content)
+
     def redirect(self: Any, url: str, safe: bool = True) -> None:
         """Abort current request and redirect to the given URL.
 

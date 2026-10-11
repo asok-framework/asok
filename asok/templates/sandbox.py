@@ -63,26 +63,28 @@ def _is_app_strict_variables(req: Any) -> bool:
     return bool(app and getattr(app, "config", {}).get("STRICT_VARIABLES"))
 
 
-def _get(obj: Any, key: Union[str, int]) -> Any:
+def _get(obj: Any, key: Union[str, int], strict: bool = False) -> Any:
     """Access an attribute or dictionary/list key, favoring attributes for strings."""
     if isinstance(obj, Undefined):
         return _get_undefined_key(obj, key)
     if isinstance(key, str):
-        return _get_str_key(obj, key)
-    return _safe_subscript(obj, key)
+        return _get_str_key(obj, key, strict=strict)
+    return _safe_subscript(obj, key, strict=strict)
 
 
 def _get_undefined_key(obj: Undefined, key: Union[str, int]) -> Any:
     return getattr(obj, str(key)) if isinstance(key, str) else obj[key]
 
 
-def _get_str_key(obj: Any, key: str) -> Any:
+def _get_str_key(obj: Any, key: str, strict: bool = False) -> Any:
     if _is_blocked_string_key(key):
         return ""
     if isinstance(obj, dict) and key in obj:
         return obj[key]
     result = _safe_getattr(obj, key)
-    return result if result is not _ATTR_MISS else _safe_subscript(obj, key)
+    return (
+        result if result is not _ATTR_MISS else _safe_subscript(obj, key, strict=strict)
+    )
 
 
 _ATTR_MISS = object()
@@ -115,11 +117,19 @@ def _safe_getattr(obj: Any, key: str) -> Any:
     return result
 
 
-def _safe_subscript(obj: Any, key: Union[str, int]) -> Any:
+def _format_missing_name(obj: Any, key: Union[str, int]) -> str:
+    if obj is None:
+        return f"None.{key}"
+    cls_name = getattr(type(obj), "__name__", "")
+    return f"{cls_name}.{key}" if cls_name else str(key)
+
+
+def _safe_subscript(obj: Any, key: Union[str, int], strict: bool = False) -> Any:
     try:
         return obj[key]
     except (KeyError, TypeError, IndexError):
-        return Undefined(str(key))
+        name = _format_missing_name(obj, key)
+        return Undefined(name, strict=strict)
 
 
 _BLOCKED_BUILTINS = frozenset(

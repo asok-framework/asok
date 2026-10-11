@@ -26,7 +26,7 @@
     <div style="padding:32px">
       <div class="qr-wrap" style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap">
         <div style="background:#fff; border:1px solid var(--border); padding:16px; border-radius:var(--r-lg); box-shadow:var(--shadow-sm)">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ uri }}"
+          <img src="{{ qr_data_uri }}"
                alt="{{ t('QR code') }}" style="display:block; width:200px; height:200px">
         </div>
         <div style="flex:1; min-width:240px">
