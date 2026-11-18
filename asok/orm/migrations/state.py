@@ -4,6 +4,31 @@ import copy
 from typing import Any, Dict, List, Optional
 
 
+def _is_dsn(value: str) -> bool:
+    return "://" in value or value.startswith("file:")
+
+
+def _dsn_to_env_var_name(dsn: str) -> Optional[str]:
+    import os
+    for key, val in os.environ.items():
+        if val == dsn:
+            return key
+    return None
+
+
+def _normalize_db_path(db_path: Optional[str]) -> Optional[str]:
+    """Replace a literal DSN with the env var name that holds it, if found.
+
+    Stores portable names (e.g. 'DATABASE_URL') instead of hardcoded DSNs so
+    migration files remain valid across environments.
+    """
+    if not db_path:
+        return None
+    if _is_dsn(db_path):
+        return _dsn_to_env_var_name(db_path) or db_path
+    return db_path
+
+
 class VirtualModelState:
     """Represents the schema structure of a Model at a specific migration version."""
 
@@ -14,12 +39,14 @@ class VirtualModelState:
         fields: Dict[str, Dict[str, Any]],
         relations: Dict[str, Dict[str, Any]] = None,
         search_fields: List[str] = None,
+        db_path: Optional[str] = None,
     ):
         self.name = name
         self.table = table
         self.fields = fields
         self.relations = relations or {}
         self.search_fields = search_fields or []
+        self.db_path = db_path  # raw _db_path value (env var name or DSN)
 
     @classmethod
     def from_model_class(cls, model_cls: Any) -> VirtualModelState:
@@ -64,6 +91,7 @@ class VirtualModelState:
             fields=fields,
             relations=relations,
             search_fields=list(getattr(model_cls, "_search_fields", [])),
+            db_path=_normalize_db_path(getattr(model_cls, "_db_path", None)),
         )
 
     def clone(self) -> VirtualModelState:
@@ -73,6 +101,7 @@ class VirtualModelState:
             fields=copy.deepcopy(self.fields),
             relations=copy.deepcopy(self.relations),
             search_fields=list(self.search_fields),
+            db_path=self.db_path,
         )
 
 

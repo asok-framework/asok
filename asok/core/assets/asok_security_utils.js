@@ -22,7 +22,7 @@
   // isSafeAttribute() (listed in dangerousAttrs), so URL-validating it here
   // would be dead code and create a misleading impression of permissiveness.
   const URL_ATTRS = new Set([
-    'href', 'src', 'srcset', 'action', 'poster', 'background',
+    'href', 'src', 'srcset', 'data', 'action', 'poster', 'background',
     'cite', 'longdesc', 'xlink:href'
   ]);
 

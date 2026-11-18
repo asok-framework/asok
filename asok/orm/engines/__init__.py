@@ -23,8 +23,17 @@ def get_engine(db_url: str | None = None) -> BaseEngine:
 
     Falls back to SQLite (``db.sqlite3``) when *db_url* is ``None`` or an
     empty string — so omitting ``DATABASE_URL`` entirely always gives SQLite.
+
+    Accepts environment variable names (e.g. ``"CONTENT_DATABASE_URL"``) and
+    resolves them automatically, mirroring the runtime ``_db_path`` behaviour.
     """
+    import os
+
     clean_url = (db_url or "").strip() or _DEFAULT_SQLITE
+    # Resolve environment variable names (e.g. "_db_path = 'CONTENT_DATABASE_URL'")
+    env_val = os.environ.get(clean_url, "").strip()
+    if env_val:
+        clean_url = env_val
 
     if clean_url not in _ENGINES_CACHE:
         _ENGINES_CACHE[clean_url] = _create_engine(clean_url)

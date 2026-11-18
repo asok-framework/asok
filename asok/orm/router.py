@@ -220,13 +220,15 @@ class DefaultRouter(BaseDatabaseRouter):
 
         # Check if the model has a custom db_path that is different from default
         primary_dsn = resolve_primary_dsn(model, shard=None)
-        default_dsn = DATABASES.get("default") or "db.sqlite3"
+        default_dsn = _get_default_dsn()
         if primary_dsn != default_dsn:
             return None
 
         if REPLICAS:
             return select_replica(REPLICAS, strategy)
-        return "default"
+        # Return the actual DSN (not the alias) so _route_via_registered_routers
+        # does not re-resolve it via the potentially stale DATABASES["default"].
+        return default_dsn
 
     def db_for_write(self, model: Type[Model], **hints: Any) -> Optional[str]:
         shard = hints.get("shard")
@@ -238,11 +240,11 @@ class DefaultRouter(BaseDatabaseRouter):
 
         # Check if the model has a custom db_path that is different from default
         primary_dsn = resolve_primary_dsn(model, shard=None)
-        default_dsn = DATABASES.get("default") or "db.sqlite3"
+        default_dsn = _get_default_dsn()
         if primary_dsn != default_dsn:
             return None
 
-        return "default"
+        return default_dsn
 
 
 # Register default router
@@ -265,6 +267,17 @@ def database_router_context(op: str | None = None, shard: str | None = None):
         _routing_state.shard = old_shard
 
 
+def _get_default_dsn() -> str:
+    """Return the default database DSN, always reading DATABASE_URL fresh from env.
+
+    Reading fresh (instead of relying on the cached DATABASES['default']) is
+    necessary because init_databases() runs at module import time, which may
+    happen before the application's .env file has been loaded by Asok.setup().
+    """
+    fresh = (os.getenv("DATABASE_URL") or "").strip()
+    return fresh or DATABASES.get("default") or "db.sqlite3"
+
+
 def _resolve_model_dsn(model_cls: Type[Model]) -> str:
     raw_path = getattr(model_cls, "_db_path", None)
     resolved_path = os.getenv(raw_path) if raw_path else None
@@ -272,7 +285,7 @@ def _resolve_model_dsn(model_cls: Type[Model]) -> str:
         resolved_path = raw_path
     if resolved_path:
         return resolved_path.strip()
-    return DATABASES.get("default") or "db.sqlite3"
+    return _get_default_dsn()
 
 
 def resolve_primary_dsn(model_cls: Type[Model], shard: str | None = None) -> str:
@@ -311,7 +324,7 @@ def _route_fallback_shard(op: str, shard: str) -> Optional[str]:
 def _route_fallback_read_replica(model_cls: Type[Model]) -> Optional[str]:
     if REPLICAS:
         primary_dsn = resolve_primary_dsn(model_cls, shard=None)
-        if primary_dsn == (DATABASES.get("default") or "db.sqlite3"):
+        if primary_dsn == _get_default_dsn():
             return select_replica(REPLICAS, get_load_balancing_strategy())
     return None
 

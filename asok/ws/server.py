@@ -36,8 +36,8 @@ logger = logging.getLogger("asok.ws")
 
 def _is_debug_env() -> bool:
     return (
-        os.environ.get("DEBUG") != "false"
-        and os.environ.get("ASOK_ENV") != "production"
+        os.environ.get("DEBUG", "").lower() in ("true", "1")
+        or os.environ.get("ASOK_ENV") == "development"
     )
 
 
@@ -410,8 +410,12 @@ class WebSocketServer:
             return [o.strip() for o in env_origins.split(",")]
         return _app_cors_origins(app)
 
+    @staticmethod
+    def _is_debug_for_app(app: Any) -> bool:
+        return bool(_is_debug_env() or (app and getattr(app, "config", {}).get("DEBUG")))
+
     def _extend_origins_with_localhost(self, app, port: int) -> None:
-        if self.allowed_origins == "*":
+        if self.allowed_origins == "*" or not self._is_debug_for_app(app):
             return
         defaults = list(self._DEFAULT_LOCAL_ORIGINS)
         local_variants = self._build_local_variants(defaults, app, port)

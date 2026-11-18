@@ -64,6 +64,7 @@ class MigrationAutodetector:
                         fields=hist_model.fields,
                         relations=hist_model.relations,
                         search_fields=hist_model.search_fields,
+                        db_path=hist_model.db_path,
                     )
                 )
 
@@ -78,6 +79,7 @@ class MigrationAutodetector:
                         fields=curr_model.fields,
                         relations=curr_model.relations,
                         search_fields=curr_model.search_fields,
+                        db_path=curr_model.db_path,
                     )
                 )
 
@@ -101,7 +103,8 @@ class MigrationAutodetector:
         added_fields = curr_fields - hist_fields
 
         self._handle_interactive_renaming(
-            model_name, removed_fields, added_fields, ops, curr_model.table
+            model_name, removed_fields, added_fields, ops, curr_model.table,
+            db_path=curr_model.db_path,
         )
 
         # Generate AddField operations
@@ -112,6 +115,7 @@ class MigrationAutodetector:
                     f_name,
                     curr_model.fields[f_name],
                     table=curr_model.table,
+                    db_path=curr_model.db_path,
                 )
             )
 
@@ -123,6 +127,7 @@ class MigrationAutodetector:
                     f_name,
                     hist_model.fields[f_name],
                     table=hist_model.table,
+                    db_path=curr_model.db_path,
                 )
             )
 
@@ -139,12 +144,15 @@ class MigrationAutodetector:
         added_fields: set[str],
         ops: List[BaseOperation],
         table: Optional[str] = None,
+        db_path: Optional[str] = None,
     ) -> None:
         if len(removed_fields) == 1 and len(added_fields) == 1:
             old_name = list(removed_fields)[0]
             new_name = list(added_fields)[0]
             if self._ask_rename_confirmation(model_name, old_name, new_name):
-                ops.append(RenameField(model_name, old_name, new_name, table=table))
+                ops.append(
+                    RenameField(model_name, old_name, new_name, table=table, db_path=db_path)
+                )
                 removed_fields.clear()
                 added_fields.clear()
 
@@ -186,7 +194,11 @@ class MigrationAutodetector:
             c_f = curr_model.fields[f_name]
             if self._field_changed(h_f, c_f):
                 ops.append(
-                    AlterField(model_name, f_name, h_f, c_f, table=curr_model.table)
+                    AlterField(
+                        model_name, f_name, h_f, c_f,
+                        table=curr_model.table,
+                        db_path=curr_model.db_path,
+                    )
                 )
 
     def _field_changed(self, f1: Dict[str, Any], f2: Dict[str, Any]) -> bool:

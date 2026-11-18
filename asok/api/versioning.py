@@ -37,15 +37,19 @@ def _get_path_version(path: str) -> Optional[str]:
     return None
 
 
+def _get_header_version(headers: Any) -> Optional[str]:
+    v = _get_header_val(headers, "x-api-version")
+    if not v:
+        return None
+    cleaned = v.strip().lower()
+    return cleaned if re.match(r"^v\d+(?:\.\d+)?$", cleaned) else None
+
+
 def get_request_version(request: Any) -> Optional[str]:
     """Resolve the requested API version from path, headers, or accept content types."""
-    v = _get_path_version(request.path)
+    v = _get_path_version(request.path) or _get_header_version(request.headers)
     if v:
         return v
-
-    v = _get_header_val(request.headers, "x-api-version")
-    if v:
-        return v.strip().lower()
 
     accept = _get_header_val(request.headers, "accept") or ""
     match = re.search(r"vnd\.asok\.v?(\d+(?:\.\d+)?)\+json", accept, re.I)

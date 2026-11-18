@@ -23,6 +23,12 @@ def _is_exempt_path(path: str) -> bool:
     return path.startswith(_EXEMPT_PREFIXES)
 
 
+def _should_skip_rate_limit(request: Any, app: Any) -> bool:
+    if not app or not app.config.get("RATE_LIMIT", True):
+        return True
+    return _is_exempt_path(request.path)
+
+
 def rate_limit_middleware(request: Any, next_handler: Callable) -> Any:
     """Apply global rate limiting per IP address.
 
@@ -36,18 +42,13 @@ def rate_limit_middleware(request: Any, next_handler: Callable) -> Any:
     Returns:
         Response from next handler or 429 Too Many Requests
     """
-    # Get app instance from request environ
+    # Skip if already enforced earlier in the request lifecycle
+    if getattr(request, "_rate_limit_checked", False):
+        return next_handler(request)
+    request._rate_limit_checked = True
+
     app = request.environ.get("asok.app")
-    if not app:
-        return next_handler(request)
-
-    # Check if rate limiting is enabled
-    rate_limit_enabled = app.config.get("RATE_LIMIT", True)
-    if not rate_limit_enabled:
-        return next_handler(request)
-
-    # Exempt certain paths from rate limiting
-    if _is_exempt_path(request.path):
+    if _should_skip_rate_limit(request, app):
         return next_handler(request)
 
     # Get rate limit from config (default: 100 req/min)

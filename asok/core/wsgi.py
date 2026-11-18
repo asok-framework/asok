@@ -348,13 +348,15 @@ class WSGIMixin:
         self, origin: str, cors_origins: Any
     ) -> list[tuple[str, str]]:
         allowed_origin, allow_cred = self._resolve_cors(origin, cors_origins)
-        origin_header = allowed_origin or "*"
         headers = [
-            ("Access-Control-Allow-Origin", origin_header),
             ("Access-Control-Allow-Methods", self._CORS_METHODS),
             ("Access-Control-Allow-Headers", self._CORS_HEADERS),
             ("Access-Control-Max-Age", "86400"),
         ]
+        if allowed_origin:
+            headers.insert(0, ("Access-Control-Allow-Origin", allowed_origin))
+            if allowed_origin != "*":
+                headers.append(("Vary", "Origin"))
         if allow_cred:
             headers.append(("Access-Control-Allow-Credentials", "true"))
         return headers
@@ -1534,6 +1536,8 @@ class WSGIMixin:
         if not allowed_origin:
             return
         headers.append(("Access-Control-Allow-Origin", allowed_origin))
+        if allowed_origin != "*":
+            headers.append(("Vary", "Origin"))
         if allow_cred:
             headers.append(("Access-Control-Allow-Credentials", "true"))
         headers.append(("Access-Control-Allow-Methods", self._CORS_METHODS))
@@ -1762,10 +1766,28 @@ class WSGIMixin:
             return True
         return False
 
+    def _handle_global_rate_limit(
+        self, request: Request, start_response: Callable
+    ) -> Optional[list[bytes]]:
+        from ..middleware import rate_limit_middleware
+
+        if rate_limit_middleware not in self.middleware_handlers:
+            return None
+        sentinel = object()
+        res = rate_limit_middleware(request, lambda _req: sentinel)
+        if res is sentinel:
+            return None
+        body = res.encode("utf-8") if isinstance(res, str) else res
+        start_response(
+            "429 Too Many Requests", [("Content-Type", "text/plain; charset=utf-8")]
+        )
+        return [body]
+
     def _run_specialized_handlers(
         self, request: Request, environ: dict[str, Any], start_response: Callable
     ) -> Optional[list[bytes]]:
         for early in (
+            lambda: self._handle_global_rate_limit(request, start_response),
             lambda: self._handle_lang_switch(request, environ, start_response),
             lambda: self._handle_options_request(request, environ, start_response),
             lambda: self._handle_health_check(request, start_response),
@@ -1823,12 +1845,14 @@ class WSGIMixin:
         """Build the redirect URL with the ``lang`` query parameter removed."""
         from urllib.parse import parse_qsl, urlencode
 
+        raw_path = (request.path or "").replace("\r", "").replace("\n", "")
+        safe_path = "/" + raw_path.lstrip("/\\")
         remaining = [
             (k, v) for k, v in parse_qsl(request.raw_query_string) if k != "lang"
         ]
         if remaining:
-            return request.path + "?" + urlencode(remaining)
-        return request.path
+            return safe_path + "?" + urlencode(remaining)
+        return safe_path
 
     @staticmethod
     def _lang_cookie_value(lang: str, scheme: str) -> str:

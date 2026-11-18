@@ -1822,10 +1822,14 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
     def _map_search_hits(items: list) -> list[dict]:
         return [{"id": o.id, "label": _display(o) or f"#{o.id}"} for o in items]
 
-    def _search_model_hits(self, slug: str, entry: dict, q: str) -> list | None:
+    def _search_model_hits(
+        self, slug: str, entry: dict, q: str, request: Any = None
+    ) -> list | None:
         """Run a search query against one registered model. Returns hit list or None."""
         model = entry["model"]
         query = model.query()
+        if request is not None:
+            self._apply_admin_scope(request, query, entry)
         placeholders = self._build_search_placeholders(
             model, entry["searchable"], q, query
         )
@@ -1846,7 +1850,7 @@ class Admin(RBACMixin, WidgetMixin, LogMixin, FormMixin, ViewsMixin):
         for slug, entry in self._registered.items():
             if not self._can(request, slug, "view") or not entry["searchable"]:
                 continue
-            hits = self._search_model_hits(slug, entry, q)
+            hits = self._search_model_hits(slug, entry, q, request=request)
             if hits is not None:
                 total += len(hits)
                 groups.append({"slug": slug, "label": entry["label"], "hits": hits})

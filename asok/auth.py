@@ -140,18 +140,22 @@ class MagicLink:
             expires_in = app.config.get("MAGIC_LINK_TTL", 3600) if app else 3600
 
         exp = int(time.time()) + expires_in
-        payload = f"{email}|{exp}"
+        payload = f"magic|{email}|{exp}"
         # We use the request helper to sign (uses SECRET_KEY)
         return request._sign(payload)
 
     @staticmethod
+    def _strip_magic_prefix(payload: Optional[str]) -> Optional[str]:
+        if not payload or "|" not in payload or payload.startswith("bearer|"):
+            return None
+        return payload[len("magic|") :] if payload.startswith("magic|") else payload
+
+    @staticmethod
     def _parse_payload(payload: Optional[str]) -> tuple[str, int, bool]:
-        if not payload or "|" not in payload:
+        clean = MagicLink._strip_magic_prefix(payload)
+        if not clean:
             return "", 0, False
-        parts = payload.split("|", 1)
-        if len(parts) != 2:
-            return "", 0, False
-        email, exp_str = parts
+        email, exp_str = clean.split("|", 1)
         try:
             return email, int(exp_str), True
         except ValueError:
@@ -222,11 +226,10 @@ class MagicLink:
         MagicLink._check_production_cache_warning(default_cache, app=app)
 
         used_key = f"magic_used:{hashlib.sha256(token.encode()).hexdigest()}"
-        if default_cache.has(used_key):
+        remaining = max(int(exp - time.time()), 1)
+        if default_cache.incr(used_key, ttl=remaining) > 1:
             logger.warning("Magic link replay attempt blocked (token already used).")
             return False
-        remaining = max(int(exp - time.time()), 1)
-        default_cache.set(used_key, True, ttl=remaining)
         return True
 
     @staticmethod
@@ -498,15 +501,22 @@ class BearerToken:
         if not expires_in:
             _warn_permanent_bearer_token(request)
         exp = int(time.time() + expires_in) if expires_in else 0
-        payload = f"{user_id}|{exp}"
+        payload = f"bearer|{user_id}|{exp}"
         return request._sign(payload)
 
     @staticmethod
+    def _strip_bearer_prefix(payload: Optional[str]) -> Optional[str]:
+        if not payload or "|" not in payload or payload.startswith("magic|"):
+            return None
+        return payload[len("bearer|") :] if payload.startswith("bearer|") else payload
+
+    @staticmethod
     def _parse_payload(payload: str) -> tuple[Optional[str], int]:
-        if not payload or "|" not in payload:
+        clean = BearerToken._strip_bearer_prefix(payload)
+        if not clean:
             return None, 0
         try:
-            user_id, exp_str = payload.split("|", 1)
+            user_id, exp_str = clean.split("|", 1)
             return user_id, int(exp_str)
         except ValueError:
             return None, 0

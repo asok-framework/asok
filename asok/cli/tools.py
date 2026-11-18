@@ -11,7 +11,7 @@ from io import BytesIO
 
 from .style import Style
 
-TAILWIND_VERSION = "4.3.3"
+TAILWIND_VERSION = "4.3.5"
 IMAGE_VERSION = "1.6.0"
 ASSETS_VERSION = "0.28.2"
 

@@ -310,16 +310,26 @@ def _sanitize_element(element: ET.Element) -> None:
     _process_element_children(element)
 
 
+def _is_unsafe_svg_anim_target(attr_lower: str, attr_value: str) -> bool:
+    if attr_lower != "attributename":
+        return False
+    target = attr_value.strip().lower()
+    return target in ("href", "xlink:href", "src") or target.startswith("on")
+
+
 def _is_dangerous_attribute_svg(attr_name_clean: str, attr_value: str) -> bool:
     if EVENT_HANDLER_PATTERN.match(attr_name_clean):
         return True
 
-    if attr_name_clean.lower() not in SAFE_SVG_ATTRIBUTES:
+    attr_lower = attr_name_clean.lower()
+    if attr_lower not in SAFE_SVG_ATTRIBUTES:
         return True
 
-    if attr_name_clean.lower() in ("href", "xlink:href"):
-        if not _is_safe_url(attr_value):
-            return True
+    if _is_unsafe_svg_anim_target(attr_lower, attr_value):
+        return True
+
+    if attr_lower in ("href", "xlink:href"):
+        return not _is_safe_url(attr_value)
 
     return False
 
@@ -362,18 +372,19 @@ def _sanitize_style_attribute(style: str) -> Optional[str]:
     Returns:
         Sanitized style string or None if unsafe
     """
-    if not style:
+    if not style or "\\" in style:
         return None
 
-    # SECURITY: Remove dangerous CSS functions
+    # SECURITY: Remove dangerous CSS functions and external URLs
     dangerous_patterns = [
-        r"javascript:",
-        r"expression\(",
+        r"javascript\s*:",
+        r"vbscript\s*:",
+        r"data\s*:",
+        r"expression\s*\(",
         r"@import",
-        r"behavior:",
-        r"-moz-binding:",
-        r"url\([^)]*javascript:",
-        r"url\([^)]*data:(?!image/)",
+        r"behavior\s*:",
+        r"-moz-binding\s*:",
+        r"url\s*\(",
     ]
 
     style_lower = style.lower()

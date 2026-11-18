@@ -41,7 +41,10 @@
       opts.headers = Object.assign({}, opts.headers || {});
     }
 
-    const token = (url && typeof url === 'string' && !isSameOrigin(url)) ? '' : getCsrfToken();
+    const urlStr = typeof url === 'string'
+      ? url
+      : (url && typeof url.url === 'string' ? url.url : (url && typeof url.href === 'string' ? url.href : ''));
+    const token = (urlStr && isSameOrigin(urlStr)) ? getCsrfToken() : '';
     if (token) {
       const hasCsrf = Object.keys(opts.headers).some(k => k.toLowerCase() === 'x-csrf-token');
       if (!hasCsrf) {
@@ -59,6 +62,10 @@
 
   const ensureFormCsrfInput = (form) => {
     if (!form || !form.tagName || form.tagName.toLowerCase() !== 'form') return;
+    const action = form.getAttribute('action');
+    if (action && !isSameOrigin(action)) return;
+    const method = (form.getAttribute('method') || 'GET').toUpperCase();
+    if (method === 'GET') return;
     const token = getCsrfToken();
     if (!token) return;
     let input = form.querySelector('input[name="csrf_token"]');
@@ -113,14 +120,19 @@
     }
   });
 
+  const assignSafeStore = (val) => {
+    if (!val || typeof val !== 'object') return;
+    Object.keys(val).forEach(k => {
+      if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+        globalStore[k] = val[k];
+      }
+    });
+  };
+
   try {
     Object.defineProperty(window.Asok, 'store', {
       get() { return globalStore; },
-      set(val) {
-        if (val && typeof val === 'object') {
-          Object.assign(globalStore, val);
-        }
-      },
+      set(val) { assignSafeStore(val); },
       configurable: true,
       enumerable: true
     });
@@ -131,11 +143,7 @@
   try {
     Object.defineProperty(window, '$store', {
       get() { return globalStore; },
-      set(val) {
-        if (val && typeof val === 'object') {
-          Object.assign(globalStore, val);
-        }
-      },
+      set(val) { assignSafeStore(val); },
       configurable: true,
       enumerable: true
     });
@@ -457,7 +465,10 @@
         const attrName = attr.name.substring(14);
 
         // SECURITY: Validate attribute name to prevent event handler injection
-        if (window.AsokSecurity && !window.AsokSecurity.isSafeAttribute(attrName)) {
+        const isAttrSafe = window.AsokSecurity
+          ? window.AsokSecurity.isSafeAttribute(attrName)
+          : (!/^on/i.test(attrName) && !['srcdoc', 'formaction'].includes(attrName.toLowerCase()));
+        if (!isAttrSafe) {
           console.warn('[Asok] Blocked unsafe attribute binding:', attrName);
           return;
         }
@@ -468,11 +479,15 @@
           const strVal = String(val);
 
           // SECURITY: Validate URLs in URL-accepting attributes
-          const urlAttrs = ['href', 'src', 'action', 'poster', 'background', 'cite', 'xlink:href'];
-          if (urlAttrs.includes(attrName.toLowerCase()) &&
-            window.AsokSecurity && !window.AsokSecurity.isSafeUrl(strVal)) {
-            console.warn('[Asok] Blocked unsafe URL in attribute:', attrName);
-            return;
+          const urlAttrs = ['href', 'src', 'srcset', 'data', 'action', 'poster', 'background', 'cite', 'longdesc', 'xlink:href'];
+          if (urlAttrs.includes(attrName.toLowerCase())) {
+            const urlOk = window.AsokSecurity
+              ? window.AsokSecurity.isSafeUrl(strVal)
+              : !/^\s*(?:javascript|vbscript|data):/i.test(strVal.replace(/[\x00-\x20]/g, ''));
+            if (!urlOk) {
+              console.warn('[Asok] Blocked unsafe URL in attribute:', attrName);
+              return;
+            }
           }
 
           el.setAttribute(attrName, strVal);
@@ -764,6 +779,9 @@
         return true;
       },
       set(target, prop, value) {
+        if (prop === '__proto__' || prop === 'constructor' || prop === 'prototype') {
+          return false;
+        }
         if (prop in target) {
           if (target[prop] === value) return true;
           target[prop] = value;
@@ -968,8 +986,10 @@
       if (!inputUrl) return '';
       let resolved = inputUrl.trim();
       if (resolved.includes('$store.')) {
-        resolved = resolved.replace(/\$store\.([a-zA-Z0-9_]+)/g, (match, key) => {
-          return (globalStore && globalStore[key] !== undefined) ? globalStore[key] : match;
+        resolved = resolved.replace(/\$store\.([a-zA-Z0-9_]+)/g, (match, key, offset) => {
+          if (!globalStore || globalStore[key] === undefined) return match;
+          const v = String(globalStore[key]);
+          return offset === 0 ? v : encodeURIComponent(v);
         });
         resolved = resolved.replace(/['"]\s*\+\s*['"]|['"]\s*\+\s*|\s*\+\s*['"]/g, '').replace(/^['"]|['"]$/g, '').trim();
       }
@@ -1112,8 +1132,10 @@
     if (!rawPostUrl) return;
     let url = rawPostUrl.trim();
     if (url.includes('$store.')) {
-      url = url.replace(/\$store\.([a-zA-Z0-9_]+)/g, (match, key) => {
-        return (globalStore && globalStore[key] !== undefined) ? globalStore[key] : match;
+      url = url.replace(/\$store\.([a-zA-Z0-9_]+)/g, (match, key, offset) => {
+        if (!globalStore || globalStore[key] === undefined) return match;
+        const v = String(globalStore[key]);
+        return offset === 0 ? v : encodeURIComponent(v);
       });
       url = url.replace(/['"]\s*\+\s*['"]|['"]\s*\+\s*|\s*\+\s*['"]/g, '').replace(/^['"]|['"]$/g, '').trim();
     }

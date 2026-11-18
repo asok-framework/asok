@@ -183,7 +183,7 @@
       scripts.forEach(function (script) {
         if (script.dataset.run || script.id === 'asok-scoped-js') return;
         const newScript = document.createElement('script');
-        const nonce = script.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+        const nonce = script.nonce || script.getAttribute('nonce') || '';
         if (nonce) newScript.nonce = nonce;
         if (script.src) newScript.src = script.src;
         newScript.textContent = script.textContent;
@@ -412,7 +412,10 @@
     }
 
     const cleanBlockHeader = (blockName || '').split(',').map(b => b.trim().replace(/^#/, '')).join(',');
-    const csrfToken = (url && typeof url === 'string' && !isSameOrigin(url)) ? '' : getCsrfToken();
+    const urlStr = typeof url === 'string'
+      ? url
+      : (url && typeof url.url === 'string' ? url.url : (url && typeof url.href === 'string' ? url.href : ''));
+    const csrfToken = (urlStr && isSameOrigin(urlStr)) ? getCsrfToken() : '';
     const headers = Object.assign({ 'X-Block': cleanBlockHeader }, options.headers || {});
     if (csrfToken && !Object.keys(headers).some(h => h.toLowerCase() === 'x-csrf-token')) {
       headers['X-CSRF-Token'] = csrfToken;
@@ -494,7 +497,9 @@
       const trimmedHtml = html.trimStart();
 
       if (trimmedHtml.startsWith('<!DOCTYPE') || trimmedHtml.startsWith('<html')) {
-        window.location.href = url;
+        if (typeof url === 'string' && isSameOrigin(url)) {
+          window.location.href = url;
+        }
         return;
       }
 
@@ -518,7 +523,7 @@
             parent = parent.parentNode;
           }
           const newScript = document.createElement('script');
-          const nonce = script.nonce || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+          const nonce = script.nonce || script.getAttribute('nonce') || '';
           if (nonce) newScript.nonce = nonce;
           if (script.src) newScript.src = script.src;
           newScript.textContent = script.textContent;
@@ -889,6 +894,7 @@
         n.__asokSseSetup = 1;
 
         const sseUrl = getAttr(n, 'sse');
+        if (!sseUrl || !isSameOrigin(sseUrl)) return;
         const eventSource = new EventSource(sseUrl);
         // Track it so cleanupSpaResources() can close it when the node is swapped out.
         n.__asokSse = eventSource;

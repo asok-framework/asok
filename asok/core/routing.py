@@ -38,7 +38,7 @@ class RoutingMixin:
         from ..api.versioning import get_request_version
 
         version = get_request_version(request)
-        if not version:
+        if not version or not re.match(r"^v\d+(?:\.\d+)?$", version):
             return parts
 
         new_parts = [parts[0], version] + parts[1:]
@@ -352,9 +352,9 @@ class RoutingMixin:
 
     @staticmethod
     def _is_unsafe_segment(seg: str) -> bool:
-        if seg in ("..", "."):
+        if not seg or seg in ("..", ".") or ".." in seg:
             return True
-        return "\x00" in seg or "\\" in seg
+        return any(ch in seg for ch in ("\x00", "\\", "/"))
 
     def _walk_route(
         self, segments: list[str], current_base: str, captured_params: dict[str, Any]

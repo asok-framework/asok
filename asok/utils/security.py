@@ -113,7 +113,7 @@ def _request_app_url(request) -> str:
 
 
 def _parse_request_host(request) -> str:
-    raw_host = request.environ.get("HTTP_HOST") or request.host
+    raw_host = getattr(request, "host", "") or request.environ.get("HTTP_HOST", "")
     try:
         parsed = urlsplit(f"//{raw_host}", scheme=request.scheme)
     except Exception:

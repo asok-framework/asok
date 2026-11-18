@@ -46,8 +46,12 @@ _DANGEROUS_ATTRS = frozenset(
 )
 
 
-_BLOCKED_TEMPLATE_KEYS = frozenset({"eval", "exec", "compile", "open", "__import__"})
-_DANGEROUS_CALL_KEYS = frozenset({"eval", "exec", "compile", "execfile"})
+_BLOCKED_TEMPLATE_KEYS = frozenset(
+    {"eval", "exec", "compile", "open", "__import__", "format", "format_map"}
+)
+_DANGEROUS_CALL_KEYS = frozenset(
+    {"eval", "exec", "compile", "execfile", "format", "format_map"}
+)
 
 
 def _is_strict_variables(context: dict[str, Any]) -> bool:

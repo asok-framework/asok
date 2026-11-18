@@ -45,30 +45,37 @@ def run_migrate(
     reset: bool = False,
 ) -> None:
     """Apply or rollback versioned database migrations."""
-    root = _find_project_root()
-    if not root:
-        Style.error("Not inside an Asok project.")
+    ctx = _setup_migration_context(database)
+    if ctx is None:
         return
-    _enter_project_root(root)
-    _load_app_and_models(root)
-    engine = _select_migration_engine(database)
-    Migrations.ensure_table(engine)
-    _log_registered_models()
-    mig_dir = os.path.join(root, "src/migrations")
-    if not os.path.isdir(mig_dir):
-        Style.error("No src/migrations/ directory found.")
-        return
+    mig_dir, engine, filter_engine = ctx
     mig_files = _scan_migration_files(mig_dir)
     applied = Migrations.get_applied(engine)
     if status:
         _print_migration_status(mig_files, applied)
         return
-    plan = _plan_migration_action(
-        applied, mig_files, rollback, reset, to_migration, steps
-    )
+    plan = _plan_migration_action(applied, mig_files, rollback, reset, to_migration, steps)
     if plan is None:
         return
-    _execute_migration_plan(plan, mig_dir, engine, fake)
+    _execute_migration_plan(plan, mig_dir, engine, fake, filter_engine=filter_engine)
+
+
+def _setup_migration_context(database: str | None):
+    root = _find_project_root()
+    if not root:
+        Style.error("Not inside an Asok project.")
+        return None
+    _enter_project_root(root)
+    _load_app_and_models(root)
+    engine = _select_migration_engine(database)
+    filter_engine = engine if database else None
+    Migrations.ensure_table(engine)
+    _log_registered_models()
+    mig_dir = os.path.join(root, "src/migrations")
+    if not os.path.isdir(mig_dir):
+        Style.error("No src/migrations/ directory found.")
+        return None
+    return mig_dir, engine, filter_engine
 
 
 def _enter_project_root(root: str) -> None:
@@ -283,15 +290,15 @@ def _plan_default_apply(applied: list[str], mig_files: list[str]):
     return ("migrate", pending)
 
 
-def _execute_migration_plan(plan, mig_dir: str, engine, fake: bool) -> None:
+def _execute_migration_plan(plan, mig_dir: str, engine, fake: bool, filter_engine=None) -> None:
     action, names = plan
     conn = MigrationConnectionWrapper(engine)
     try:
         if action == "rollback":
-            _run_rollbacks(conn, engine, mig_dir, names, fake)
+            _run_rollbacks(conn, engine, mig_dir, names, fake, filter_engine=filter_engine)
         else:
             batch = Migrations.get_last_batch_number(engine) + 1
-            _run_applies(conn, engine, mig_dir, names, batch, fake)
+            _run_applies(conn, engine, mig_dir, names, batch, fake, filter_engine=filter_engine)
     except Exception as e:
         Style.error(f"Migration operation failed: {e}")
         traceback.print_exc()
@@ -322,39 +329,138 @@ def _get_schema_editor(conn, engine):
         return BaseSchemaEditor(conn, engine)
 
 
-def _run_rollbacks(conn, engine, mig_dir: str, names: list[str], fake: bool) -> None:
+def _engine_key(engine) -> str:
+    """Return a stable identity string for an engine's underlying database."""
+    if hasattr(engine, "dsn"):
+        return engine.dsn
+    if hasattr(engine, "db_path"):
+        return str(engine.db_path)
+    return str(id(engine))
+
+
+def _resolve_op_engine_absolute(op):
+    """Return the concrete engine for an op — main engine for db_path=None."""
+    db_path = getattr(op, "db_path", None)
+    if db_path is None:
+        return Model.get_engine()
+    from ..orm.engines import get_engine
+    return get_engine(db_path)
+
+
+def _group_ops_by_engine(ops, main_engine):
+    """Group ops by target engine, preserving per-group encounter order.
+
+    Returns list of (engine, [ops]).  The passed main_engine object is
+    substituted for the main-DB group so callers can reuse the existing conn.
+    """
+    order = []
+    groups = {}
+    main_key = _engine_key(main_engine)
+    for op in ops:
+        eng = _resolve_op_engine_absolute(op)
+        key = _engine_key(eng)
+        if key not in groups:
+            groups[key] = (eng, [])
+            order.append(key)
+        groups[key][1].append(op)
+    result = []
+    for key in order:
+        eng, group_ops = groups[key]
+        result.append((main_engine if key == main_key else eng, group_ops))
+    return result
+
+
+def _apply_op_group(conn, engine, ops) -> None:
+    editor = _get_schema_editor(conn, engine)
+    txn = getattr(engine, "transaction", None)
+    context = txn() if txn else None
+    _execute_ops_forwards_with_context(context, ops, editor)
+    conn.commit()
+
+
+def _rollback_op_group(conn, engine, ops) -> None:
+    editor = _get_schema_editor(conn, engine)
+    txn = getattr(engine, "transaction", None)
+    context = txn() if txn else None
+    _execute_ops_backwards_with_context(context, ops, editor)
+    conn.commit()
+
+
+def _get_migration_secondary_engines(ops, main_engine):
+    """Return distinct non-main engines touched by these ops."""
+    main_key = _engine_key(main_engine)
+    seen = {}
+    for op in ops:
+        eng = _resolve_op_engine_absolute(op)
+        key = _engine_key(eng)
+        if key != main_key and key not in seen:
+            seen[key] = eng
+    return list(seen.values())
+
+
+def _run_rollbacks(conn, engine, mig_dir: str, names: list[str], fake: bool, filter_engine=None) -> None:
     for name in names:
-        _rollback_one(conn, engine, mig_dir, name, fake)
+        _rollback_one(conn, engine, mig_dir, name, fake, filter_engine=filter_engine)
 
 
-def _rollback_one(conn, engine, mig_dir: str, name: str, fake: bool) -> None:
-    filename = f"{name}.py"
-    filepath = os.path.join(mig_dir, filename)
+def _rollback_one(conn, engine, mig_dir: str, name: str, fake: bool, filter_engine=None) -> None:
+    filepath = os.path.join(mig_dir, f"{name}.py")
     if not os.path.exists(filepath):
-        Style.error(f"Migration file {filename} missing! Cannot rollback.")
+        Style.error(f"Migration file {name}.py missing! Cannot rollback.")
         return
     print(f"  Rolling back: {Style.BOLD}{name}{Style.RESET}...")
     mod = _load_migration_module(name, filepath)
-
     if hasattr(mod, "Migration"):
-        _rollback_declarative_migration(conn, engine, mod.Migration, fake)
+        ops = list(reversed(getattr(mod.Migration(), "operations", [])))
+        _rollback_declarative_migration(conn, engine, ops, fake, filter_engine=filter_engine)
+        _remove_secondary_tracking(ops, engine, name, fake, filter_engine)
     else:
         _rollback_functional_migration(conn, mod, name, fake)
-
     Migrations.remove(name, engine)
     Style.success(f"Rolled back {name}")
 
 
-def _rollback_declarative_migration(conn, engine, migration_cls, fake: bool) -> None:
+def _remove_secondary_tracking(ops, engine, name: str, fake: bool, filter_engine) -> None:
     if fake:
         return
-    migration = migration_cls()
-    editor = _get_schema_editor(conn, engine)
-    txn = getattr(engine, "transaction", None)
-    context = txn() if txn else None
-    ops = list(reversed(getattr(migration, "operations", [])))
-    _execute_ops_backwards_with_context(context, ops, editor)
-    conn.commit()
+    if filter_engine is not None:
+        return
+    for sec_eng in _get_migration_secondary_engines(ops, engine):
+        Migrations.remove(name, sec_eng)
+
+
+def _rollback_declarative_migration(conn, engine, ops, fake: bool, filter_engine=None) -> None:
+    if fake:
+        return
+    if filter_engine is not None:
+        _rollback_ops_for_engine(conn, engine, ops, filter_engine)
+    else:
+        _rollback_ops_from_all_engines(conn, engine, ops)
+
+
+def _rollback_ops_for_engine(conn, engine, ops, filter_engine) -> None:
+    key = _engine_key(filter_engine)
+    filtered = [op for op in ops if _engine_key(_resolve_op_engine_absolute(op)) == key]
+    _rollback_op_group(conn, engine, filtered)
+
+
+def _rollback_ops_from_all_engines(conn, engine, ops) -> None:
+    main_key = _engine_key(engine)
+    groups = _group_ops_by_engine(ops, engine)
+    groups.sort(key=lambda g: _engine_key(g[0]) != main_key)
+    for eng, group_ops in groups:
+        if eng is engine:
+            _rollback_op_group(conn, eng, group_ops)
+        else:
+            _run_secondary_conn(eng, group_ops, _rollback_op_group)
+
+
+def _run_secondary_conn(eng, group_ops, op_group_fn) -> None:
+    sec_conn = MigrationConnectionWrapper(eng)
+    try:
+        op_group_fn(sec_conn, eng, group_ops)
+    finally:
+        sec_conn.close()
 
 
 def _execute_ops_backwards_with_context(context, ops, editor) -> None:
@@ -377,38 +483,53 @@ def _rollback_functional_migration(conn, mod, name: str, fake: bool) -> None:
 
 
 def _run_applies(
-    conn, engine, mig_dir: str, names: list[str], batch: int, fake: bool
+    conn, engine, mig_dir: str, names: list[str], batch: int, fake: bool, filter_engine=None
 ) -> None:
     for name in names:
-        _apply_one(conn, engine, mig_dir, name, batch, fake)
+        _apply_one(conn, engine, mig_dir, name, batch, fake, filter_engine=filter_engine)
 
 
-def _apply_one(conn, engine, mig_dir: str, name: str, batch: int, fake: bool) -> None:
-    filename = f"{name}.py"
-    filepath = os.path.join(mig_dir, filename)
+def _apply_one(conn, engine, mig_dir: str, name: str, batch: int, fake: bool, filter_engine=None) -> None:
+    filepath = os.path.join(mig_dir, f"{name}.py")
     print(f"  Applying: {Style.BOLD}{name}{Style.RESET}...")
     mod = _load_migration_module(name, filepath)
-
     if hasattr(mod, "Migration"):
-        _apply_declarative_migration(conn, engine, mod.Migration, fake)
+        ops = getattr(mod.Migration(), "operations", [])
+        _apply_declarative_migration(conn, engine, ops, fake, filter_engine=filter_engine)
+        if not fake and filter_engine is None:
+            for sec_eng in _get_migration_secondary_engines(ops, engine):
+                Migrations.ensure_table(sec_eng)
+                Migrations.log(name, batch, sec_eng)
     else:
         _apply_functional_migration(conn, mod, name, fake)
-
     Migrations.log(name, batch, engine)
     Style.success(f"Applied {name}")
 
 
-def _apply_declarative_migration(conn, engine, migration_cls, fake: bool) -> None:
+def _apply_declarative_migration(conn, engine, ops, fake: bool, filter_engine=None) -> None:
     if fake:
         return
-    migration = migration_cls()
-    editor = _get_schema_editor(conn, engine)
-    txn = getattr(engine, "transaction", None)
-    context = txn() if txn else None
-    _execute_ops_forwards_with_context(
-        context, getattr(migration, "operations", []), editor
-    )
-    conn.commit()
+    if filter_engine is not None:
+        _apply_ops_for_engine(conn, engine, ops, filter_engine)
+    else:
+        _apply_ops_to_all_engines(conn, engine, ops)
+
+
+def _apply_ops_for_engine(conn, engine, ops, filter_engine) -> None:
+    key = _engine_key(filter_engine)
+    filtered = [op for op in ops if _engine_key(_resolve_op_engine_absolute(op)) == key]
+    _apply_op_group(conn, engine, filtered)
+
+
+def _apply_ops_to_all_engines(conn, engine, ops) -> None:
+    main_key = _engine_key(engine)
+    groups = _group_ops_by_engine(ops, engine)
+    groups.sort(key=lambda g: _engine_key(g[0]) == main_key)
+    for eng, group_ops in groups:
+        if eng is engine:
+            _apply_op_group(conn, eng, group_ops)
+        else:
+            _run_secondary_conn(eng, group_ops, _apply_op_group)
 
 
 def _execute_ops_forwards_with_context(context, ops, editor) -> None:
@@ -942,6 +1063,12 @@ def _show_schema(engine) -> None:
 
 def _show_explain(engine, query: str) -> None:
     Style.heading("EXPLAIN QUERY PLAN")
+    if not query.lstrip().upper().startswith("SELECT"):
+        Style.error(
+            "Only SELECT statements are accepted by 'db explain'. "
+            "Received a query that does not start with SELECT."
+        )
+        sys.exit(1)
     handler = _EXPLAIN_HANDLERS.get(engine.__class__.__name__)
     if handler is None:
         Style.error(

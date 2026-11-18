@@ -302,9 +302,17 @@ class Component(metaclass=ComponentMeta):
         else:
             state["_ts"] = int(time.time())
         state["_nonce"] = secrets.token_hex(8)
+        state["_cls"] = self.__class__.__name__
         dump = json.dumps(state, sort_keys=True)
         sig = hmac.new(secret_key.encode(), dump.encode(), hashlib.sha256).hexdigest()
         return f"{dump}.{sig}"
+
+    @classmethod
+    def _is_valid_signed_state(cls, state: dict[str, Any]) -> bool:
+        if not _verify_state_timestamp(state):
+            return False
+        cls_name = state.pop("_cls", None)
+        return cls_name is None or cls_name == cls.__name__
 
     @classmethod
     def _from_signed_state(
@@ -316,7 +324,7 @@ class Component(metaclass=ComponentMeta):
             return None
         try:
             state = json.loads(data_str)
-            if not _verify_state_timestamp(state):
+            if not cls._is_valid_signed_state(state):
                 return None
 
             state.pop("_nonce", None)

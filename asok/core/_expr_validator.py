@@ -168,6 +168,10 @@ _FORBIDDEN_NAMES = frozenset(
         "location",
         "globalThis",
         "XMLHttpRequest",
+        "self",
+        "top",
+        "frames",
+        "opener",
     }
 )
 
@@ -175,6 +179,7 @@ _BLOCKED_JS_PROPERTIES = frozenset(
     {
         "constructor",
         "prototype",
+        "cookie",
         "getPrototypeOf",
         "getOwnPropertyDescriptor",
         "getOwnPropertyNames",
@@ -382,9 +387,14 @@ def _check_compare_ops(ops) -> bool:
 def _is_call_allowed(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return True
-    if not isinstance(node.func, ast.Name):
-        return True
-    return node.func.id not in _DANGEROUS_FUNCTIONS
+    if isinstance(node.func, ast.Name):
+        return node.func.id not in _DANGEROUS_FUNCTIONS
+    if isinstance(node.func, ast.Attribute):
+        return (
+            node.func.attr not in _DANGEROUS_FUNCTIONS
+            and node.func.attr not in _BLOCKED_JS_PROPERTIES
+        )
+    return True
 
 
 def _is_attribute_allowed(node: ast.AST) -> bool:
@@ -436,7 +446,7 @@ def _is_subscript_allowed(node: ast.AST) -> bool:
         slice_node = slice_node.value
     if _is_string_concat(slice_node):
         return False
-    return True
+    return isinstance(slice_node, (ast.Constant, ast.Name))
 
 
 # ── Async detection ──────────────────────────────────────────────────

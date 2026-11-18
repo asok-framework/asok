@@ -127,7 +127,7 @@ class DeveloperToolbar:
             f'<tr class="asok-redir-banner">'
             f'<td colspan="3">'
             f"&#8593; REDIRECT FROM&nbsp;"
-            f'<span class="asok-method-badge">{redir_method}</span>'
+            f'<span class="asok-method-badge">{_html.escape(str(redir_method))}</span>'
             f"&nbsp;{_html.escape(redir_path)}"
             f"&nbsp;&#x2014;&nbsp;{len(redir_sql)} {q_label}"
             f"</td></tr>"
@@ -201,7 +201,7 @@ class DeveloperToolbar:
             self._get_request_payload(req_info)
             req_info.update(
                 {
-                    "Cookies": dict(self.request.cookies_dict),
+                    "Cookies": {k: "***" for k in self.request.cookies_dict},
                     "IP": self.request.ip,
                 }
             )
@@ -239,7 +239,7 @@ class DeveloperToolbar:
             f'<div class="asok-redir-block">'
             f'<div class="asok-redir-block-header">'
             f"&#8593; Previous Request &mdash; "
-            f'<span class="asok-method-badge" style="background:rgba(217,119,6,0.3);color:var(--warn-fg);">{rm}</span>'
+            f'<span class="asok-method-badge" style="background:rgba(217,119,6,0.3);color:var(--warn-fg);">{_html.escape(str(rm))}</span>'
             f"&nbsp;{_html.escape(rp)}"
             f"</div>"
             f"<pre>{_html.escape(json.dumps(prev, indent=2))}</pre>"
@@ -259,7 +259,16 @@ class DeveloperToolbar:
             "Partial Blocks": blk_list,
             "WS Components": [],
         }
-        return json.dumps(tpl_info), json.dumps(tpl_info, indent=2)
+        return self._safe_inline_json(tpl_info), json.dumps(tpl_info, indent=2)
+
+    @staticmethod
+    def _safe_inline_json(data: Any) -> str:
+        return (
+            json.dumps(data)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
 
     def _get_request_render_type(self) -> str:
         x_block = self.request.headers.get("x-block")
@@ -285,6 +294,12 @@ class DeveloperToolbar:
             getattr(m, "__name__", str(m)) for m in getattr(self.app, "middlewares", [])
         ]
 
+    @staticmethod
+    def _redact_db_dsn(raw_db: Any) -> str:
+        import re
+
+        return re.sub(r"://([^:@/]+):([^@/]+)@", r"://\1:***@", str(raw_db))
+
     def _extract_server_route_info(self) -> dict[str, Any]:
         return {
             "Endpoint / File": self._get_endpoint_display(),
@@ -294,13 +309,13 @@ class DeveloperToolbar:
             "Render Type": self._get_request_render_type(),
             "Scoped Assets": dict(getattr(self.request, "scoped_assets", {})),
             "Middlewares": self._get_middleware_names(),
-            "Database": str(self.config.get("DATABASE", "None")),
+            "Database": self._redact_db_dsn(self.config.get("DATABASE", "None")),
             "Debug Mode": bool(self.config.get("DEBUG", False)),
         }
 
     def _build_routing_data(self) -> tuple[str, str, dict[str, Any]]:
         info = self._extract_server_route_info()
-        raw_json = json.dumps(info)
+        raw_json = self._safe_inline_json(info)
         pretty_json = json.dumps(info, indent=2)
         return raw_json, pretty_json, info
 
@@ -371,10 +386,13 @@ class DeveloperToolbar:
             ),
             "[[redir_info_html]]": redir_info_html,
         }
-        for placeholder, value in replacements.items():
-            content = content.replace(placeholder, value)
+        import re
 
-        return content
+        return re.sub(
+            r"\[\[[a-z0-9_]+\]\]",
+            lambda m: replacements.get(m.group(0), m.group(0)),
+            content,
+        )
 
     def _is_eligible_for_injection(self, html_content: str) -> bool:
         if not html_content or len(html_content) > 10_000_000:

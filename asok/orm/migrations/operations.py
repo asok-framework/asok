@@ -49,12 +49,14 @@ class CreateModel(BaseOperation):
         table: str,
         relations: Optional[Dict[str, Dict[str, Any]]] = None,
         search_fields: Optional[List[str]] = None,
+        db_path: Optional[str] = None,
     ):
         self.name = name
         self.fields = fields
         self.table = table
         self.relations = relations or {}
         self.search_fields = search_fields or []
+        self.db_path = db_path
 
     def state_forwards(self, state: Any) -> None:
         from .state import VirtualModelState
@@ -65,6 +67,7 @@ class CreateModel(BaseOperation):
             fields=self.fields,
             relations=self.relations,
             search_fields=self.search_fields,
+            db_path=self.db_path,
         )
 
     def database_forwards(self, schema_editor: Any) -> None:
@@ -74,13 +77,16 @@ class CreateModel(BaseOperation):
         schema_editor.delete_table_by_name(self.table)
 
     def deconstruct(self) -> str:
+        db_path_part = (
+            f",\n        db_path={repr(self.db_path)}" if self.db_path is not None else ""
+        )
         return (
             f"operations.CreateModel(\n"
             f"        name={repr(self.name)},\n"
             f"        table={repr(self.table)},\n"
             f"        fields={_safe_repr(self.fields)},\n"
             f"        relations={repr(self.relations)},\n"
-            f"        search_fields={repr(self.search_fields)},\n"
+            f"        search_fields={repr(self.search_fields)}{db_path_part},\n"
             f"    )"
         )
 
@@ -95,12 +101,14 @@ class DeleteModel(BaseOperation):
         fields: Optional[Dict[str, Dict[str, Any]]] = None,
         relations: Optional[Dict[str, Dict[str, Any]]] = None,
         search_fields: Optional[List[str]] = None,
+        db_path: Optional[str] = None,
     ):
         self.name = name
         self.table = table
         self.fields = fields or {}
         self.relations = relations or {}
         self.search_fields = search_fields or []
+        self.db_path = db_path
 
     def state_forwards(self, state: Any) -> None:
         model = state.get_model(self.name) if hasattr(state, "get_model") else None
@@ -113,24 +121,27 @@ class DeleteModel(BaseOperation):
         schema_editor.delete_table_by_name(self.table)
 
     def database_backwards(self, schema_editor: Any) -> None:
-        # Recreate model table in database backwards
         dummy_create = CreateModel(
             name=self.name,
             fields=self.fields,
             table=self.table,
             relations=self.relations,
             search_fields=self.search_fields,
+            db_path=self.db_path,
         )
         schema_editor.create_table(dummy_create)
 
     def deconstruct(self) -> str:
+        db_path_part = (
+            f",\n        db_path={repr(self.db_path)}" if self.db_path is not None else ""
+        )
         return (
             f"operations.DeleteModel(\n"
             f"        name={repr(self.name)},\n"
             f"        table={repr(self.table)},\n"
             f"        fields={_safe_repr(self.fields)},\n"
             f"        relations={repr(self.relations)},\n"
-            f"        search_fields={repr(self.search_fields)},\n"
+            f"        search_fields={repr(self.search_fields)}{db_path_part},\n"
             f"    )"
         )
 
@@ -144,11 +155,13 @@ class AddField(BaseOperation):
         name: str,
         field: Dict[str, Any],
         table: Optional[str] = None,
+        db_path: Optional[str] = None,
     ):
         self.model_name = model_name
         self.name = name
         self.field = field
         self.table = table
+        self.db_path = db_path
 
     def state_forwards(self, state: Any) -> None:
         from .state import VirtualModelState
@@ -178,11 +191,14 @@ class AddField(BaseOperation):
 
     def deconstruct(self) -> str:
         tbl_repr = f", table={repr(self.table)}" if self.table else ""
+        db_path_part = (
+            f", db_path={repr(self.db_path)}" if self.db_path is not None else ""
+        )
         return (
             f"operations.AddField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        field={_safe_repr(self.field)}{tbl_repr},\n"
+            f"        field={_safe_repr(self.field)}{tbl_repr}{db_path_part},\n"
             f"    )"
         )
 
@@ -196,11 +212,13 @@ class RemoveField(BaseOperation):
         name: str,
         field: Optional[Dict[str, Any]] = None,
         table: Optional[str] = None,
+        db_path: Optional[str] = None,
     ):
         self.model_name = model_name
         self.name = name
         self.field = field or {}
         self.table = table
+        self.db_path = db_path
 
     def state_forwards(self, state: Any) -> None:
         model = (
@@ -221,11 +239,14 @@ class RemoveField(BaseOperation):
 
     def deconstruct(self) -> str:
         tbl_repr = f", table={repr(self.table)}" if self.table else ""
+        db_path_part = (
+            f", db_path={repr(self.db_path)}" if self.db_path is not None else ""
+        )
         return (
             f"operations.RemoveField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
-            f"        field={_safe_repr(self.field)}{tbl_repr},\n"
+            f"        field={_safe_repr(self.field)}{tbl_repr}{db_path_part},\n"
             f"    )"
         )
 
@@ -240,12 +261,14 @@ class AlterField(BaseOperation):
         old_field: Dict[str, Any],
         new_field: Dict[str, Any],
         table: Optional[str] = None,
+        db_path: Optional[str] = None,
     ):
         self.model_name = model_name
         self.name = name
         self.old_field = old_field
         self.new_field = new_field
         self.table = table
+        self.db_path = db_path
 
     def state_forwards(self, state: Any) -> None:
         from .state import VirtualModelState
@@ -277,12 +300,15 @@ class AlterField(BaseOperation):
 
     def deconstruct(self) -> str:
         tbl_repr = f", table={repr(self.table)}" if self.table else ""
+        db_path_part = (
+            f", db_path={repr(self.db_path)}" if self.db_path is not None else ""
+        )
         return (
             f"operations.AlterField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        name={repr(self.name)},\n"
             f"        old_field={_safe_repr(self.old_field)},\n"
-            f"        new_field={_safe_repr(self.new_field)}{tbl_repr},\n"
+            f"        new_field={_safe_repr(self.new_field)}{tbl_repr}{db_path_part},\n"
             f"    )"
         )
 
@@ -296,11 +322,13 @@ class RenameField(BaseOperation):
         old_name: str,
         new_name: str,
         table: Optional[str] = None,
+        db_path: Optional[str] = None,
     ):
         self.model_name = model_name
         self.old_name = old_name
         self.new_name = new_name
         self.table = table
+        self.db_path = db_path
 
     def state_forwards(self, state: Any) -> None:
         model = (
@@ -325,10 +353,13 @@ class RenameField(BaseOperation):
 
     def deconstruct(self) -> str:
         tbl_repr = f", table={repr(self.table)}" if self.table else ""
+        db_path_part = (
+            f", db_path={repr(self.db_path)}" if self.db_path is not None else ""
+        )
         return (
             f"operations.RenameField(\n"
             f"        model_name={repr(self.model_name)},\n"
             f"        old_name={repr(self.old_name)},\n"
-            f"        new_name={repr(self.new_name)}{tbl_repr},\n"
+            f"        new_name={repr(self.new_name)}{tbl_repr}{db_path_part},\n"
             f"    )"
         )

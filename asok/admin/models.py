@@ -62,7 +62,7 @@ from asok import Field, Model, ModelAdmin
 class Role(Model):
     name = Field.String(unique=True, nullable=False)
     label = Field.String()
-    permissions = Field.String(default="")
+    permissions = Field.String(default="", protected=True)
     created_at = Field.CreatedAt()
 
     class Admin(ModelAdmin):

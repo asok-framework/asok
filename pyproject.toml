@@ -1,6 +1,6 @@
 [project]
 name = "asok"
-version = "0.8.0"
+version = "0.8.1"
 description = "A batteries-included Python web framework with zero runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -373,9 +373,18 @@ class Asok(
             if env_val is not None:
                 self._apply_env_override(key, env_val)
 
+    @staticmethod
+    def _parse_trusted_proxies_env(env_val: str) -> Any:
+        stripped = env_val.strip()
+        if stripped == "*":
+            return "*"
+        return [s.strip() for s in stripped.split(",") if s.strip()]
+
     def _apply_env_override(self, key: str, env_val: str) -> None:
         current_val = self.config[key]
-        if isinstance(current_val, bool):
+        if key == "TRUSTED_PROXIES":
+            self.config[key] = self._parse_trusted_proxies_env(env_val)
+        elif isinstance(current_val, bool):
             self.config[key] = env_val.lower() in ("true", "1", "yes", "on")
         elif isinstance(current_val, int):
             try:

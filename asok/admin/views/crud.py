@@ -50,16 +50,27 @@ class CRUDViewsMixin:
                     "Session sync before list failed: %s", e
                 )
 
+    @staticmethod
+    def _safe_per_page(request: Any, default: int) -> int:
+        try:
+            return max(10, min(200, int(request.args.get("per_page") or default)))
+        except (ValueError, TypeError):
+            return int(default)
+
+    @staticmethod
+    def _safe_page(request: Any) -> int:
+        try:
+            return max(1, int(request.args.get("page", 1) or 1))
+        except (ValueError, TypeError):
+            return 1
+
     def _fetch_list_items(
         self, request: Any, entry: dict[str, Any], trash: bool
     ) -> tuple[Any, int, int, int, int]:
         self._sync_sessions_if_needed(entry)
 
-        default_per_page = entry["per_page"]
-        per_page = max(
-            10, min(200, int(request.args.get("per_page") or default_per_page))
-        )
-        page = max(1, int(request.args.get("page", 1) or 1))
+        per_page = self._safe_per_page(request, entry["per_page"])
+        page = self._safe_page(request)
         ordering = request.args.get("sort") or entry.get("ordering") or "-id"
 
         query = self._build_query(request, entry, with_trashed=trash)
@@ -610,6 +621,26 @@ class CRUDViewsMixin:
                     pass
         return count
 
+    def _is_field_protected_for_user(
+        self, user: Any, slug: str, field: Any, field_name: str
+    ) -> bool:
+        if getattr(user, "is_admin", False):
+            return False
+        if getattr(field, "protected", False) or field_name in self._PRIVILEGE_FIELDS:
+            return True
+        return field_name in user_locked_fields(user, slug)
+
+    def _is_bulk_field_allowed(
+        self, request: Any, entry: dict[str, Any], field: Any, field_name: str
+    ) -> bool:
+        if not self._is_bulk_editable_field(field, field_name, entry["readonly_fields"]):
+            return False
+        if field_name in entry.get("form_exclude", []):
+            return False
+        return not self._is_field_protected_for_user(
+            getattr(request, "user", None), entry["slug"], field, field_name
+        )
+
     def _bulk_set_field(
         self, request: Any, entry: dict[str, Any], ids: list[int], field_name: str
     ) -> Any:
@@ -618,7 +649,7 @@ class CRUDViewsMixin:
         if not entry["can_edit"] or not self._can(request, slug, "edit"):
             return self._forbid(request)
         field = model._fields.get(field_name)
-        if not field:
+        if not field or not self._is_bulk_field_allowed(request, entry, field, field_name):
             request.flash(
                 "error",
                 self.t(request, "Unknown field '{field}'", field=field_name),
@@ -638,24 +669,30 @@ class CRUDViewsMixin:
         request.flash("success", self.t(request, "Updated {count} items", count=count))
         return None
 
-    def _bulk_custom_action(
-        self, request: Any, entry: dict[str, Any], ids: list[int], action: str
-    ) -> None:
-        model = entry["model"]
-        fn = getattr(model, action, None)
-        if not fn:
-            request.flash(
-                "error",
-                self.t(request, "Action '{action}' not found on model", action=action),
-            )
-            return
-
+    @staticmethod
+    def _apply_custom_action_to_ids(model: Any, ids: list[int], action: str) -> int:
         count = 0
         for i in ids:
             obj = model.find(id=i)
             if obj and hasattr(obj, action):
                 getattr(obj, action)()
                 count += 1
+        return count
+
+    def _bulk_custom_action(
+        self, request: Any, entry: dict[str, Any], ids: list[int], action: str
+    ) -> Any:
+        if not entry["can_edit"] or not self._can(request, entry["slug"], "edit"):
+            return self._forbid(request)
+        model = entry["model"]
+        if not getattr(model, action, None):
+            request.flash(
+                "error",
+                self.t(request, "Action '{action}' not found on model", action=action),
+            )
+            return None
+
+        count = self._apply_custom_action_to_ids(model, ids, action)
         self._log(
             request,
             f"action:{action}",
@@ -673,31 +710,40 @@ class CRUDViewsMixin:
             ),
         )
 
+    def _bulk_restore_action(
+        self, request: Any, entry: dict[str, Any], ids: list[int]
+    ) -> Any:
+        if not entry["can_edit"] or not self._can(request, entry["slug"], "edit"):
+            return self._forbid(request)
+        self._bulk_restore(request, entry["model"], ids)
+        return None
+
     def _handle_soft_delete_bulk_action(
-        self, request: Any, model: Any, ids: list[int], action: str
-    ) -> bool:
+        self, request: Any, entry: dict[str, Any], ids: list[int], action: str
+    ) -> tuple[bool, Any]:
+        model = entry["model"]
         if not model._soft_delete_field:
-            return False
+            return False, None
         if action == "force_delete":
+            self._require_admin_only(request)
             self._bulk_force_delete(request, model, ids)
-            return True
+            return True, None
         if action == "restore":
-            self._bulk_restore(request, model, ids)
-            return True
-        return False
+            return True, self._bulk_restore_action(request, entry, ids)
+        return False, None
 
     def _dispatch_bulk_action(
         self, request: Any, entry: dict[str, Any], ids: list[int], action: str
     ) -> Any:
-        model = entry["model"]
         if action == "delete":
             return self._bulk_delete(request, entry, ids)
-        if self._handle_soft_delete_bulk_action(request, model, ids, action):
-            return None
+        handled, res = self._handle_soft_delete_bulk_action(request, entry, ids, action)
+        if handled:
+            return res
         if action.startswith("set:"):
             return self._bulk_set_field(request, entry, ids, action[4:])
         if action in entry["actions"]:
-            self._bulk_custom_action(request, entry, ids, action)
+            return self._bulk_custom_action(request, entry, ids, action)
         return None
 
     def _bulk_action(self, request: Any, entry: dict[str, Any]) -> None:
@@ -806,11 +852,12 @@ class CRUDViewsMixin:
     def _apply_lookup_search(
         self, query: Any, model: Any, searchable: list[str], q: str
     ) -> None:
+        q_safe = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         placeholders = []
         for f in searchable:
             if model._valid_column(f):
-                placeholders.append(f"{f} LIKE ?")
-                query._args.append(f"%{q}%")
+                placeholders.append(f"{f} LIKE ? ESCAPE '\\\\'")
+                query._args.append(f"%{q_safe}%")
         if placeholders:
             query._wheres.append("(" + " OR ".join(placeholders) + ")")
         elif q.isdigit():
@@ -829,6 +876,7 @@ class CRUDViewsMixin:
         q = self._get_q_param(request)
         limit = self._parse_lookup_limit(request)
         query = model.query()
+        self._apply_admin_scope(request, query, entry)
         if q:
             searchable = entry.get("searchable")
             if not searchable:
@@ -996,22 +1044,59 @@ class CRUDViewsMixin:
         return None
 
     def _process_csv_row(
-        self, model: Any, data: dict[str, Any], update_existing: bool
+        self,
+        model: Any,
+        data: dict[str, Any],
+        update_existing: bool,
+        request: Any = None,
+        entry: dict[str, Any] | None = None,
     ) -> str | None:
         item = None
         if update_existing:
-            if data.get("id"):
-                item = model.find(id=data["id"])
-            if not item:
-                item = self._find_item_by_unique_fields(model, data)
+            item = self._find_csv_existing_item(model, data, request, entry)
 
         if item:
             data.pop("id", None)
             item.update(**data)
             return "updated"
 
+        self._stamp_csv_owner(data, request, entry)
         model.create(**data)
         return "created"
+
+    def _assert_csv_item_owned(
+        self, item: Any, request: Any, entry: dict[str, Any] | None
+    ) -> None:
+        owner_field = self._owner_field_for_entry(request, entry)
+        if item and owner_field:
+            if getattr(item, owner_field, None) != getattr(request.user, "id", None):
+                raise PermissionError("Cannot update record owned by another user")
+
+    def _find_csv_existing_item(
+        self, model: Any, data: dict[str, Any], request: Any, entry: dict[str, Any] | None
+    ) -> Any:
+        item = model.find(id=data["id"]) if data.get("id") else None
+        if not item:
+            item = self._find_item_by_unique_fields(model, data)
+        self._assert_csv_item_owned(item, request, entry)
+        return item
+
+    def _stamp_csv_owner(
+        self, data: dict[str, Any], request: Any, entry: dict[str, Any] | None
+    ) -> None:
+        if request is not None and entry is not None:
+            owner_field = self._owner_field_for_entry(request, entry)
+            if owner_field:
+                data[owner_field] = getattr(request.user, "id", None)
+
+    def _owner_field_for_entry(
+        self, request: Any, entry: dict[str, Any] | None
+    ) -> str | None:
+        if not (request and entry):
+            return None
+        if getattr(self, "_is_own_scoped", lambda *_: False)(request, entry["slug"]):
+            return entry.get("owner_field") or "user_id"
+        return None
 
     def _flash_import_results(
         self, request: Any, created: int, updated: int, failed: int
@@ -1047,6 +1132,7 @@ class CRUDViewsMixin:
         importable: list[str],
         upload: Any,
         update_existing: bool,
+        entry: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         try:
             text = self._validate_and_read_csv(request, upload)
@@ -1055,7 +1141,9 @@ class CRUDViewsMixin:
             for i, row in enumerate(reader, start=2):
                 try:
                     data = self._parse_csv_row(model, importable, row)
-                    status = self._process_csv_row(model, data, update_existing)
+                    status = self._process_csv_row(
+                        model, data, update_existing, request=request, entry=entry
+                    )
                     if status == "updated":
                         updated += 1
                     else:
@@ -1081,18 +1169,23 @@ class CRUDViewsMixin:
             self._handle_csv_exception(request, e)
             return None
 
+    def _can_update_existing_csv(self, request: Any, entry: dict[str, Any]) -> bool:
+        if not request.form.get("update_existing"):
+            return False
+        return bool(entry["can_edit"] and self._can(request, entry["slug"], "edit"))
+
     def _import_csv(self, request: Any, entry: dict[str, Any]) -> Any:
         model = entry["model"]
         importable = self._importable_fields(model, request)
         report = None
         if request.method == "POST":
             upload = request.files.get("file") if request.files else None
-            update_existing = bool(request.form.get("update_existing"))
+            update_existing = self._can_update_existing_csv(request, entry)
             if not upload or not upload.filename:
                 request.flash("error", self.t(request, "Choose a CSV file to upload."))
             else:
                 report = self._process_csv_import(
-                    request, model, importable, upload, update_existing
+                    request, model, importable, upload, update_existing, entry=entry
                 )
         return self._render(
             request,

@@ -55,6 +55,11 @@ class SSGISRMixin:
         clean_path = path.strip("/")
         if not clean_path:
             clean_path = "index"
+        from asok.orm.tenant import get_current_tenant
+
+        tenant = get_current_tenant()
+        if tenant:
+            clean_path = f"_tenant_{tenant}/{clean_path}"
         suffix = f".{lang}.html" if lang else ".html"
         cache_dir = self._get_ssg_cache_dir()
         candidate = os.path.realpath(os.path.join(cache_dir, f"{clean_path}{suffix}"))
@@ -77,8 +82,10 @@ class SSGISRMixin:
     def _get_active_locales(self) -> list[str]:
         """Return the list of configured locales, or an empty list for single-lang apps."""
         configured = self._configured_locales()
-        if configured or not self.config.get("MULTILINGUAL"):
+        if configured:
             return configured
+        if self.config.get("MULTILINGUAL") is False:
+            return []
         locales = getattr(self, "locales", {})
         return list(locales.keys()) if len(locales) > 1 else []
 
@@ -91,7 +98,11 @@ class SSGISRMixin:
         active_locales = self._get_active_locales()
         if not active_locales:
             return None
-        return request.lang or self.config.get("LOCALE", "en")
+        default_lang = self.config.get("LOCALE", active_locales[0])
+        lang = request.lang or default_lang
+        if lang in active_locales:
+            return lang
+        return default_lang if default_lang in active_locales else active_locales[0]
 
     def _check_py_module_static(self, page_file: str) -> tuple[bool, Optional[int]]:
         try:
@@ -154,6 +165,20 @@ class SSGISRMixin:
         if page_file:
             background(self._regenerate_ssg_page, path, page_file, cache_file, lang)
 
+    def _append_ssg_cache_and_cookie_headers(
+        self, headers: list[tuple[str, str]], request: Request, revalidate: Optional[int]
+    ) -> None:
+        cookie_headers = self._cookie_headers(request, request.environ)
+        max_age = revalidate if revalidate is not None else 86400
+        cache_scope = "private" if cookie_headers else "public"
+        headers.append(("Cache-Control", f"{cache_scope}, max-age={max_age}"))
+        if self._get_active_locales() or cookie_headers:
+            headers.append(("Vary", "Cookie"))
+        headers += cookie_headers
+        headers += self._security_headers(
+            request=request, nonce=getattr(request, "nonce", None)
+        )
+
     def _send_cached_file(
         self,
         request: Request,
@@ -175,15 +200,7 @@ class SSGISRMixin:
                 ("Content-Length", str(len(body))),
                 ("X-Asok-SSG-Cache", "HIT"),
             ]
-            if revalidate is not None:
-                headers.append(("Cache-Control", f"public, max-age={revalidate}"))
-            else:
-                headers.append(("Cache-Control", "public, max-age=86400"))
-
-            headers += self._cookie_headers(request, request.environ)
-            headers += self._security_headers(
-                request=request, nonce=getattr(request, "nonce", None)
-            )
+            self._append_ssg_cache_and_cookie_headers(headers, request, revalidate)
 
             start_response("200 OK", headers)
             return [b""] if request.method == "HEAD" else [body]
@@ -230,15 +247,7 @@ class SSGISRMixin:
             ("Content-Length", str(len(body))),
             ("X-Asok-SSG-Cache", "MISS"),
         ]
-        if revalidate is not None:
-            headers.append(("Cache-Control", f"public, max-age={revalidate}"))
-        else:
-            headers.append(("Cache-Control", "public, max-age=86400"))
-
-        headers += self._cookie_headers(request, request.environ)
-        headers += self._security_headers(
-            request=request, nonce=getattr(request, "nonce", None)
-        )
+        self._append_ssg_cache_and_cookie_headers(headers, request, revalidate)
 
         start_response("200 OK", headers)
         return [b""] if request.method == "HEAD" else [body]
@@ -326,6 +335,31 @@ class SSGISRMixin:
         with open(cache_file, "w", encoding="utf-8") as f:
             f.write(content)
 
+    def _apply_ssg_meta(self, html: str, request: Any) -> str:
+        """Inject meta tags (title, description, og:*) into HTML before SSG caching.
+
+        At SSG generation time, render() has been called so request.meta._title is set.
+        We pre-inject it here so the cache stores correct titles. At serve time,
+        _inject_meta sees meta._title=None on the fresh request and skips, leaving
+        the pre-injected title intact.
+        """
+        try:
+            from ._asset_injector import AssetInjector
+
+            injector = AssetInjector(
+                self,
+                request,
+                html,
+                getattr(request, "nonce", ""),
+                stream=False,
+                include_scripts=False,
+                only_scripts=False,
+            )
+            injector._inject_meta()
+            return injector.content
+        except Exception:
+            return html
+
     def _render_and_cache_html(
         self, request: Request, environ: dict[str, Any], cache_file: str
     ) -> Optional[str]:
@@ -341,8 +375,9 @@ class SSGISRMixin:
 
         page_file = getattr(request, "_current_page_file", "")
         if self._should_cache_rendered_html(request.status, page_file):
-            self._write_ssg_cache_file(cache_file, raw_html)
-            return raw_html
+            enriched = self._apply_ssg_meta(raw_html, request)
+            self._write_ssg_cache_file(cache_file, enriched)
+            return enriched
         return None
 
     def _generate_ssg_page_sync(
@@ -444,18 +479,23 @@ class SSGISRMixin:
         except Exception:
             return False
 
+    def _resolve_target_py(
+        self, file: str, root: str, full_path: str
+    ) -> tuple[bool, Optional[str]]:
+        py_file = self._find_py_companion(file, root)
+        if file.endswith((".html", ".asok")) and py_file:
+            return False, None
+        target_py = full_path if file.endswith((".py", ".pyc")) else py_file
+        return True, target_py
+
     def _pre_render_static_route(
         self, route_path: str, full_path: str, file: str, root: str
     ) -> None:
-        py_file = self._find_py_companion(file, root)
-        should_render = True
-        target_py = full_path if file.endswith((".py", ".pyc")) else py_file
-        if target_py:
-            should_render = self._should_render_static_route(target_py)
-
-        if not should_render:
+        eligible, target_py = self._resolve_target_py(file, root, full_path)
+        if not eligible:
             return
-
+        if target_py and not self._should_render_static_route(target_py):
+            return
         self._render_route_for_locales(route_path, full_path, kind="static")
 
     def _render_route_for_locales(
@@ -532,7 +572,7 @@ class SSGISRMixin:
     def _walk_and_generate_ssg(self, pages_root: str) -> None:
         for root, _, files in os.walk(pages_root):
             for file in files:
-                if file.endswith((".py", ".html", ".asok")) and not file.startswith(
+                if file.endswith((".py", ".pyc", ".html", ".asok")) and not file.startswith(
                     "__"
                 ):
                     self._pre_generate_file(root, file, pages_root)

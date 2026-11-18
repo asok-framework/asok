@@ -691,10 +691,16 @@ class Query(Generic[T]):
             self._load_eager(results)
         return results
 
+    def _cache_scope(self) -> tuple[str, str]:
+        from .tenant import get_current_tenant
+
+        return get_current_tenant() or "", getattr(self, "_shard", None) or ""
+
     def _resolve_cache_key(self, sql: str, all_args: list[Any]) -> str:
+        tenant, shard = self._cache_scope()
         if getattr(self, "_cache_key", None):
-            return self._cache_key
-        raw_key = f"{sql}_{all_args}_{self._eager}"
+            return f"{tenant}:{shard}:{self._cache_key}" if (tenant or shard) else self._cache_key
+        raw_key = f"{tenant}_{shard}_{sql}_{all_args}_{self._eager}"
         return "orm_" + hashlib.md5(raw_key.encode(), usedforsecurity=False).hexdigest()
 
     def _maybe_store_cache(self, sql: str, all_args: list[Any], rows) -> None:

@@ -88,11 +88,20 @@ class TenantMiddleware:
         return self._extract_from_host(host) if host else None
 
     def _extract_from_standards(self, request: Any) -> Optional[str]:
-        for extractor in (
-            self._extract_from_header,
-            self._extract_from_query,
-            self._extract_from_subdomain,
-        ):
+        extractors = (
+            (
+                self._extract_from_subdomain,
+                self._extract_from_header,
+                self._extract_from_query,
+            )
+            if self.extract_subdomain
+            else (
+                self._extract_from_header,
+                self._extract_from_query,
+                self._extract_from_subdomain,
+            )
+        )
+        for extractor in extractors:
             extracted = extractor(request)
             if extracted:
                 return extracted.lower()

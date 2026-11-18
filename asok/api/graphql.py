@@ -247,26 +247,46 @@ class GraphQLParser:
             else:
                 i = self._parse_single_collected_fragment(i)
 
+    def _expand_named_fragment(
+        self, frag_name: str, visited: frozenset, depth: int
+    ) -> list[GraphQLField]:
+        if frag_name in visited:
+            return []
+        frag_fields = self.fragments.get(frag_name, [])
+        return self._expand_fragments(frag_fields, visited | {frag_name}, depth)
+
     def _expand_single_field(
-        self, f: GraphQLField, visited: frozenset, result: list[GraphQLField]
+        self,
+        f: GraphQLField,
+        visited: frozenset,
+        result: list[GraphQLField],
+        depth: int = 0,
     ) -> None:
+        self._expanded_nodes = getattr(self, "_expanded_nodes", 0) + 1
+        if self._expanded_nodes > 1000:
+            raise ValueError("Query exceeds maximum expanded field count (1000)")
         if f.name == "__inline_fragment__":
-            result.extend(self._expand_fragments(f.selections, visited))
+            result.extend(self._expand_fragments(f.selections, visited, depth))
         elif f.name.startswith("..."):
-            frag_name = f.name[3:]
-            if frag_name not in visited:
-                frag_fields = self.fragments.get(frag_name, [])
-                result.extend(
-                    self._expand_fragments(frag_fields, visited | {frag_name})
-                )
+            result.extend(self._expand_named_fragment(f.name[3:], visited, depth))
         else:
-            f.selections = self._expand_fragments(f.selections, visited)
-            result.append(f)
+            if depth + 1 > self.max_depth:
+                raise ValueError(
+                    f"Query exceeds maximum depth of {self.max_depth}"
+                )
+            f_copy = GraphQLField(f.name)
+            f_copy.alias = f.alias
+            f_copy.arguments = dict(f.arguments)
+            f_copy.selections = self._expand_fragments(
+                list(f.selections), visited, depth + 1
+            )
+            result.append(f_copy)
 
     def _expand_fragments(
         self,
         fields: list[GraphQLField],
         _visited: Optional[frozenset] = None,
+        depth: int = 0,
     ) -> list[GraphQLField]:
         """Recursively inline named fragment spreads and inline fragment placeholders.
 
@@ -276,10 +296,11 @@ class GraphQLParser:
         visited = frozenset() if _visited is None else _visited
         result: list[GraphQLField] = []
         for f in fields:
-            self._expand_single_field(f, visited, result)
+            self._expand_single_field(f, visited, result, depth)
         return result
 
     def parse(self) -> list[GraphQLField]:
+        self._expanded_nodes = 0
         # 1. Pre-collect all fragment definitions from the full token stream.
         self._collect_fragments()
         # 2. Parse the main operation.
@@ -337,12 +358,17 @@ def check_complexity(fields: list[GraphQLField], max_complexity: int = 100) -> i
             field_score = 1
             target_model, is_list = get_field_type_and_is_list(parent_model, f.name)
 
-            limit = f.arguments.get("limit") or f.arguments.get("first") or 10
+            raw_limit = f.arguments.get("limit")
+            if raw_limit is None:
+                raw_limit = f.arguments.get("first")
+            limit = 10 if raw_limit is None else int(raw_limit)
+            if limit < 1:
+                raise ValueError("GraphQL 'limit'/'first' argument must be >= 1.")
 
             if f.selections:
                 sub_score = calculate(f.selections, target_model)
                 if is_list:
-                    field_score += sub_score * int(limit)
+                    field_score += sub_score * limit
                 else:
                     field_score += sub_score
             score += field_score
@@ -671,9 +697,15 @@ def _is_query_arg_valid(k: str, fields: Any) -> bool:
 
 def _apply_pagination(query: Any, limit: Any, offset: Any) -> Any:
     if limit is not None:
-        query = query.limit(int(limit))
+        lim = int(limit)
+        if lim < 1:
+            raise ValueError("Pagination limit must be >= 1.")
+        query = query.limit(min(lim, 1000))
     if offset is not None:
-        query = query.offset(int(offset))
+        off = int(offset)
+        if off < 0:
+            raise ValueError("Pagination offset must be >= 0.")
+        query = query.offset(off)
     return query
 
 
@@ -1016,7 +1048,9 @@ def _is_mutation_denied(app: Any, tokens: list[str]) -> bool:
 def _is_query_denied(app: Any, tokens: list[str]) -> bool:
     if tokens and tokens[0] != "mutation":
         auth_hook = app.config.get("GRAPHQL_AUTHORIZE")
-        allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES", True)
+        # Default False: public GraphQL APIs must opt-in with
+        # GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES=True in config.
+        allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES", False)
         return not auth_hook and not allow_unauth
     return False
 
@@ -1100,7 +1134,7 @@ def _is_subscribe_denied(conn: Any) -> bool:
         if not req:
             return True
         return not auth_hook(req)
-    allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES", True)
+    allow_unauth = app.config.get("GRAPHQL_ALLOW_UNAUTHENTICATED_QUERIES", False)
     return not allow_unauth
 
 

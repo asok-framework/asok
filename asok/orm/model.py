@@ -412,7 +412,7 @@ class ModelMeta(type):
 
 
 class Model(metaclass=ModelMeta):
-    _db_path: str | None = (os.getenv("DATABASE_URL") or "").strip() or None
+    _db_path: str | None = None
     _global_scopes: dict[str, Any] = {}
 
     @classmethod

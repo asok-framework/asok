@@ -25,6 +25,16 @@ class CsrfMixin:
             f'<input type="hidden" name="csrf_token" value="{escaped_token}" />'
         )
 
+    def _verify_origin_scheme(self: Any, parsed_origin: Any, parsed_req: Any) -> None:
+        if self.scheme == "https" and parsed_origin.scheme != parsed_req.scheme:
+            raise SecurityError(
+                f"CSRF Origin mismatch: expected scheme {parsed_req.scheme}, got {parsed_origin.scheme}"
+            )
+        if parsed_origin.scheme not in ("http", "https"):
+            raise SecurityError(
+                f"CSRF Origin mismatch: invalid scheme {parsed_origin.scheme}"
+            )
+
     def _verify_csrf_origin(self: Any) -> None:
         """Verify Origin/Referer header for HTTPS requests. Raises SecurityError on failure."""
         origin = self.headers.get("Origin") or self.headers.get("Referer")
@@ -33,11 +43,7 @@ class CsrfMixin:
                 "Strict CSRF: Origin or Referer header required for HTTPS."
             )
         parsed_origin, parsed_req = self._parse_csrf_origins(origin)
-
-        if parsed_origin.scheme != parsed_req.scheme:
-            raise SecurityError(
-                f"CSRF Origin mismatch: expected scheme {parsed_req.scheme}, got {parsed_origin.scheme}"
-            )
+        self._verify_origin_scheme(parsed_origin, parsed_req)
         if parsed_origin.hostname != parsed_req.hostname:
             raise SecurityError(
                 f"CSRF Origin mismatch: expected host {parsed_req.hostname}, got {parsed_origin.hostname}"
@@ -146,8 +152,8 @@ class CsrfMixin:
             self._csrf_verified = True
             return
 
-        # 1. Strict Origin/Referer verification for HTTPS
-        if self.scheme == "https":
+        # 1. Strict Origin/Referer verification for HTTPS, or whenever Origin is sent
+        if self.scheme == "https" or self.headers.get("Origin"):
             self._verify_csrf_origin()
 
         # 2. Token verification

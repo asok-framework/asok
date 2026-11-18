@@ -203,14 +203,23 @@ def _pluralize_filter(
 
 
 def _fallback_markdown_links(s: str) -> SafeString:
-    def _repl_link(m: re.Match) -> str:
-        label, url = m.group(1), m.group(2)
-        return (
-            f'<a href="{_html.escape(url)}" target="_blank" rel="noopener"'
-            f' class="underline hover:opacity-80">{_html.escape(label)}</a>'
-        )
+    from asok.utils.html_sanitizer import _is_safe_url
 
-    return SafeString(re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _repl_link, s))
+    parts: list[str] = []
+    last_idx = 0
+    for m in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", s):
+        parts.append(_html.escape(s[last_idx : m.start()]))
+        label, url = m.group(1), m.group(2).strip()
+        if _is_safe_url(url):
+            parts.append(
+                f'<a href="{_html.escape(url)}" target="_blank" rel="noopener"'
+                f' class="underline hover:opacity-80">{_html.escape(label)}</a>'
+            )
+        else:
+            parts.append(_html.escape(label))
+        last_idx = m.end()
+    parts.append(_html.escape(s[last_idx:]))
+    return SafeString("".join(parts))
 
 
 def _strip_single_paragraph(html: str) -> str:
@@ -223,7 +232,10 @@ def _markdown_to_html_str(s: str) -> str:
     try:
         import markdown
 
-        return _strip_single_paragraph(markdown.markdown(s))
+        from asok.utils.html_sanitizer import sanitize_html
+
+        raw_html = markdown.markdown(s)
+        return _strip_single_paragraph(sanitize_html(raw_html))
     except ImportError:
         return str(_fallback_markdown_links(s))
 

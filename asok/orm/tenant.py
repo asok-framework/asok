@@ -122,7 +122,10 @@ class TenantRouter(BaseDatabaseRouter):
         tenant = get_current_tenant()
         if not tenant:
             return None
-        return resolve_tenant_database(tenant)
+        dsn = resolve_tenant_database(tenant)
+        if not dsn:
+            raise ValueError(f"Unknown or unconfigured tenant database for '{tenant}'")
+        return dsn
 
     def db_for_read(self, model: Type[Model], **hints: Any) -> Optional[str]:
         return self._resolve_dsn_for_active_tenant()

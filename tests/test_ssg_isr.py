@@ -337,3 +337,96 @@ def test_ssg_pre_renders_and_caches_error_pages(tmp_path):
     with open(cache_file, "r", encoding="utf-8") as f:
         content = f.read()
     assert "<h1>Page Not Found</h1>" in content
+
+
+def test_ssg_multilingual_auto_detect_from_locales_dir(tmp_path):
+    """Auto-detects active locales when src/locales has multiple translation files."""
+    root_dir = str(tmp_path)
+    src_dir = os.path.join(root_dir, "src")
+    pages_dir = os.path.join(src_dir, "pages", "about")
+    locales_dir = os.path.join(src_dir, "locales")
+    os.makedirs(pages_dir, exist_ok=True)
+    os.makedirs(locales_dir, exist_ok=True)
+
+    with open(os.path.join(locales_dir, "fr.json"), "w") as f:
+        f.write('{"title": "A propos"}')
+    with open(os.path.join(locales_dir, "en.json"), "w") as f:
+        f.write('{"title": "About"}')
+
+    with open(os.path.join(pages_dir, "page.html"), "w") as f:
+        f.write('<h1>{{ __("title") }}</h1>')
+    with open(os.path.join(pages_dir, "page.py"), "w") as f:
+        f.write("SSG = True\ndef render(request):\n    return request.stream('page.html')\n")
+
+    app = Asok(root_dir=root_dir)
+    app.config["SECRET_KEY"] = "test-secret-key-32-chars-length-security"
+    app.config["LOCALE"] = "fr"
+
+    active = app._get_active_locales()
+    assert "fr" in active and "en" in active
+
+    app.pre_generate_ssg_site()
+
+    fr_cache = app._get_ssg_cache_file("/about", "fr")
+    en_cache = app._get_ssg_cache_file("/about", "en")
+    assert os.path.exists(fr_cache)
+    assert os.path.exists(en_cache)
+
+    with open(fr_cache, "r", encoding="utf-8") as f:
+        assert "A propos" in f.read()
+    with open(en_cache, "r", encoding="utf-8") as f:
+        assert "About" in f.read()
+
+
+def test_ssg_multilingual_serving_respects_language_cookie(tmp_path):
+    """Serving SSG cached files serves the correct language based on asok_lang cookie."""
+    import io
+
+    root_dir = str(tmp_path)
+    src_dir = os.path.join(root_dir, "src")
+    pages_dir = os.path.join(src_dir, "pages", "about")
+    locales_dir = os.path.join(src_dir, "locales")
+    os.makedirs(pages_dir, exist_ok=True)
+    os.makedirs(locales_dir, exist_ok=True)
+
+    with open(os.path.join(locales_dir, "fr.json"), "w") as f:
+        f.write('{"title": "A propos"}')
+    with open(os.path.join(locales_dir, "en.json"), "w") as f:
+        f.write('{"title": "About"}')
+
+    with open(os.path.join(pages_dir, "page.html"), "w") as f:
+        f.write('<h1>{{ __("title") }}</h1>')
+    with open(os.path.join(pages_dir, "page.py"), "w") as f:
+        f.write("SSG = True\ndef render(request):\n    return request.stream('page.html')\n")
+
+    app = Asok(root_dir=root_dir)
+    app.config["SECRET_KEY"] = "test-secret-key-32-chars-length-security"
+    app.config["LOCALE"] = "fr"
+    app.config["DEBUG"] = False
+    app.pre_generate_ssg_site()
+
+    def make_req(cookie_header=""):
+        environ = {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": "/about",
+            "SERVER_NAME": "127.0.0.1",
+            "SERVER_PORT": "8000",
+            "wsgi.version": (1, 0),
+            "wsgi.url_scheme": "http",
+            "wsgi.input": io.BytesIO(b""),
+            "HTTP_ACCEPT": "text/html",
+            "HTTP_COOKIE": cookie_header,
+        }
+        status_headers = []
+        resp = app(environ, lambda s, h, e=None: status_headers.append((s, h)))
+        return b"".join(resp).decode("utf-8")
+
+    body_default = make_req()
+    assert "A propos" in body_default
+
+    body_en = make_req("asok_lang=en")
+    assert "About" in body_en
+
+    body_fr = make_req("asok_lang=fr")
+    assert "A propos" in body_fr
+

@@ -324,7 +324,7 @@
           }
           const newScript = document.createElement('script');
           Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
-          const nonce = oldScript.nonce || oldScript.getAttribute('nonce') || window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce');
+          const nonce = oldScript.nonce || oldScript.getAttribute('nonce');
           if (nonce && !newScript.getAttribute('nonce')) {
             newScript.setAttribute('nonce', nonce);
           }

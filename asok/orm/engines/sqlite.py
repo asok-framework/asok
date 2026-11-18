@@ -56,9 +56,13 @@ class SQLiteEngine(BaseEngine):
     """SQLite engine backend using the standard library sqlite3 module."""
 
     def __init__(self, db_path: str):
-        # Normalize the database path/URL
-        if db_path.startswith("sqlite://"):
-            db_path = db_path.replace("sqlite://", "", 1)
+        # Normalize the database path/URL.
+        # sqlite:///foo.db  → foo.db (relative)
+        # sqlite:////abs    → /abs   (absolute, 4th slash preserved)
+        if db_path.startswith("sqlite:///"):
+            db_path = db_path[len("sqlite:///"):]
+        elif db_path.startswith("sqlite://"):
+            db_path = db_path[len("sqlite://"):]
         self.db_path = db_path or "db.sqlite3"
         self._local = threading.local()
 

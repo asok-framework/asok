@@ -142,7 +142,7 @@ window.asokWS = function (path) {
             componentScripts.forEach(function (script) {
               if (script.dataset.run || script.id === 'asok-scoped-js') return;
               const newScript = document.createElement('script');
-              const nonce = window.Asok?.nonce || document.querySelector('script[nonce]')?.getAttribute('nonce') || '';
+              const nonce = script.nonce || script.getAttribute('nonce') || '';
               if (nonce) newScript.nonce = nonce;
               if (script.src) newScript.src = script.src;
               newScript.textContent = script.textContent;

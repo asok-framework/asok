@@ -39,7 +39,7 @@ class JobsViewsMixin:
     """Admin view mixin for background job queues and Dead Letter Queue management."""
 
     def _jobs_dashboard(self, request: Any) -> Any:
-        self._require_admin(request)
+        self._require_admin_only(request)
         counts = get_queue_counts()
         raw_jobs = get_dlq_jobs(offset=0, limit=100)
         jobs = [_sanitize_job_item(j) for j in raw_jobs]
@@ -57,7 +57,7 @@ class JobsViewsMixin:
         )
 
     def _jobs_retry_one(self, request: Any, job_id: str) -> Any:
-        self._require_admin(request)
+        self._require_admin_only(request)
         request.verify_csrf()
         success = retry_dlq_job(job_id)
         if success:
@@ -69,7 +69,7 @@ class JobsViewsMixin:
         raise RedirectException(self.prefix + "/jobs")
 
     def _jobs_retry_all(self, request: Any) -> Any:
-        self._require_admin(request)
+        self._require_admin_only(request)
         request.verify_csrf()
         count = retry_all_dlq_jobs()
         request.flash(
@@ -79,14 +79,14 @@ class JobsViewsMixin:
         raise RedirectException(self.prefix + "/jobs")
 
     def _jobs_delete_one(self, request: Any, job_id: str) -> Any:
-        self._require_admin(request)
+        self._require_admin_only(request)
         request.verify_csrf()
         delete_dlq_job(job_id)
         request.flash("info", self.t(request, "Job removed from Dead Letter Queue."))
         raise RedirectException(self.prefix + "/jobs")
 
     def _jobs_purge_dlq(self, request: Any) -> Any:
-        self._require_admin(request)
+        self._require_admin_only(request)
         request.verify_csrf()
         count = purge_dlq()
         request.flash(

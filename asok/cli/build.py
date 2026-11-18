@@ -455,14 +455,14 @@ def _optimize_one_image(path: str, optimize_image) -> bool:
 
 
 def _write_production_env(build_root: str) -> None:
+    import secrets
+
     env_prod = os.path.join(build_root, ".env.production")
     with open(env_prod, "w") as f:
         f.write("DEBUG=false\n")
         f.write("ASOK_BUILD=true\n")
-        f.write(
-            "SECRET_KEY=change-me-to-a-very-secure-production-secret-key-32-chars\n"
-        )
-        f.write("ALLOWED_HOSTS=*\n")
+        f.write(f"SECRET_KEY={secrets.token_urlsafe(48)}\n")
+        f.write("ALLOWED_HOSTS=localhost,127.0.0.1\n")
         f.write("IMAGE_OPTIMIZATION=true\n")
 
 

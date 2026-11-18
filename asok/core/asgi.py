@@ -256,6 +256,10 @@ class ASGIMixin:
     async def _run_dispatch_handlers(
         self, request: Request, environ: dict[str, Any], start_response: Callable
     ) -> Optional[Any]:
+        res = self._handle_global_rate_limit(request, start_response)
+        if res is not None:
+            return res
+
         res = self._handle_options_request(request, environ, start_response)
         if res is not None:
             return res

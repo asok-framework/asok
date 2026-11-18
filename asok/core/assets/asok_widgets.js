@@ -119,8 +119,14 @@
 
     // SECURITY: Sanitize WYSIWYG content to prevent Stored XSS
     // Note: Server-side validation is still required for defense-in-depth
-    const sanitized = window.AsokSecurity && window.AsokSecurity.sanitizeHtml ?
-      window.AsokSecurity.sanitizeHtml(html) : html;
+    let sanitized;
+    if (window.AsokSecurity && window.AsokSecurity.sanitizeHtml) {
+      sanitized = window.AsokSecurity.sanitizeHtml(html);
+    } else {
+      const escDiv = document.createElement('div');
+      escDiv.textContent = event.target.textContent || '';
+      sanitized = escDiv.innerHTML;
+    }
 
     state.content = sanitized;
     if (inputEl) {

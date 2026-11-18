@@ -117,7 +117,7 @@ class ScheduledTask:
             logger.warning(
                 f"Failed to acquire scheduler lock for {self._fn.__name__}: {e}"
             )
-            return True
+            return False
 
     def _execute_task_safe(self) -> None:
         if not self._acquire_distributed_lock():

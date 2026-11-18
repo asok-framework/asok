@@ -523,7 +523,7 @@ class Request(
         return self.form or {}
 
     def _maybe_verify_csrf(self, csrf: bool) -> None:
-        if csrf and self.method in ("POST", "PUT", "PATCH"):
+        if csrf and self.method in ("POST", "PUT", "PATCH", "DELETE"):
             self.verify_csrf()
 
     def _run_rule_validation(self, rules: Any, data: Any, raise_error: bool) -> Any:
@@ -754,14 +754,20 @@ class Request(
         forwarded = self.environ.get("HTTP_X_FORWARDED_FOR")
         if not forwarded or not self._is_proxy_trusted(remote_addr):
             return remote_addr
-        return forwarded.split(",")[0].strip()
+        return self._resolve_forwarded_ip(forwarded, remote_addr)
+
+    def _resolve_forwarded_ip(self, forwarded: str, remote_addr: str) -> str:
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        return hops[0] if hops else remote_addr
 
     def _is_proxy_trusted(self, remote_addr: str) -> bool:
         app_ref = self.environ.get("asok.app")
         trusted = app_ref.config.get("TRUSTED_PROXIES") if app_ref else None
         if trusted is None:
             return False
-        return trusted == "*" or remote_addr in trusted
+        if isinstance(trusted, str):
+            return trusted == "*" or remote_addr == trusted
+        return remote_addr in trusted
 
     @property
     def user_agent(self) -> str:
@@ -872,10 +878,12 @@ class Request(
 
     def _safe_next_url(self) -> str:
         # SECURITY: only relative URLs may be carried in `next` (no open redirect).
+        from asok.utils.security import is_safe_url
+
         next_url = self.path
         if self.raw_query_string:
             next_url += "?" + self.raw_query_string
-        if next_url and ("://" in next_url or next_url.startswith("//")):
+        if next_url and not is_safe_url(next_url):
             import logging
 
             logging.getLogger("asok.security").warning(
